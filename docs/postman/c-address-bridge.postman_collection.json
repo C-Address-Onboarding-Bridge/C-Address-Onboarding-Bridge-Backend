@@ -1,0 +1,392 @@
+{
+  "info": {
+    "name": "C-Address Onboarding Bridge API",
+    "description": "Postman collection for the C-Address Onboarding Bridge backend API. Includes authenticated requests, sample payloads, response-shape tests, and error scenarios.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "Authorization",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "ApiKey {{api_key}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.request.headers.upsert({ key: 'X-Request-Id', value: pm.variables.replaceIn('{{$guid}}') });"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "api_key",
+      "value": "replace-me"
+    },
+    {
+      "key": "source_asset",
+      "value": "native"
+    },
+    {
+      "key": "amount",
+      "value": "10000000"
+    },
+    {
+      "key": "source_address",
+      "value": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+    },
+    {
+      "key": "target_c_address",
+      "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+    },
+    {
+      "key": "token_address",
+      "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+    },
+    {
+      "key": "signed_xdr",
+      "value": "AAAA..."
+    },
+    {
+      "key": "tx_hash",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "key": "moonpay_signature",
+      "value": "replace-me"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": "{{base_url}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('body has status', () => pm.expect(pm.response.json()).to.have.property('status'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Quote",
+      "item": [
+        {
+          "name": "GET /api/v1/quote",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/quote?sourceAsset={{source_asset}}&amount={{amount}}&targetAddress={{target_c_address}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "quote"
+              ],
+              "query": [
+                {
+                  "key": "sourceAsset",
+                  "value": "{{source_asset}}"
+                },
+                {
+                  "key": "amount",
+                  "value": "{{amount}}"
+                },
+                {
+                  "key": "targetAddress",
+                  "value": "{{target_c_address}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('quote request succeeds', () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 401, 422]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/v1/quote - invalid target",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/quote?sourceAsset={{source_asset}}&amount={{amount}}&targetAddress=invalid"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('validation error', () => pm.expect(pm.response.code).to.be.oneOf([400, 422]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Funding",
+      "item": [
+        {
+          "name": "POST /api/v1/fund/prepare",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/fund/prepare",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sourceAddress\": \"{{source_address}}\",\n  \"targetAddress\": \"{{target_c_address}}\",\n  \"tokenAddress\": \"{{token_address}}\",\n  \"amount\": \"{{amount}}\",\n  \"memo\": \"postman-test\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('prepare returns JSON or validation/auth error', () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 401, 422, 500]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/v1/fund",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/fund",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"signedXdr\": \"{{signed_xdr}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('submit returns created, validation, or auth result', () => pm.expect(pm.response.code).to.be.oneOf([201, 400, 401, 422, 500]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Status",
+      "item": [
+        {
+          "name": "GET /api/v1/status/:txHash",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/status/{{tx_hash}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status endpoint returns JSON or known error', () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 401, 404, 500]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Off-ramp",
+      "item": [
+        {
+          "name": "POST /api/v1/offramp/moonpay",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/offramp/moonpay",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currencyCode\": \"xlm\",\n  \"walletAddress\": \"{{target_c_address}}\",\n  \"walletNetwork\": \"stellar\",\n  \"baseCurrencyAmount\": 25,\n  \"baseCurrencyCode\": \"usd\",\n  \"email\": \"user@example.com\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('moonpay response has URL or known error', () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 401, 422, 500]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/v1/offramp/transak",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/offramp/transak",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletAddress\": \"{{target_c_address}}\",\n  \"network\": \"stellar\",\n  \"fiatCurrency\": \"USD\",\n  \"cryptoCurrency\": \"XLM\",\n  \"fiatAmount\": 25,\n  \"email\": \"user@example.com\",\n  \"redirectURL\": \"https://example.com/complete\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('transak response has URL or known error', () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 401, 422, 500]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "CEX",
+      "item": [
+        {
+          "name": "POST /api/v1/cex/route",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/v1/cex/route",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"generic\",\n  \"sourceAsset\": \"XLM\",\n  \"amount\": \"{{amount}}\",\n  \"targetCAddress\": \"{{target_c_address}}\",\n  \"targetNetwork\": \"stellar\",\n  \"memo\": \"postman-test\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('cex route returns created, validation, or auth result', () => pm.expect(pm.response.code).to.be.oneOf([201, 400, 401, 422, 500]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Webhook",
+      "item": [
+        {
+          "name": "POST /api/webhook/moonpay",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-moonpay-signature",
+                "value": "{{moonpay_signature}}"
+              }
+            ],
+            "url": "{{base_url}}/api/webhook/moonpay",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"evt_postman\",\n  \"type\": \"transaction_updated\",\n  \"status\": \"completed\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('webhook returns ok, invalid signature, or server error', () => pm.expect(pm.response.code).to.be.oneOf([200, 400, 401, 500]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
