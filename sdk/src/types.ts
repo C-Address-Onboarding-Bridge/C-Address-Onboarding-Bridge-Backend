@@ -83,3 +83,15 @@ export interface BridgeClientConfig {
   baseUrl: string;
   apiKey?: string;
 }
+
+export interface PaginatedRequestParams {
+  cursor?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}

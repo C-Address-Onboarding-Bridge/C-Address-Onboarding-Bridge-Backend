@@ -11,6 +11,8 @@ import {
   TransakWidgetResult,
   CexWithdrawalParams,
   CexWithdrawalResult,
+  PaginatedRequestParams,
+  PaginatedResponse,
 } from './types';
 
 export interface BridgeClientConfig {
@@ -67,6 +69,14 @@ export class BridgeClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  async requestPaginated<T>(path: string, params?: PaginatedRequestParams): Promise<PaginatedResponse<T>> {
+    const queryParams: Record<string, string | undefined> = {};
+    if (params?.cursor !== undefined) queryParams['cursor'] = params.cursor;
+    if (params?.limit !== undefined) queryParams['limit'] = String(params.limit);
+    if (params?.offset !== undefined) queryParams['offset'] = String(params.offset);
+    return this.request<PaginatedResponse<T>>('GET', path, undefined, queryParams);
   }
 
   async getQuote(params: QuoteParams): Promise<Quote> {

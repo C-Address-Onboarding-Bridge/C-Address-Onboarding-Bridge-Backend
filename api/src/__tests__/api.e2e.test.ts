@@ -137,6 +137,19 @@ describe('API E2E', () => {
     expect(res.body.error).toBe('validation_error');
   });
 
+  it('GET /api/v1/quote returns identical response on repeated call (cache hit)', async () => {
+    const query = {
+      sourceAsset: 'XLM',
+      amount: '9999',
+      targetAddress: 'CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW',
+    };
+    const res1 = await request(app).get('/api/v1/quote').query(query).set('X-API-Key', 'test-api-key-123');
+    const res2 = await request(app).get('/api/v1/quote').query(query).set('X-API-Key', 'test-api-key-123');
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    expect(res1.body).toEqual(res2.body);
+  });
+
   it('GET /api/v1/status/:txHash returns 400 for invalid hash', async () => {
     const res = await request(app)
       .get('/api/v1/status/short-hash')
