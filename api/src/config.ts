@@ -30,4 +30,10 @@ export const config = {
   },
   apiKeys: (process.env.API_KEYS || '').split(',').filter(Boolean),
   logLevel: process.env.LOG_LEVEL || 'info',
+  webhook: {
+    signingSecret: process.env.WEBHOOK_SIGNING_SECRET || 'default-dev-secret-change-in-production',
+  },
+  explorer: {
+    primary: (process.env.STELLAR_EXPLORER || 'stellarexpert') as 'stellarexpert' | 'stellarchain' | 'sorobanexplorer',
+  },
 };

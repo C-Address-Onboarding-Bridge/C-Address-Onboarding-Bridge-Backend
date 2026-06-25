@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { sorobanService } from '../services/soroban';
+import { explorerService } from '../services/explorer';
 
 export const statusRouter = Router();
 
@@ -12,7 +13,11 @@ statusRouter.get('/:txHash', async (req: Request, res: Response, next: NextFunct
   try {
     const { txHash } = statusSchema.parse(req.params);
     const status = await sorobanService.getTransactionStatus(txHash);
-    res.json(status);
+    res.json({
+      ...status,
+      explorerUrl: explorerService.txUrl(txHash),
+      explorerUrls: explorerService.txUrlWithFallbacks(txHash),
+    });
   } catch (err) {
     next(err);
   }
