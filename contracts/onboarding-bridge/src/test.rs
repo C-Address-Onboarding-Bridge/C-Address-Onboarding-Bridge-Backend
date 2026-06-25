@@ -77,6 +77,10 @@ struct S {
 }
 
 fn setup(fee_bps: u32, delay: u64) -> S {
+    setup_full(fee_bps, delay, 1, i128::MAX)
+}
+
+fn setup_full(fee_bps: u32, delay: u64, min: i128, max: i128) -> S {
     let env = Env::default();
     env.mock_all_auths_allowing_non_root_auth();
     let bridge_id = env.register_contract(None, OnboardingBridge);
@@ -84,7 +88,7 @@ fn setup(fee_bps: u32, delay: u64) -> S {
     let bridge = OnboardingBridgeClient::new(&env, &bridge_id);
     let token = TestTokenClient::new(&env, &token_id);
     let admin = Address::generate(&env);
-    bridge.initialize(&admin, &fee_bps, &delay);
+    bridge.initialize(&admin, &fee_bps, &delay, &min, &max);
     S { env, bridge, token, admin }
 }
 
@@ -105,7 +109,7 @@ fn test_initialize() {
 #[should_panic(expected = "already initialized")]
 fn test_double_initialize() {
     let s = setup(30, 0);
-    s.bridge.initialize(&Address::generate(&s.env), &50, &0);
+    s.bridge.initialize(&Address::generate(&s.env), &50, &0, &1, &i128::MAX);
 }
 
 #[test]
@@ -267,4 +271,67 @@ fn test_fund_while_paused() {
         &source, &target, &s.token.address, &500,
         &String::from_str(&s.env, "test"),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Amount constraint tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_min_max_getters() {
+    let s = setup_full(0, 0, 100, 5000);
+    assert_eq!(s.bridge.min_amount(), 100);
+    assert_eq!(s.bridge.max_amount(), 5000);
+}
+
+#[test]
+#[should_panic(expected = "amount below minimum")]
+fn test_below_min() {
+    let s = setup_full(0, 0, 100, i128::MAX);
+    let source = Address::generate(&s.env);
+    let target = Address::generate(&s.env);
+    s.token.mint(&source, &50);
+    s.bridge.fund_c_address(&source, &target, &s.token.address, &50, &String::from_str(&s.env, "t"));
+}
+
+#[test]
+#[should_panic(expected = "amount above maximum")]
+fn test_above_max() {
+    let s = setup_full(0, 0, 1, 100);
+    let source = Address::generate(&s.env);
+    let target = Address::generate(&s.env);
+    s.token.mint(&source, &200);
+    s.bridge.fund_c_address(&source, &target, &s.token.address, &200, &String::from_str(&s.env, "t"));
+}
+
+#[test]
+fn test_at_min_and_max_bounds() {
+    let s = setup_full(0, 0, 100, 1000);
+    let source = Address::generate(&s.env);
+    let target = Address::generate(&s.env);
+    s.token.mint(&source, &1100);
+    let m = |l: &str| String::from_str(&s.env, l);
+    s.bridge.fund_c_address(&source, &target, &s.token.address, &100, &m("min"));
+    s.bridge.fund_c_address(&source, &target, &s.token.address, &1000, &m("max"));
+    assert_eq!(s.token.balance(&target), 1100);
+}
+
+#[test]
+fn test_execute_set_min_after_timelock() {
+    let s = setup_full(0, 100, 1, i128::MAX);
+    let label = String::from_str(&s.env, "set_min");
+    s.bridge.propose_set_min(&label);
+    s.env.ledger().set_timestamp(s.env.ledger().timestamp() + 200);
+    s.bridge.execute_set_min(&50, &label);
+    assert_eq!(s.bridge.min_amount(), 50);
+}
+
+#[test]
+fn test_execute_set_max_after_timelock() {
+    let s = setup_full(0, 100, 1, i128::MAX);
+    let label = String::from_str(&s.env, "set_max");
+    s.bridge.propose_set_max(&label);
+    s.env.ledger().set_timestamp(s.env.ledger().timestamp() + 200);
+    s.bridge.execute_set_max(&5000, &label);
+    assert_eq!(s.bridge.max_amount(), 5000);
 }

@@ -20,6 +20,9 @@ pub enum DataKey {
     TimelockDelay,
     Paused,
     PendingOp(BytesN<32>),
+    // Amount constraints
+    MinAmount,
+    MaxAmount,
 }
 
 // ---------------------------------------------------------------------------
@@ -115,18 +118,22 @@ fn assert_op_ready(env: &Env, label: &str) {
 
 #[contractimpl]
 impl OnboardingBridge {
-    pub fn initialize(env: Env, admin: Address, fee_bps: u32, timelock_delay: u64) {
+    pub fn initialize(env: Env, admin: Address, fee_bps: u32, timelock_delay: u64, min_amount: i128, max_amount: i128) {
         assert!(
             !env.storage().instance().has(&DataKey::Admin),
             "already initialized"
         );
         admin.require_auth();
         assert!(fee_bps <= 10000, "fee_bps must be <= 10000");
+        assert!(min_amount >= 1, "min_amount >= 1");
+        assert!(max_amount >= min_amount, "max_amount >= min_amount");
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
         env.storage()
             .instance()
             .set(&DataKey::TimelockDelay, &timelock_delay);
+        env.storage().instance().set(&DataKey::MinAmount, &min_amount);
+        env.storage().instance().set(&DataKey::MaxAmount, &max_amount);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::Version, &2u32);
         env.events()
@@ -169,6 +176,14 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::Paused)
             .unwrap_or(false)
+    }
+
+    pub fn min_amount(env: Env) -> i128 {
+        env.storage().instance().get(&DataKey::MinAmount).unwrap_or(1)
+    }
+
+    pub fn max_amount(env: Env) -> i128 {
+        env.storage().instance().get(&DataKey::MaxAmount).unwrap_or(i128::MAX)
     }
 
     pub fn pending_op(env: Env, hash: BytesN<32>) -> Option<PendingOperation> {
@@ -255,6 +270,42 @@ impl OnboardingBridge {
     }
 
     // -----------------------------------------------------------------------
+    // Amount constraints (timelocked)
+    // -----------------------------------------------------------------------
+
+    pub fn propose_set_min(env: Env, op_label: String) -> (BytesN<32>, u64) {
+        require_admin(&env);
+        let (hash, ready_at) = propose(&env, op_label.to_string().as_str());
+        (hash, ready_at)
+    }
+
+    pub fn execute_set_min(env: Env, min: i128, op_label: String) {
+        require_admin(&env);
+        assert!(min >= 1, "min_amount >= 1");
+        assert_op_ready(&env, op_label.to_string().as_str());
+        let max: i128 = env.storage().instance().get(&DataKey::MaxAmount).unwrap_or(i128::MAX);
+        assert!(min <= max, "min_amount <= max_amount");
+        env.storage().instance().set(&DataKey::MinAmount, &min);
+        env.events().publish((Symbol::new(&env, "min_amount_set"),), (min,));
+    }
+
+    pub fn propose_set_max(env: Env, op_label: String) -> (BytesN<32>, u64) {
+        require_admin(&env);
+        let (hash, ready_at) = propose(&env, op_label.to_string().as_str());
+        (hash, ready_at)
+    }
+
+    pub fn execute_set_max(env: Env, max: i128, op_label: String) {
+        require_admin(&env);
+        assert!(max >= 1, "max_amount >= 1");
+        assert_op_ready(&env, op_label.to_string().as_str());
+        let min: i128 = env.storage().instance().get(&DataKey::MinAmount).unwrap_or(1);
+        assert!(max >= min, "max_amount >= min_amount");
+        env.storage().instance().set(&DataKey::MaxAmount, &max);
+        env.events().publish((Symbol::new(&env, "max_amount_set"),), (max,));
+    }
+
+    // -----------------------------------------------------------------------
     // Core: fund via SAC token transfer
     // -----------------------------------------------------------------------
 
@@ -268,6 +319,11 @@ impl OnboardingBridge {
     ) -> i128 {
         assert_not_paused(&env);
         source.require_auth();
+
+        let min: i128 = env.storage().instance().get(&DataKey::MinAmount).unwrap_or(1);
+        let max: i128 = env.storage().instance().get(&DataKey::MaxAmount).unwrap_or(i128::MAX);
+        assert!(amount >= min, "amount below minimum");
+        assert!(amount <= max, "amount above maximum");
 
         let fee_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         let fee_amount = if fee_bps > 0 {
