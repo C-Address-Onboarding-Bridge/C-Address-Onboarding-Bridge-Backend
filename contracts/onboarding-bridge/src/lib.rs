@@ -68,8 +68,6 @@ impl OnboardingBridge {
             .publish((Symbol::new(&env, "set_fee"),), (new_fee_bps,));
     }
 
-    /// Record a funding event. The caller is responsible for the token transfer.
-    /// Returns the fee amount deducted.
     pub fn fund_c_address(
         env: Env,
         source: Address,
@@ -78,6 +76,7 @@ impl OnboardingBridge {
         amount: i128,
         _memo: String,
     ) -> i128 {
+        assert!(amount > 0, "amount must be positive");
         let fee_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         let fee_amount = if fee_bps > 0 {
             (amount * fee_bps as i128) / 10000
@@ -104,8 +103,6 @@ impl OnboardingBridge {
         fee_amount
     }
 
-    /// Withdraw accumulated fees to `to`. The caller must transfer the
-    /// token amount to `to` separately.
     pub fn withdraw_fees(env: Env, to: Address, token_address: Address, amount: i128) -> i128 {
         let admin: Address = env
             .storage()
@@ -147,6 +144,7 @@ impl OnboardingBridge {
         memo: String,
     ) -> i128 {
         exchange.require_auth();
+        assert!(amount > 0, "amount must be positive");
         Self::fund_c_address(env, exchange, target, token_address, amount, memo)
     }
 }

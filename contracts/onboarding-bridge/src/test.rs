@@ -82,8 +82,51 @@ fn setup_env() -> (Env, OnboardingBridgeClient<'static>) {
     let id = env.register_contract(None, OnboardingBridge);
     let client = OnboardingBridgeClient::new(&env, &id);
     let env_cloned = env.clone();
-    drop(env); // release borrows
+    drop(env);
     (env_cloned, client)
+}
+
+// ---------------------------------------------------------------------------
+// Input validation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "amount must be positive")]
+fn test_fund_c_address_zero_amount() {
+    let (env, bridge) = setup_env();
+    let admin = Address::generate(&env);
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    bridge.initialize(&admin, &100);
+    let memo = String::from_str(&env, "test");
+    bridge.fund_c_address(&source, &target, &token_addr, &0, &memo);
+}
+
+#[test]
+#[should_panic(expected = "amount must be positive")]
+fn test_fund_c_address_negative_amount() {
+    let (env, bridge) = setup_env();
+    let admin = Address::generate(&env);
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    bridge.initialize(&admin, &100);
+    let memo = String::from_str(&env, "test");
+    bridge.fund_c_address(&source, &target, &token_addr, &-1, &memo);
+}
+
+#[test]
+#[should_panic(expected = "amount must be positive")]
+fn test_route_from_exchange_zero_amount() {
+    let (env, bridge) = setup_env();
+    let admin = Address::generate(&env);
+    let exchange = Address::generate(&env);
+    let target = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    bridge.initialize(&admin, &100);
+    let memo = String::from_str(&env, "test");
+    bridge.route_from_exchange(&exchange, &target, &token_addr, &0, &memo);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +198,7 @@ fn test_fund_c_address_tracks_fees() {
     let memo = String::from_str(&env, "fund test");
     let fee = bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
 
-    assert_eq!(fee, 10); // 1000 * 100 / 10000
+    assert_eq!(fee, 10);
     assert_eq!(bridge.accumulated_fees(), 10);
 }
 
@@ -184,12 +227,10 @@ fn test_withdraw_fees() {
     let token_addr = Address::generate(&env);
     bridge.initialize(&admin, &200);
 
-    // Accumulate some fees first
     let memo = String::from_str(&env, "test");
     bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
     assert_eq!(bridge.accumulated_fees(), 20);
 
-    // Withdraw all
     let withdrawn = bridge.withdraw_fees(&admin, &token_addr, &0);
     assert_eq!(withdrawn, 20);
     assert_eq!(bridge.accumulated_fees(), 0);
@@ -208,7 +249,6 @@ fn test_withdraw_fees_partial() {
     bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
     assert_eq!(bridge.accumulated_fees(), 10);
 
-    // Withdraw partial
     let withdrawn = bridge.withdraw_fees(&admin, &token_addr, &4);
     assert_eq!(withdrawn, 4);
     assert_eq!(bridge.accumulated_fees(), 6);
@@ -242,7 +282,7 @@ fn test_route_from_exchange() {
     let memo = String::from_str(&env, "cex test");
     let fee = bridge.route_from_exchange(&exchange, &target, &token_addr, &500, &memo);
 
-    assert_eq!(fee, 2); // 500 * 50 / 10000 = 2.5 -> 2
+    assert_eq!(fee, 2);
     assert_eq!(bridge.accumulated_fees(), 2);
 }
 
@@ -261,15 +301,15 @@ fn test_multiple_fund_accumulates_fees() {
 
     let memo = String::from_str(&env, "tx2");
     bridge.fund_c_address(&source, &target, &token_addr, &2000, &memo);
-    assert_eq!(bridge.accumulated_fees(), 30); // 10 + 20
+    assert_eq!(bridge.accumulated_fees(), 30);
 
     let memo = String::from_str(&env, "tx3");
     bridge.fund_c_address(&source, &target, &token_addr, &3000, &memo);
-    assert_eq!(bridge.accumulated_fees(), 60); // 30 + 30
+    assert_eq!(bridge.accumulated_fees(), 60);
 }
 
 // ---------------------------------------------------------------------------
-// Direct token transfer (verifies cross-contract invoke works from test env)
+// Direct token transfer
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -316,7 +356,7 @@ fn test_token_transfer_direct() {
 }
 
 // ---------------------------------------------------------------------------
-// Full integration scenario: bridge accounting + token transfer
+// Full integration scenario
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -329,18 +369,15 @@ fn test_full_scenario() {
     let target = Address::generate(&env);
     let token_addr = Address::generate(&env);
 
-    // Deploy bridge
     let bridge_id = env.register_contract(None, OnboardingBridge);
     let bridge = OnboardingBridgeClient::new(&env, &bridge_id);
     bridge.initialize(&admin, &100);
 
-    // Alice calls fund_c_address (returns fee, doesn't transfer tokens)
     let memo = String::from_str(&env, "full test");
     let fee = bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
     assert_eq!(fee, 10);
     assert_eq!(bridge.accumulated_fees(), 10);
 
-    // Admin withdraws fees
     let withdrawn = bridge.withdraw_fees(&admin, &token_addr, &0);
     assert_eq!(withdrawn, 10);
     assert_eq!(bridge.accumulated_fees(), 0);
