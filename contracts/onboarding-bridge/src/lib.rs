@@ -52,8 +52,21 @@
 
 #![no_std]
 #![allow(deprecated)]
+#![allow(clippy::needless_borrows_for_generic_args)]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, crypto::Hash, token, Address, Bytes, BytesN, Env, String,
+    Symbol, Vec,
+};
+
+const TTL_THRESHOLD: u32 = 5000;
+const TTL_EXTEND: u32 = 50000;
+
+const ERR_INVALID_C_ADDRESS: &str = "invalid c-address: not a contract address";
+const ERR_REENTRANT_CALL: &str = "reentrant call detected";
+const ERR_EMPTY_BATCH: &str = "batch inputs must not be empty";
+const ERR_MISMATCHED_LENGTHS: &str = "batch input vectors must have same length";
+const ERR_NO_ENTRIES_TO_ARCHIVE: &str = "no entries to archive";
 
 /// Storage keys used throughout the contract.
 ///
@@ -61,137 +74,234 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Sy
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    /// The administrator [`Address`] authorised to call privileged functions.
-    Admin,
-    /// Fee rate in basis points (0–10 000).  Loaded on every funding call.
     FeeBps,
-    /// Running total of fees collected (in the token's smallest unit / stroops).
-    /// Zeroed on each successful withdrawal or auto-withdraw.
+    MaxFeeBps,
     AccumulatedFees,
-    /// Monotonically increasing schema version.  Currently `1`.
+    /// Logical contract version (user-visible, incremented on each upgrade).
     Version,
-    /// Optional ordered list of [`FeeRecipient`] entries for proportional
-    /// fee distribution.  Absent until [`OnboardingBridge::set_fee_recipients`]
-    /// is called for the first time.
-    FeeRecipients,
-    /// Minimum accumulated-fee balance (stroops) that triggers a permissionless
-    /// auto-withdraw.  `0` means the feature is disabled.
-    AutoWithdrawThreshold,
+    Paused,
+    Admins,
+    Threshold,
+    ProposalNonce,
+    Proposal(u32),
+    ProposalApproval(u32, Address),
+    ReentrancyGuard,
+    Funding(u32),
+    FundingCount,
+    ArchivedHash(u32),
+    NextArchiveId,
+    MinAmount,
+    MaxAmount,
+    UserVolume(Address),
+    TierThreshold(u32),
+    TierDiscount(u32),
+    TierCount,
 }
 
-/// A single fee recipient with their proportional share in basis points.
 #[contracttype]
 #[derive(Clone)]
-pub struct FeeRecipient {
-    pub address: Address,
-    pub bps_share: u32,
+pub struct FundingRecord {
+    source: Address,
+    target: Address,
+    token_address: Address,
+    amount: i128,
+    fee: i128,
+    ledger: u32,
+    memo: String,
+    archived: bool,
 }
 
-/// A single distribution record: address + amount distributed.
 #[contracttype]
 #[derive(Clone)]
-pub struct Distribution {
-    pub address: Address,
-    pub amount: i128,
+pub enum ProposalAction {
+    SetFee(u32),
+    WithdrawFees(Address, Address, i128),
+    Pause,
+    Unpause,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct Proposal {
+    pub id: u32,
+    pub action: ProposalAction,
+    pub proposer: Address,
+    pub approval_count: u32,
+    pub executed: bool,
+    pub expiry: u32,
 }
 
 #[contract]
 pub struct OnboardingBridge;
 
+fn rebate_bps(env: &Env, user: &Address) -> u32 {
+    let volume: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::UserVolume(user.clone()))
+        .unwrap_or(0);
+    let tier_count: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TierCount)
+        .unwrap_or(0);
+    let mut best: u32 = 0;
+    for i in 0..tier_count {
+        let threshold: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TierThreshold(i))
+            .unwrap_or(0);
+        let discount: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TierDiscount(i))
+            .unwrap_or(0);
+        if volume >= threshold && discount > best {
+            best = discount;
+        }
+    }
+    best
+}
+
 #[contractimpl]
 impl OnboardingBridge {
-    /// One-time initialisation of the bridge contract.
-    ///
-    /// Stores the admin address, fee rate, initial accumulated fees (`0`), and
-    /// contract version (`1`).  Subsequent calls panic immediately — the guard
-    /// runs before auth to give a clear error to callers who call this twice.
-    ///
-    /// # Parameters
-    ///
-    /// - `admin` — Address that will own privileged functions.
-    /// - `fee_bps` — Initial fee rate in basis points (0–10 000 inclusive).
-    ///
-    /// # Panics
-    ///
-    /// - `"already initialized"` — if [`DataKey::Admin`] already exists in storage.
-    /// - Assertion failure — if `fee_bps > 10_000`.
-    /// - Auth failure — if the transaction is not signed by `admin`.
-    ///
-    /// # Events
-    ///
-    /// Emits `("initialize",) → (admin, fee_bps)`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// contract.initialize(env, admin_address, 30); // 0.30 % fee
-    /// ```
-    pub fn initialize(env: Env, admin: Address, fee_bps: u32) {
-        if env.storage().instance().has(&DataKey::Admin) {
-            panic!("already initialized");
-        }
-        admin.require_auth();
-        assert!(fee_bps <= 10000, "fee_bps must be <= 10000");
-        env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
-        env.storage()
-            .instance()
-            .set(&DataKey::AccumulatedFees, &0i128);
-        env.storage().instance().set(&DataKey::Version, &1u32);
-        env.events()
-            .publish((Symbol::new(&env, "initialize"),), (admin, fee_bps));
+    fn is_contract_address(addr: &Address) -> bool {
+        let s = addr.to_string();
+        let bytes = s.to_bytes();
+        bytes.first() == Some(b'C')
     }
 
-    /// Returns the contract schema version.
-    ///
-    /// # Returns
-    ///
-    /// Current version number (currently `1`), or `0` if not yet initialised.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let v = contract.version(env); // 1
-    /// ```
+    fn validate_c_address(target: &Address) {
+        if !Self::is_contract_address(target) {
+            panic!("{}", ERR_INVALID_C_ADDRESS);
+        }
+    }
+
+    pub fn is_valid_c_address(_env: Env, target: Address) -> bool {
+        Self::is_contract_address(&target)
+    }
+
+    fn pre_reentrancy_check(env: &Env) {
+        if env.storage().temporary().has(&DataKey::ReentrancyGuard) {
+            panic!("{}", ERR_REENTRANT_CALL);
+        }
+    }
+
+    fn set_reentrancy_guard(env: &Env) {
+        env.storage()
+            .temporary()
+            .set(&DataKey::ReentrancyGuard, &true);
+    }
+
+    fn clear_reentrancy_guard(env: &Env) {
+        env.storage().temporary().remove(&DataKey::ReentrancyGuard);
+    }
+
+    fn extend_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND);
+    }
+
+    pub fn initialize(
+        env: Env,
+        admins: Vec<Address>,
+        threshold: u32,
+        fee_bps: u32,
+        max_fee_bps: u32,
+        min_amount: i128,
+        max_amount: i128,
+    ) {
+        if env.storage().instance().has(&DataKey::Version) {
+            panic!("already initialized");
+        }
+        assert!(!admins.is_empty(), "admins must not be empty");
+        assert!(threshold > 0, "threshold must be > 0");
+        assert!(threshold <= admins.len(), "threshold exceeds admin count");
+        assert!(max_fee_bps <= 10000, "max_fee_bps must be <= 10000");
+        assert!(fee_bps <= max_fee_bps, "fee_bps must be <= max_fee_bps");
+        assert!(min_amount > 0, "min_amount must be > 0");
+        assert!(max_amount >= min_amount, "max_amount must be >= min_amount");
+
+        env.storage().instance().set(&DataKey::Admins, &admins);
+        env.storage()
+            .instance()
+            .set(&DataKey::Threshold, &threshold);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxFeeBps, &max_fee_bps);
+        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        env.storage().instance().set(&DataKey::AccumulatedFees, &0i128);
+        env.storage().instance().set(&DataKey::Version, &1u32);
+        env.storage().instance().set(&DataKey::FundingCount, &0u32);
+        env.storage().instance().set(&DataKey::NextArchiveId, &0u32);
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::ProposalNonce, &0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinAmount, &min_amount);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxAmount, &max_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "initialize"),),
+            (
+                admins,
+                threshold,
+                fee_bps,
+                max_fee_bps,
+                min_amount,
+                max_amount,
+            ),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Getters
+    // -----------------------------------------------------------------------
+
     pub fn version(env: Env) -> u32 {
+        Self::extend_ttl(&env);
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
-    /// Returns the administrator address.
-    ///
-    /// # Returns
-    ///
-    /// The [`Address`] stored under [`DataKey::Admin`].
-    ///
-    /// # Panics
-    ///
-    /// - `"not initialized"` — if the contract has not been initialised.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let admin = contract.admin(env);
-    /// ```
-    pub fn admin(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .expect("not initialized")
+    pub fn fee_bps(env: Env) -> u32 {
+        Self::extend_ttl(&env);
+        env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0)
     }
 
-    /// Returns the current fee rate in basis points.
-    ///
-    /// # Returns
-    ///
-    /// Fee rate (0–10 000), or `0` if not yet set.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let bps = contract.fee_bps(env); // e.g. 30
-    /// ```
-    pub fn fee_bps(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0)
+    pub fn max_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxFeeBps)
+            .unwrap_or(0)
+    }
+
+    pub fn min_amount(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MinAmount)
+            .unwrap_or(1)
+    }
+
+    pub fn max_amount(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxAmount)
+            .unwrap_or(i128::MAX)
+    }
+
+    pub fn user_volume(env: Env, user: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::UserVolume(user))
+            .unwrap_or(0)
+    }
+
+    pub fn rebate_for(env: Env, user: Address) -> u32 {
+        rebate_bps(&env, &user)
     }
 
     /// Returns the total unclaimed fees accumulated in the contract (stroops).
@@ -206,92 +316,125 @@ impl OnboardingBridge {
     /// let fees = contract.accumulated_fees(env);
     /// ```
     pub fn accumulated_fees(env: Env) -> i128 {
+        Self::extend_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::AccumulatedFees)
             .unwrap_or(0)
     }
 
-    /// Updates the fee rate.  Admin only.
-    ///
-    /// # Parameters
-    ///
-    /// - `new_fee_bps` — New fee rate in basis points (0–10 000 inclusive).
-    ///
-    /// # Panics
-    ///
-    /// - `"not initialized"` — if the contract has not been initialised.
-    /// - Assertion failure — if `new_fee_bps > 10_000`.
-    /// - Auth failure — if the transaction is not signed by admin.
-    ///
-    /// # Events
-    ///
-    /// Emits `("set_fee",) → (new_fee_bps,)`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// contract.set_fee(env, 50); // raise fee to 0.50 %
-    /// ```
-    pub fn set_fee(env: Env, new_fee_bps: u32) {
-        let admin: Address = env
-            .storage()
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
             .instance()
-            .get(&DataKey::Admin)
-            .expect("not initialized");
-        admin.require_auth();
-        assert!(new_fee_bps <= 10000, "fee_bps must be <= 10000");
-        env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
-        env.events()
-            .publish((Symbol::new(&env, "set_fee"),), (new_fee_bps,));
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 
-    /// Record a funding event. The caller is responsible for the token transfer.
-    /// Returns the fee amount deducted.
-    ///
-    /// The contract does **not** perform the token transfer; the caller must
-    /// move tokens independently.  This function records the event, accrues
-    /// the fee, and emits a `funded` event so indexers can track activity.
-    ///
-    /// # Parameters
-    ///
-    /// - `source` — The funding originator (G-address or smart account).
-    /// - `target` — Destination C-address receiving the funds.
-    /// - `_token_address` — Token contract address (recorded in the event).
-    /// - `amount` — Gross transfer amount in the token's smallest unit.
-    /// - `_memo` — Arbitrary memo string for off-chain correlation.
-    ///
-    /// # Returns
-    ///
-    /// The fee amount (stroops) deducted from `amount`.  `0` when fee rate is 0.
-    ///
-    /// # Events
-    ///
-    /// Emits `("funded",) → (source, target, amount, fee_amount)`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let fee = contract.fund_c_address(env, source, target, token, 1_000_000, memo);
-    /// // net received by target = 1_000_000 - fee
-    /// ```
+    pub fn get_admins(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admins)
+            .expect("not initialized")
+    }
+
+    pub fn get_threshold(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .expect("not initialized")
+    }
+
+    pub fn set_rebate_tier(env: Env, tier_index: u32, threshold: i128, discount_bps: u32) {
+        let admins: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admins)
+            .expect("not initialized");
+        admins.get_unchecked(0).require_auth();
+        assert!(discount_bps <= 5000, "discount capped at 50%");
+        env.storage()
+            .instance()
+            .set(&DataKey::TierThreshold(tier_index), &threshold);
+        env.storage()
+            .instance()
+            .set(&DataKey::TierDiscount(tier_index), &discount_bps);
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TierCount)
+            .unwrap_or(0);
+        if tier_index >= count {
+            env.storage()
+                .instance()
+                .set(&DataKey::TierCount, &(tier_index + 1));
+        }
+        env.events().publish(
+            (Symbol::new(&env, "tier_set"),),
+            (tier_index, threshold, discount_bps),
+        );
+    }
+
     pub fn fund_c_address(
         env: Env,
         source: Address,
         target: Address,
-        _token_address: Address,
+        token_address: Address,
         amount: i128,
-        _memo: String,
+        memo: String,
     ) -> i128 {
+        Self::extend_ttl(&env);
+        Self::pre_reentrancy_check(&env);
+        Self::validate_c_address(&target);
+        assert!(amount > 0, "amount must be positive");
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            panic!("contract is paused");
+        }
+        Self::set_reentrancy_guard(&env);
+        let result =
+            Self::fund_c_address_internal(&env, &source, &target, &token_address, amount, &memo);
+        Self::clear_reentrancy_guard(&env);
+        result
+    }
+
+    fn fund_c_address_internal(
+        env: &Env,
+        source: &Address,
+        target: &Address,
+        token_address: &Address,
+        amount: i128,
+        memo: &String,
+    ) -> i128 {
+        let min_amt: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinAmount)
+            .unwrap_or(1);
+        let max_amt: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxAmount)
+            .unwrap_or(i128::MAX);
+        assert!(amount >= min_amt, "amount below minimum");
+        assert!(amount <= max_amt, "amount above maximum");
+
         let fee_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
-        // Integer division: floor(amount × fee_bps / 10_000)
-        let fee_amount = if fee_bps > 0 {
-            (amount * fee_bps as i128) / 10000
+        let discount = rebate_bps(env, source);
+        let effective_fee_bps = fee_bps.saturating_sub(fee_bps * discount / 10000);
+        let fee = if effective_fee_bps > 0 {
+            (amount * effective_fee_bps as i128) / 10000
         } else {
             0i128
         };
 
-        if fee_amount > 0 {
+        let net_amount = amount - fee;
+        let tk = token::Client::new(env, token_address);
+        tk.transfer(source, &env.current_contract_address(), &amount);
+        if fee > 0 {
             let accumulated: i128 = env
                 .storage()
                 .instance()
@@ -299,107 +442,89 @@ impl OnboardingBridge {
                 .unwrap_or(0);
             env.storage()
                 .instance()
-                .set(&DataKey::AccumulatedFees, &(accumulated + fee_amount));
+                .set(&DataKey::AccumulatedFees, &(accumulated + fee));
         }
+        tk.transfer(&env.current_contract_address(), target, &net_amount);
+
+        let vol_key = DataKey::UserVolume(source.clone());
+        let vol: i128 = env.storage().instance().get(&vol_key).unwrap_or(0);
+        env.storage().instance().set(&vol_key, &(vol + amount));
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FundingCount)
+            .unwrap_or(0);
+        let id = count + 1;
+        let record = FundingRecord {
+            source: source.clone(),
+            target: target.clone(),
+            token_address: token_address.clone(),
+            amount,
+            fee,
+            ledger: env.ledger().sequence(),
+            memo: memo.clone(),
+            archived: false,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Funding(id), &record);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Funding(id), TTL_THRESHOLD, TTL_EXTEND);
+        env.storage().instance().set(&DataKey::FundingCount, &id);
 
         env.events().publish(
-            (Symbol::new(&env, "funded"),),
-            (source, target, amount, fee_amount),
+            (Symbol::new(env, "funded"),),
+            (source.clone(), target.clone(), amount, fee, discount),
         );
 
-        fee_amount
+        fee
     }
 
-    /// Withdraw accumulated fees.  Admin only.
-    ///
-    /// Behaviour depends on `amount` and whether fee recipients are configured:
-    ///
-    /// | `amount` | Recipients set? | Behaviour |
-    /// |----------|-----------------|-----------|
-    /// | `0`      | Yes (non-empty) | Distribute full balance proportionally to all recipients; clear balance |
-    /// | `0`      | No              | Withdraw full balance to `to`; clear balance |
-    /// | `> 0`    | Any             | Withdraw exactly `amount` to `to`; reduce balance |
-    ///
-    /// # Parameters
-    ///
-    /// - `to` — Destination address for single-recipient withdrawals.
-    /// - `token_address` — Token to withdraw (recorded in event; transfer is caller's responsibility).
-    /// - `amount` — Amount to withdraw, or `0` to withdraw the full balance.
-    ///
-    /// # Returns
-    ///
-    /// Actual amount withdrawn (useful when `amount == 0`).
-    ///
-    /// # Panics
-    ///
-    /// - `"not initialized"` — if the contract has not been initialised.
-    /// - `"insufficient accumulated fees"` — if `amount > accumulated`.
-    /// - Auth failure — if the transaction is not signed by admin.
-    ///
-    /// # Events
-    ///
-    /// Emits `("withdrawn",) → (to, token_address, withdraw_amount)`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Withdraw everything to a single address
-    /// let withdrawn = contract.withdraw_fees(env, to, token, 0);
-    ///
-    /// // Withdraw a specific amount
-    /// let withdrawn = contract.withdraw_fees(env, to, token, 500_000);
-    /// ```
-    pub fn withdraw_fees(env: Env, to: Address, token_address: Address, amount: i128) -> i128 {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .expect("not initialized");
-        admin.require_auth();
+    pub fn batch_fund_c_address(
+        env: Env,
+        source: Address,
+        targets: Vec<Address>,
+        token_addresses: Vec<Address>,
+        amounts: Vec<i128>,
+        memos: Vec<String>,
+    ) -> (i128, u32) {
+        Self::extend_ttl(&env);
+        Self::pre_reentrancy_check(&env);
+        source.require_auth();
 
-        let accumulated: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::AccumulatedFees)
-            .unwrap_or(0);
+        let count = targets.len();
+        assert!(count > 0, "{}", ERR_EMPTY_BATCH);
+        assert!(
+            token_addresses.len() == count && amounts.len() == count && memos.len() == count,
+            "{}",
+            ERR_MISMATCHED_LENGTHS
+        );
 
-        // Multi-recipient distribution: only when amount == 0 and recipients are configured
-        if amount == 0 {
-            let recipients: Option<Vec<FeeRecipient>> =
-                env.storage().instance().get(&DataKey::FeeRecipients);
-            if let Some(recipients) = recipients {
-                if !recipients.is_empty() {
-                    // Zero out balance before emitting so re-entrancy reads 0
-                    env.storage()
-                        .instance()
-                        .set(&DataKey::AccumulatedFees, &0i128);
-                    env.events().publish(
-                        (Symbol::new(&env, "withdrawn"),),
-                        (to, token_address, accumulated),
-                    );
-                    return accumulated;
-                }
-            }
+        for i in 0..count {
+            Self::validate_c_address(&targets.get(i).unwrap());
         }
 
-        // Original behavior: single recipient
-        let withdraw_amount = if amount == 0 { accumulated } else { amount };
-        assert!(
-            withdraw_amount <= accumulated,
-            "insufficient accumulated fees"
-        );
+        Self::set_reentrancy_guard(&env);
 
-        let remaining = accumulated - withdraw_amount;
-        env.storage()
-            .instance()
-            .set(&DataKey::AccumulatedFees, &remaining);
+        let mut total_fees: i128 = 0;
+        for i in 0..count {
+            let target = targets.get(i).unwrap();
+            let token_addr = token_addresses.get(i).unwrap();
+            let amount = amounts.get(i).unwrap();
+            let memo = memos.get(i).unwrap();
+            total_fees +=
+                Self::fund_c_address_internal(&env, &source, &target, &token_addr, amount, &memo);
+        }
 
         env.events().publish(
-            (Symbol::new(&env, "withdrawn"),),
-            (to, token_address, withdraw_amount),
+            (Symbol::new(&env, "batch_funded"),),
+            (source, count, total_fees),
         );
 
-        withdraw_amount
+        Self::clear_reentrancy_guard(&env);
+        (total_fees, count)
     }
 
     /// Route a CEX withdrawal to a C-address.
@@ -441,247 +566,334 @@ impl OnboardingBridge {
         amount: i128,
         memo: String,
     ) -> i128 {
-        exchange.require_auth();
-        Self::fund_c_address(env, exchange, target, token_address, amount, memo)
-    }
-
-    // -----------------------------------------------------------------------
-    // Fee recipient management
-    // -----------------------------------------------------------------------
-
-    /// Configure proportional fee recipients.  Admin only.
-    ///
-    /// Replaces any previously stored recipient list.  All future calls to
-    /// `withdraw_fees` with `amount == 0` and calls to
-    /// `trigger_auto_withdraw` will distribute fees according to this list.
-    ///
-    /// # Parameters
-    ///
-    /// - `recipients` — Ordered list of [`FeeRecipient`] entries.  Each entry
-    ///   specifies an address and its share in basis points.
-    ///
-    /// # Panics
-    ///
-    /// - `"not initialized"` — if the contract has not been initialised.
-    /// - `"shares must sum to 10000"` — if the sum of `bps_share` values ≠ 10 000.
-    /// - Auth failure — if the transaction is not signed by admin.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // 70 % to alice, 30 % to bob
-    /// contract.set_fee_recipients(env, vec![
-    ///     FeeRecipient { address: alice, bps_share: 7000 },
-    ///     FeeRecipient { address: bob,   bps_share: 3000 },
-    /// ]);
-    /// ```
-    pub fn set_fee_recipients(env: Env, recipients: Vec<FeeRecipient>) {
-        let admin: Address = env
+        Self::extend_ttl(&env);
+        Self::pre_reentrancy_check(&env);
+        Self::validate_c_address(&target);
+        assert!(amount > 0, "amount must be positive");
+        if env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
-            .expect("not initialized");
-        admin.require_auth();
-
-        // Validate that all shares sum to exactly 10 000 bps (= 100 %)
-        let mut total: u32 = 0;
-        for i in 0..recipients.len() {
-            total += recipients.get(i).unwrap().bps_share;
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            panic!("contract is paused");
         }
-        assert!(total == 10000, "shares must sum to 10000");
-
-        env.storage()
-            .instance()
-            .set(&DataKey::FeeRecipients, &recipients);
+        exchange.require_auth();
+        Self::fund_c_address_internal(&env, &exchange, &target, &token_address, amount, &memo)
     }
 
-    /// Returns the current fee recipient list.
-    ///
-    /// # Returns
-    ///
-    /// Stored [`Vec<FeeRecipient>`], or an empty `Vec` if none have been set.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let recipients = contract.get_fee_recipients(env);
-    /// ```
-    pub fn get_fee_recipients(env: Env) -> Vec<FeeRecipient> {
+    pub fn funding_count(env: Env) -> u32 {
         env.storage()
             .instance()
-            .get(&DataKey::FeeRecipients)
-            .unwrap_or(Vec::new(&env))
-    }
-
-    // -----------------------------------------------------------------------
-    // Auto-withdraw threshold
-    // -----------------------------------------------------------------------
-
-    /// Set the accumulated-fee threshold that enables permissionless auto-withdraw.  Admin only.
-    ///
-    /// Once the threshold is set to a positive value, any caller may invoke
-    /// `trigger_auto_withdraw` whenever `accumulated_fees >= threshold`.
-    /// Setting `threshold` to `0` disables the feature.
-    ///
-    /// # Parameters
-    ///
-    /// - `threshold` — Minimum accumulated balance (stroops) required to trigger
-    ///   auto-withdraw.  Pass `0` to disable.
-    ///
-    /// # Panics
-    ///
-    /// - `"not initialized"` — if the contract has not been initialised.
-    /// - Auth failure — if the transaction is not signed by admin.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// contract.set_auto_withdraw_threshold(env, 1_000_000); // trigger at 1 XLM
-    /// contract.set_auto_withdraw_threshold(env, 0);          // disable
-    /// ```
-    pub fn set_auto_withdraw_threshold(env: Env, threshold: i128) {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .expect("not initialized");
-        admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&DataKey::AutoWithdrawThreshold, &threshold);
-    }
-
-    /// Returns the current auto-withdraw threshold (stroops).
-    ///
-    /// # Returns
-    ///
-    /// The stored threshold, or `0` if never set (feature disabled).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let t = contract.get_auto_withdraw_threshold(env);
-    /// ```
-    pub fn get_auto_withdraw_threshold(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::AutoWithdrawThreshold)
+            .get(&DataKey::FundingCount)
             .unwrap_or(0)
     }
 
-    // -----------------------------------------------------------------------
-    // Trigger auto-withdraw
-    // -----------------------------------------------------------------------
+    pub fn funding_record(env: Env, id: u32) -> Option<FundingRecord> {
+        env.storage().persistent().get(&DataKey::Funding(id))
+    }
 
-    /// Permissionless auto-withdraw: distributes all accumulated fees when the
-    /// threshold condition is met.
-    ///
-    /// Callable by **anyone** — no admin auth required.  Useful for keeper bots
-    /// or automated treasury management.
-    ///
-    /// Distribution rules:
-    /// - If no recipients are configured → entire balance goes to admin.
-    /// - If recipients are configured → each receives `floor(balance × bps_share / 10_000)`.
-    ///   The **last** recipient receives the remainder to prevent dust from
-    ///   integer-division rounding accumulating indefinitely.
-    ///
-    /// The accumulated fee balance is zeroed atomically before the event is emitted.
-    ///
-    /// # Parameters
-    ///
-    /// - `token` — Token address being distributed (recorded in the event).
-    ///
-    /// # Returns
-    ///
-    /// [`Vec<Distribution>`] — one entry per recipient, each containing the
-    /// address and the amount allocated to that address.
-    ///
-    /// # Panics
-    ///
-    /// - `"auto-withdraw is disabled"` — if threshold is `0`.
-    /// - `"accumulated fees below threshold"` — if `accumulated < threshold`.
-    /// - `"not initialized"` — if the contract has not been initialised.
-    ///
-    /// # Events
-    ///
-    /// Emits `("auto_withdrawn",) → (token, distributions)`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Keeper triggers once balance crosses threshold
-    /// let dists = contract.trigger_auto_withdraw(env, xlm_token);
-    /// for d in dists.iter() {
-    ///     // d.address received d.amount stroops
-    /// }
-    /// ```
-    pub fn trigger_auto_withdraw(env: Env, token: Address) -> Vec<Distribution> {
-        let threshold: i128 = env
+    pub fn archive_old_entries(env: Env, count: u32) -> BytesN<32> {
+        let admins: Vec<Address> = env
             .storage()
             .instance()
-            .get(&DataKey::AutoWithdrawThreshold)
-            .unwrap_or(0);
-        assert!(threshold > 0, "auto-withdraw is disabled");
+            .get(&DataKey::Admins)
+            .expect("not initialized");
+        if !admins.is_empty() {
+            admins.get_unchecked(0).require_auth();
+        }
+        Self::extend_ttl(&env);
 
-        let accumulated: i128 = env
+        let total: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FundingCount)
+            .unwrap_or(0);
+        let archive_count = if count > total { total } else { count };
+        assert!(archive_count > 0, "{}", ERR_NO_ENTRIES_TO_ARCHIVE);
+
+        let mut buf: Vec<i128> = Vec::new(&env);
+        for i in 1..=archive_count {
+            if let Some(mut record) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, FundingRecord>(&DataKey::Funding(i))
+            {
+                record.archived = true;
+                buf.push_back(record.amount);
+                buf.push_back(record.fee);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::Funding(i), &record);
+            }
+        }
+
+        let archive_id: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextArchiveId)
+            .unwrap_or(0);
+
+        let mut hash_bytes = Bytes::new(&env);
+        for i in 0..buf.len() {
+            let val = buf.get(i).unwrap();
+            let byte: u8 = (val & 0xFF) as u8;
+            hash_bytes.push_back(byte);
+        }
+        let hash: Hash<32> = env.crypto().sha256(&hash_bytes);
+        let hash_val: BytesN<32> = hash.to_bytes();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::ArchivedHash(archive_id), &hash_val);
+        env.storage().persistent().extend_ttl(
+            &DataKey::ArchivedHash(archive_id),
+            TTL_THRESHOLD,
+            TTL_EXTEND,
+        );
+        env.storage()
+            .instance()
+            .set(&DataKey::NextArchiveId, &(archive_id + 1));
+
+        env.events().publish(
+            (Symbol::new(&env, "archived"),),
+            (archive_count, hash_val.clone()),
+        );
+
+        hash_val
+    }
+
+    pub fn storage_usage(env: Env) -> (u32, u32, i128, u32) {
+        let funding_count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FundingCount)
+            .unwrap_or(0);
+        let archived_count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextArchiveId)
+            .unwrap_or(0);
+        let accumulated_fees: i128 = env
             .storage()
             .instance()
             .get(&DataKey::AccumulatedFees)
             .unwrap_or(0);
-        assert!(accumulated >= threshold, "accumulated fees below threshold");
+        (funding_count, archived_count, accumulated_fees, 5u32)
+    }
 
-        let admin: Address = env
+    pub fn propose(env: Env, proposer: Address, action: ProposalAction, expiry_blocks: u32) -> u32 {
+        proposer.require_auth();
+
+        let admins: Vec<Address> = env
             .storage()
             .instance()
-            .get(&DataKey::Admin)
+            .get(&DataKey::Admins)
+            .expect("not initialized");
+        assert!(
+            is_admin_in_list(&admins, &proposer),
+            "only admins can propose"
+        );
+        assert!(expiry_blocks >= 10, "expiry must be >= 10 blocks");
+        assert!(expiry_blocks <= 100_000, "expiry must be <= 100000 blocks");
+
+        let nonce: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalNonce)
+            .unwrap_or(0);
+        let proposal_id = nonce + 1;
+        let current_block = env.ledger().sequence();
+
+        let approval_key = DataKey::ProposalApproval(proposal_id, proposer.clone());
+        env.storage().instance().set(&approval_key, &true);
+
+        let proposal = Proposal {
+            id: proposal_id,
+            action,
+            proposer: proposer.clone(),
+            approval_count: 1,
+            executed: false,
+            expiry: current_block + expiry_blocks,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalNonce, &proposal_id);
+
+        env.events().publish(
+            (Symbol::new(&env, "proposed"),),
+            (proposal_id, proposer, current_block + expiry_blocks),
+        );
+
+        proposal_id
+    }
+
+    pub fn approve(env: Env, admin: Address, proposal_id: u32) {
+        admin.require_auth();
+
+        let admins: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admins)
+            .expect("not initialized");
+        assert!(is_admin_in_list(&admins, &admin), "only admins can approve");
+
+        let mut proposal: Proposal = env
+            .storage()
+            .instance()
+            .get(&DataKey::Proposal(proposal_id))
+            .expect("proposal not found");
+
+        assert!(
+            env.ledger().sequence() <= proposal.expiry,
+            "proposal expired"
+        );
+        assert!(!proposal.executed, "proposal already executed");
+
+        let approval_key = DataKey::ProposalApproval(proposal_id, admin.clone());
+        assert!(
+            !env.storage().instance().has(&approval_key),
+            "already approved this proposal"
+        );
+        env.storage().instance().set(&approval_key, &true);
+
+        proposal.approval_count += 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+
+        env.events().publish(
+            (Symbol::new(&env, "approved"),),
+            (proposal_id, admin, proposal.approval_count),
+        );
+    }
+
+    pub fn execute(env: Env, proposal_id: u32) -> i128 {
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Threshold)
             .expect("not initialized");
 
-        let recipients: Vec<FeeRecipient> = env
+        let proposal: Proposal = env
             .storage()
             .instance()
-            .get(&DataKey::FeeRecipients)
-            .unwrap_or(Vec::new(&env));
+            .get(&DataKey::Proposal(proposal_id))
+            .expect("proposal not found");
 
-        let mut distributions: Vec<Distribution> = Vec::new(&env);
+        assert!(
+            env.ledger().sequence() <= proposal.expiry,
+            "proposal expired"
+        );
+        assert!(!proposal.executed, "proposal already executed");
+        assert!(
+            proposal.approval_count >= threshold,
+            "insufficient approvals"
+        );
 
-        if recipients.is_empty() {
-            // No split configured — full balance goes to admin
-            distributions.push_back(Distribution {
-                address: admin.clone(),
-                amount: accumulated,
-            });
-        } else {
-            let mut distributed: i128 = 0;
-            let last_idx = recipients.len() - 1;
-            for i in 0..recipients.len() {
-                let r = recipients.get(i).unwrap();
-                // Last recipient absorbs any rounding remainder so total always equals accumulated
-                let dist_amount = if i == last_idx {
-                    accumulated - distributed
-                } else {
-                    // Proportional share: floor(accumulated × bps_share / 10_000)
-                    (accumulated * r.bps_share as i128) / 10000
-                };
-                distributed += dist_amount;
-                distributions.push_back(Distribution {
-                    address: r.address,
-                    amount: dist_amount,
-                });
+        let mut executed_proposal = proposal.clone();
+        executed_proposal.executed = true;
+        env.storage()
+            .instance()
+            .set(&DataKey::Proposal(proposal_id), &executed_proposal);
+
+        let result = match proposal.action {
+            ProposalAction::SetFee(new_fee_bps) => {
+                let max_fee: u32 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::MaxFeeBps)
+                    .expect("not initialized");
+                assert!(new_fee_bps <= max_fee, "fee exceeds max_fee_bps");
+                env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
+                env.events()
+                    .publish((Symbol::new(&env, "set_fee"),), (new_fee_bps,));
+                0i128
+            }
+            ProposalAction::WithdrawFees(to, token, amount) => {
+                let accumulated: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::AccumulatedFees)
+                    .unwrap_or(0);
+                let withdraw_amount = if amount == 0 { accumulated } else { amount };
+                assert!(
+                    withdraw_amount <= accumulated,
+                    "insufficient accumulated fees"
+                );
+                let remaining = accumulated - withdraw_amount;
+                env.storage()
+                    .instance()
+                    .set(&DataKey::AccumulatedFees, &remaining);
+                let tk = token::Client::new(&env, &token);
+                tk.transfer(&env.current_contract_address(), &to, &withdraw_amount);
+                env.events().publish(
+                    (Symbol::new(&env, "withdrawn"),),
+                    (to, token, withdraw_amount),
+                );
+                withdraw_amount
+            }
+            ProposalAction::Pause => {
+                env.storage().instance().set(&DataKey::Paused, &true);
+                env.events().publish((Symbol::new(&env, "paused"),), ());
+                0i128
+            }
+            ProposalAction::Unpause => {
+                env.storage().instance().set(&DataKey::Paused, &false);
+                env.events().publish((Symbol::new(&env, "unpaused"),), ());
+                0i128
+            }
+        };
+
+        env.events()
+            .publish((Symbol::new(&env, "executed"),), (proposal_id,));
+
+        result
+    }
+
+    pub fn get_proposal(env: Env, proposal_id: u32) -> Proposal {
+        env.storage()
+            .instance()
+            .get(&DataKey::Proposal(proposal_id))
+            .expect("proposal not found")
+    }
+
+    pub fn get_active_proposals(env: Env) -> Vec<Proposal> {
+        let nonce: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalNonce)
+            .unwrap_or(0);
+        let current_block = env.ledger().sequence();
+        let mut active: Vec<Proposal> = Vec::new(&env);
+
+        for i in 1..=nonce {
+            if let Some(proposal) = env
+                .storage()
+                .instance()
+                .get::<DataKey, Proposal>(&DataKey::Proposal(i))
+            {
+                if !proposal.executed && current_block <= proposal.expiry {
+                    active.push_back(proposal);
+                }
             }
         }
 
-        // Zero the balance before emitting to prevent double-spend on re-entrancy
-        env.storage()
-            .instance()
-            .set(&DataKey::AccumulatedFees, &0i128);
-
-        env.events().publish(
-            (Symbol::new(&env, "auto_withdrawn"),),
-            (token, distributions.clone()),
-        );
-
-        distributions
+        active
     }
+}
+
+fn is_admin_in_list(admins: &Vec<Address>, addr: &Address) -> bool {
+    for i in 0..admins.len() {
+        if &admins.get_unchecked(i) == addr {
+            return true;
+        }
+    }
+    false
 }
 
 mod test;

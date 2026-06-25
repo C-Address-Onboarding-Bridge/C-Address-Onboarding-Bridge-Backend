@@ -11,3 +11,4 @@ coverage/
 .claude/
 .idea/
 .vscode/
+test_snapshots/
