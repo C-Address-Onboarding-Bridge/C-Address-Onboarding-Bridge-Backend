@@ -1,12 +1,10 @@
 {
   "generators": {
-    "address": 7,
+    "address": 6,
     "nonce": 0,
     "mux_id": 0
   },
   "auth": [
-    [],
-    [],
     [],
     [],
     [
@@ -24,16 +22,7 @@
                 {
                   "vec": [
                     {
-                      "symbol": "WithdrawFees"
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                    },
-                    {
-                      "i128": "0"
+                      "symbol": "Pause"
                     }
                   ]
                 },
@@ -137,7 +126,7 @@
                         ]
                       },
                       "val": {
-                        "u32": 200
+                        "u32": 100
                       }
                     },
                     {
@@ -161,7 +150,7 @@
                         ]
                       },
                       "val": {
-                        "bool": false
+                        "bool": true
                       }
                     },
                     {
@@ -184,16 +173,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "WithdrawFees"
-                                },
-                                {
-                                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
-                                },
-                                {
-                                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                                },
-                                {
-                                  "i128": "0"
+                                  "symbol": "Pause"
                                 }
                               ]
                             }

@@ -1,12 +1,10 @@
 {
   "generators": {
-    "address": 7,
+    "address": 3,
     "nonce": 0,
     "mux_id": 0
   },
   "auth": [
-    [],
-    [],
     [],
     [],
     [
@@ -24,16 +22,10 @@
                 {
                   "vec": [
                     {
-                      "symbol": "WithdrawFees"
+                      "symbol": "SetFee"
                     },
                     {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                    },
-                    {
-                      "i128": "0"
+                      "u32": 200
                     }
                   ]
                 },
@@ -69,6 +61,7 @@
         }
       ]
     ],
+    [],
     [],
     []
   ],
@@ -184,16 +177,10 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "WithdrawFees"
+                                  "symbol": "SetFee"
                                 },
                                 {
-                                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
-                                },
-                                {
-                                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                                },
-                                {
-                                  "i128": "0"
+                                  "u32": 200
                                 }
                               ]
                             }
