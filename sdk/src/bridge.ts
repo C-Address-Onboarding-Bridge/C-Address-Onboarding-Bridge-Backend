@@ -13,7 +13,9 @@ import {
   CexWithdrawalResult,
   PaginatedRequestParams,
   PaginatedResponse,
+  AutoPaginateOptions,
 } from './types';
+import { PaginationHelper } from './pagination';
 
 export interface BridgeClientConfig {
   baseUrl: string;
@@ -69,6 +71,18 @@ export class BridgeClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  paginate<T>(path: string, options?: AutoPaginateOptions): PaginationHelper<T> {
+    return new PaginationHelper<T>(
+      (params) =>
+        this.request<PaginatedResponse<T>>('GET', path, undefined, {
+          cursor: params?.cursor,
+          limit: params?.limit !== undefined ? String(params.limit) : undefined,
+          offset: params?.offset !== undefined ? String(params.offset) : undefined,
+        }),
+      options,
+    );
   }
 
   async requestPaginated<T>(path: string, params?: PaginatedRequestParams): Promise<PaginatedResponse<T>> {

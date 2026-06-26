@@ -95,3 +95,22 @@ export interface PaginatedResponse<T> {
   nextCursor: string | null;
   hasMore: boolean;
 }
+
+export interface PaginationMeta {
+  total?: number;
+  page?: number;
+  totalPages?: number;
+}
+
+export interface EnrichedPaginatedResponse<T> extends PaginatedResponse<T> {
+  meta: PaginationMeta;
+}
+
+export interface AutoPaginateOptions {
+  pageSize?: number;
+  concurrency?: number;
+  throttleMs?: number;
+  signal?: AbortSignal;
+}
+
+export type PageFetcher<T> = (params: PaginatedRequestParams) => Promise<PaginatedResponse<T>>;
