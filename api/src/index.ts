@@ -62,7 +62,12 @@ app.get('/health', (_req, res) => {
   for (const [name, cb] of circuitBreakers) {
     circuits[name] = cb.getState();
   }
-  res.json({ status: 'ok', timestamp: Date.now(), circuits });
+  res.json({
+    status: 'ok',
+    timestamp: Date.now(),
+    circuits,
+    cache: { redis: isRedisEnabled(), metrics: getCacheMetrics() },
+  });
 });
 
 // Reject new requests during shutdown and track active request count

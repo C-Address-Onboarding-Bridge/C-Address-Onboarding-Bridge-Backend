@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { sorobanService } from '../services/soroban';
 import { explorerService } from '../services/explorer';
+import { idempotencyMiddleware } from '../middleware/idempotency';
 
 export const fundingRouter = Router();
 
@@ -20,10 +21,12 @@ const fundDirectSchema = z.object({
   memo: z.string().max(64).default(''),
 });
 
-fundingRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
+fundingRouter.post('/', idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
+    req.log?.info({ path: req.path }, 'fund transaction submission started');
     const body = fundSchema.parse(req.body);
     const result = await sorobanService.submitFundingTransaction(body.signedXdr);
+    req.log?.info({ txHash: result.hash, status: result.status }, 'fund transaction submitted');
     res.status(201).json({
       ...result,
       explorerUrl: explorerService.txUrl(result.hash),

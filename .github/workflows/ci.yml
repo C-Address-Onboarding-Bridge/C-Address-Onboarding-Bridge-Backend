@@ -126,3 +126,32 @@ jobs:
           SOROBAN_RPC_URL: https://soroban-rpc.testnet.stellar.org
           BRIDGE_FEE_BPS: '30'
           API_KEYS: ci-test-key
+
+  deploy-testnet:
+    name: Deploy to Testnet
+    runs-on: ubuntu-latest
+    needs: [soroban-contract, api-server, sdk, e2e]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.SOROBAN_SOURCE_ACCOUNT != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32v1-none
+
+      - name: Install Stellar CLI
+        run: cargo install stellar-cli --locked
+
+      - name: Deploy contract to testnet
+        run: bash scripts/deploy.sh --network testnet
+        env:
+          SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
+          BRIDGE_FEE_BPS: '30'
+
+      - name: Upload deployment artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-testnet
+          path: deployments/deployment-testnet.json
+          retention-days: 90
