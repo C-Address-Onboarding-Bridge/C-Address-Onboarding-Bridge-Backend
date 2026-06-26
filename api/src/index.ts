@@ -90,6 +90,7 @@ app.get('/api/v1/deprecations', (_req, res) => {
 app.use('/api', docsRouter);
 
 app.use('/api/v1/quote', rbacAuth, quoteRouter);
+app.use('/api', telemetryRouter);
 app.use('/api/v2/quote', rbacAuth, quoteRouter);
 app.use('/api/v1/fund', rbacAuth, fundingRouter);
 app.use('/api/v2/fund', rbacAuth, fundingRouter);

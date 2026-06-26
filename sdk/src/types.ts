@@ -1,3 +1,7 @@
+export type BridgeStatus = 'pending' | 'success' | 'failed';
+export type RequestValue = string | number | boolean | undefined;
+export type RequestParams = Record<string, RequestValue>;
+
 export interface QuoteParams {
   sourceAsset: string;
   amount: string;
@@ -24,13 +28,13 @@ export interface FundWithXdrParams {
 }
 
 export interface FundingResult {
-  status: 'pending' | 'success' | 'failed';
+  status: BridgeStatus;
   hash: string;
   error?: string;
 }
 
 export interface TransactionStatus {
-  status: 'pending' | 'success' | 'failed';
+  status: BridgeStatus;
   hash: string;
   error?: string;
 }
@@ -102,4 +106,10 @@ export interface PaginatedResponse<T> {
   data: T[];
   nextCursor: string | null;
   hasMore: boolean;
+}
+
+export interface FundingPrepareResult {
+  instruction: string;
+  simulation: Record<string, string>;
+  params: FundParams;
 }

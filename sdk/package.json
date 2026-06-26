@@ -5,7 +5,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json && tsc -p tsconfig.umd.json",
+    "build:strict-consumer": "tsc -p tests/fixtures/strict-consumer/tsconfig.json",
     "test": "vitest run",
     "lint": "eslint --ext .ts src/"
   },
