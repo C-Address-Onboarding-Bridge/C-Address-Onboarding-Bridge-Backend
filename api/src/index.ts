@@ -1,8 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import pino from 'pino';
 import { config } from './config';
+import { logger } from './logger';
 import { fundingRouter } from './routes/funding';
 import { quoteRouter } from './routes/quote';
 import { statusRouter } from './routes/status';
@@ -11,6 +11,8 @@ import { cexRouter } from './routes/cex';
 import { moonpayWebhookRouter, transakWebhookRouter } from './routes/webhook';
 import { webhookAdminRouter } from './routes/webhookAdmin';
 import { apiKeysRouter } from './routes/apiKeys';
+import { transactionsRouter } from './routes/transactions';
+import { adminRouter } from './routes/admin';
 import { rbacAuth, seedLegacyKeys } from './middleware/rbacAuth';
 import { registerWebhookVerifier, moonpayVerifier, transakVerifier } from './middleware/webhookVerification';
 import { compressionMiddleware } from './middleware/compression';
@@ -20,7 +22,7 @@ import { versionCompatibility } from './middleware/versioning';
 import { rateLimitMiddleware, applyRateLimitHeaders } from './middleware/rateLimit';
 import { securityMiddleware, contentTypeEnforcement } from './middleware/security';
 
-export const logger = pino({ level: config.logLevel });
+export { logger } from './logger';
 
 export const circuitBreakers = new Map<string, CircuitBreaker>([
   ['soroban', new CircuitBreaker('soroban')],
@@ -103,6 +105,8 @@ app.use('/api/webhook/transak', transakWebhookRouter);
 // Admin endpoints
 app.use('/api/v1/webhooks', rbacAuth, webhookAdminRouter);
 app.use('/api/v1/keys', rbacAuth, apiKeysRouter);
+app.use('/api/v1/transactions', rbacAuth, transactionsRouter);
+app.use('/api/v1/admin', rbacAuth, adminRouter);
 
 app.use(errorHandler);
 
