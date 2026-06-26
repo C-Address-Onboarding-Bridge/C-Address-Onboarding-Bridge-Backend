@@ -82,6 +82,24 @@ export interface CexWithdrawalResult {
 export interface BridgeClientConfig {
   baseUrl: string;
   apiKey?: string;
+  /** Default request timeout in ms. Defaults to 10 000 ms. */
+  defaultTimeout?: number;
+  /** Timeout applied to fund-submission requests. Defaults to 30 000 ms. */
+  fundSubmissionTimeout?: number;
+}
+
+export interface RequestOptions {
+  /** Per-request timeout override in ms. */
+  timeout?: number;
+  /** AbortSignal for explicit cancellation (combined with internal timeout). */
+  signal?: AbortSignal;
+}
+
+export interface TimeoutMetrics {
+  totalRequests: number;
+  timedOutRequests: number;
+  averageResponseMs: number;
+  lastTimeoutAt?: string;
 }
 
 export interface PaginatedRequestParams {
