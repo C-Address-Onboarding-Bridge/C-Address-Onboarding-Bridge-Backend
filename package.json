@@ -11,5 +11,8 @@
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces"
+  },
+  "dependencies": {
+    "ioredis": "^5.11.1"
   }
 }

@@ -52,4 +52,12 @@ export const config = {
   rbac: {
     enabled: process.env.RBAC_ENABLED !== 'false',
   },
+  redis: {
+    url: process.env.REDIS_URL || '',
+    quoteTtlSeconds: parseInt(process.env.REDIS_QUOTE_TTL_SECONDS || '30', 10),
+    statusTtlSeconds: parseInt(process.env.REDIS_STATUS_TTL_SECONDS || '10', 10),
+  },
+  idempotency: {
+    required: process.env.IDEMPOTENCY_KEY_REQUIRED === 'true',
+  },
 };

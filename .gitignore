@@ -12,3 +12,4 @@ coverage/
 .idea/
 .vscode/
 test_snapshots/
+deployments/*.json

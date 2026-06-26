@@ -19,6 +19,8 @@ import { CircuitBreaker } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
 import { rateLimitMiddleware, applyRateLimitHeaders } from './middleware/rateLimit';
 import { securityMiddleware, contentTypeEnforcement } from './middleware/security';
+import { correlationMiddleware } from './middleware/correlation';
+import { getCacheMetrics, isRedisEnabled } from './services/cache';
 
 export const logger = pino({ level: config.logLevel });
 
@@ -50,6 +52,9 @@ app.use(versionCompatibility);
 app.use(rateLimitMiddleware);
 app.use(applyRateLimitHeaders);
 
+// Correlation IDs and per-request structured logging
+app.use(correlationMiddleware);
+
 // Webhook routes need raw body for HMAC verification
 app.use('/api/webhook', express.text({ type: '*/*' }));
 app.use('/api', express.json({ limit: '32kb' }));
@@ -64,7 +69,12 @@ app.get('/health', (_req, res) => {
   for (const [name, cb] of circuitBreakers) {
     circuits[name] = cb.getState();
   }
-  res.json({ status: 'ok', timestamp: Date.now(), circuits });
+  res.json({
+    status: 'ok',
+    timestamp: Date.now(),
+    circuits,
+    cache: { redis: isRedisEnabled(), metrics: getCacheMetrics() },
+  });
 });
 
 app.get('/api/v1/deprecations', (_req, res) => {
