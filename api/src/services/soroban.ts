@@ -92,7 +92,7 @@ export class SorobanService {
     return { footprint: 'pending', minResourceFee: '0' };
   }
 
-  getRpcMetrics() {
+  getRpcMetrics(): Array<{ url: string; healthy: boolean; consecutiveFailures: number; lastFailureAt: number | null; lastLatencyMs: number | null; totalRequests: number; totalFailures: number }> {
     return rpcPool.getMetrics();
   }
 }
