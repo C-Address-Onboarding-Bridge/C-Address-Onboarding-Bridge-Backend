@@ -4,3 +4,4 @@ export * as utils from './utils';
 export { PaginationHelper, paginateAll, collectAllPages } from './pagination';
 export { TimeoutError, OfflineError, QueueFullError } from './errors';
 export { BridgeEventEmitter } from './events';
+export { OfflineQueue, OfflineBridgeClient } from './offline';

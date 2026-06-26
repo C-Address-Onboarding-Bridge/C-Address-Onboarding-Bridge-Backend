@@ -176,3 +176,34 @@ export interface EventEmitterOptions {
   /** Interval between server health checks. Defaults to 10 000 ms. */
   healthCheckIntervalMs?: number;
 }
+
+// ── Offline Queue (Issue #58) ─────────────────────────────────────────────────
+
+export interface QueueEntry {
+  id: string;
+  method: string;
+  path: string;
+  body?: Record<string, unknown>;
+  params?: Record<string, string | undefined>;
+  timestamp: string;
+  retryCount: number;
+}
+
+export interface StorageAdapter {
+  get(key: string): string | null | Promise<string | null>;
+  set(key: string, value: string): void | Promise<void>;
+  remove(key: string): void | Promise<void>;
+}
+
+export interface OfflineQueueOptions {
+  /** Maximum queued entries before QueueFullError is thrown. Defaults to 50. */
+  maxSize?: number;
+  /** Pluggable persistence adapter (memory, localStorage, AsyncStorage, etc.). */
+  storageAdapter?: StorageAdapter;
+  /** Interval between health checks in ms. Defaults to 5 000 ms. */
+  healthCheckIntervalMs?: number;
+  /** Path used for server reachability health checks. Defaults to /api/v1/health. */
+  healthCheckPath?: string;
+  /** When true, failed requests are automatically added to the queue. Defaults to true. */
+  autoQueue?: boolean;
+}
