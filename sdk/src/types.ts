@@ -132,3 +132,47 @@ export interface AutoPaginateOptions {
 }
 
 export type PageFetcher<T> = (params: PaginatedRequestParams) => Promise<PaginatedResponse<T>>;
+
+// ── Events (Issue #57) ────────────────────────────────────────────────────────
+
+export type BridgeEventType =
+  | 'transaction:pending'
+  | 'transaction:success'
+  | 'transaction:failed'
+  | 'transaction:status:changed'
+  | 'online'
+  | 'offline'
+  | 'reconnecting'
+  | 'error'
+  | 'queue:drained';
+
+export interface BridgeEventDataMap {
+  'transaction:pending': { txHash: string; status: TransactionStatus };
+  'transaction:success': { txHash: string; status: TransactionStatus };
+  'transaction:failed': { txHash: string; status: TransactionStatus; error?: string };
+  'transaction:status:changed': { txHash: string; status: TransactionStatus; previousStatus: string };
+  'online': { at: string };
+  'offline': { at: string };
+  'reconnecting': { attempt: number; at: string };
+  'error': { message: string; error?: unknown };
+  'queue:drained': { processedCount: number; at: string };
+}
+
+export interface BridgeEvent<K extends BridgeEventType = BridgeEventType> {
+  type: K;
+  data: K extends keyof BridgeEventDataMap ? BridgeEventDataMap[K] : never;
+  timestamp: string;
+}
+
+export type EventHandler<K extends BridgeEventType = BridgeEventType> = (
+  event: BridgeEvent<K>
+) => void;
+
+export interface EventEmitterOptions {
+  /** Interval between transaction status polls. Defaults to 2 000 ms. */
+  pollIntervalMs?: number;
+  /** Number of past events to retain for late subscribers. Defaults to 100. */
+  historySize?: number;
+  /** Interval between server health checks. Defaults to 10 000 ms. */
+  healthCheckIntervalMs?: number;
+}
