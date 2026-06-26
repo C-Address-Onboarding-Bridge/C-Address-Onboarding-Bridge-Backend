@@ -1,8 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import pino from 'pino';
 import { config } from './config';
+import { logger } from './logger';
 import { fundingRouter } from './routes/funding';
 import { quoteRouter } from './routes/quote';
 import { statusRouter } from './routes/status';
@@ -24,7 +24,7 @@ import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
 
-export const logger = pino({ level: config.logLevel });
+export { logger } from './logger';
 
 export const circuitBreakers = new Map<string, CircuitBreaker>([
   ['soroban', new CircuitBreaker('soroban')],
@@ -110,6 +110,8 @@ app.use('/api/webhook/transak', transakWebhookRouter);
 
 app.use('/api/v1/webhooks', rbacAuth, webhookAdminRouter);
 app.use('/api/v1/keys', rbacAuth, apiKeysRouter);
+app.use('/api/v1/transactions', rbacAuth, transactionsRouter);
+app.use('/api/v1/admin', rbacAuth, adminRouter);
 
 app.use(errorHandler);
 
