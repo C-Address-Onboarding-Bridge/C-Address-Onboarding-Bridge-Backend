@@ -15,10 +15,19 @@ export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   host: process.env.HOST || '0.0.0.0',
   soroban: {
-    rpcUrl: process.env.SOROBAN_RPC_URL || 'https://soroban-rpc.testnet.stellar.org',
+    rpcUrls: (process.env.SOROBAN_RPC_URLS || process.env.SOROBAN_RPC_URL || 'https://soroban-rpc.testnet.stellar.org')
+      .split(',')
+      .map((u) => u.trim())
+      .filter(Boolean),
     networkPassphrase: process.env.SOROBAN_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
     bridgeContractId: process.env.BRIDGE_CONTRACT_ID || '',
     feeBps: parseInt(process.env.BRIDGE_FEE_BPS || '30', 10),
+    rpc: {
+      healthCheckIntervalMs: parseInt(process.env.RPC_HEALTH_CHECK_INTERVAL_MS || '30000', 10),
+      failureThreshold: parseInt(process.env.RPC_FAILURE_THRESHOLD || '3', 10),
+      recoveryIntervalMs: parseInt(process.env.RPC_RECOVERY_INTERVAL_MS || '60000', 10),
+      selectionStrategy: (process.env.RPC_SELECTION_STRATEGY || 'round-robin') as 'round-robin' | 'latency' | 'random',
+    },
   },
   moonpay: {
     apiKey: process.env.MOONPAY_API_KEY || '',
@@ -27,6 +36,7 @@ export const config = {
   transak: {
     apiKey: process.env.TRANSAK_API_KEY || '',
     environment: process.env.TRANSAK_ENVIRONMENT || 'STAGING',
+    webhookSecret: process.env.TRANSAK_WEBHOOK_SECRET || '',
   },
   apiKeys: (process.env.API_KEYS || '').split(',').filter(Boolean),
   logLevel: process.env.LOG_LEVEL || 'info',
@@ -34,5 +44,12 @@ export const config = {
     redisEnabled: process.env.REDIS_RATE_LIMIT === 'true',
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
     burstFactor: parseInt(process.env.RATE_LIMIT_BURST_FACTOR || '2', 10),
+  },
+  compression: {
+    threshold: parseInt(process.env.COMPRESSION_THRESHOLD_BYTES || '1024', 10),
+    level: parseInt(process.env.COMPRESSION_LEVEL || '6', 10),
+  },
+  rbac: {
+    enabled: process.env.RBAC_ENABLED !== 'false',
   },
 };

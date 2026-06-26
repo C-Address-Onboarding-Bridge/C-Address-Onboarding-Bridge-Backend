@@ -1,9 +1,9 @@
 import {
-  SorobanRpc,
   Transaction,
   xdr,
 } from '@stellar/stellar-sdk';
 import { config } from '../config';
+import { rpcPool } from './rpcPool';
 
 export interface SorobanTxResponse {
   status: 'pending' | 'success' | 'failed';
@@ -14,16 +14,12 @@ export interface SorobanTxResponse {
 const BASIS_POINTS_DENOM = 10000;
 
 export class SorobanService {
-  private rpcUrl: string;
   private networkPassphrase: string;
   private contractId: string;
-  private server: SorobanRpc.Server;
 
   constructor() {
-    this.rpcUrl = config.soroban.rpcUrl;
     this.networkPassphrase = config.soroban.networkPassphrase;
     this.contractId = config.soroban.bridgeContractId;
-    this.server = new SorobanRpc.Server(this.rpcUrl);
   }
 
   async getQuote(
@@ -56,7 +52,8 @@ export class SorobanService {
     const tx = new Transaction(envelope, this.networkPassphrase);
     const txHash = tx.hash().toString('hex');
 
-    const sendResponse = await this.server.sendTransaction(tx);
+    const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
+
     if (sendResponse.status === 'PENDING') {
       return { status: 'pending', hash: txHash };
     }
@@ -72,7 +69,7 @@ export class SorobanService {
 
   async getTransactionStatus(txHash: string): Promise<SorobanTxResponse> {
     try {
-      const tx = await this.server.getTransaction(txHash);
+      const tx = await rpcPool.execute((server) => server.getTransaction(txHash));
       if (tx.status === 'NOT_FOUND') {
         return { status: 'pending', hash: txHash };
       }
@@ -93,6 +90,10 @@ export class SorobanService {
       return { footprint: 'not_configured', minResourceFee: '0' };
     }
     return { footprint: 'pending', minResourceFee: '0' };
+  }
+
+  getRpcMetrics() {
+    return rpcPool.getMetrics();
   }
 }
 
