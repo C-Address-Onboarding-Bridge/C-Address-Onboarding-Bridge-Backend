@@ -24,7 +24,7 @@ const createLimiter = (max: number) =>
     },
   });
 
-const RATE_LIMITERS = {
+const RATE_LIMITERS: Record<string, ReturnType<typeof createLimiter>> = {
   low: createLimiter(TIER_LIMITS.low),
   standard: createLimiter(TIER_LIMITS.standard),
   high: createLimiter(TIER_LIMITS.high),

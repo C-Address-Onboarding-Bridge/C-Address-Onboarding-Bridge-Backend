@@ -18,7 +18,7 @@ export function idempotencyMiddleware(req: Request, res: Response, next: NextFun
   const key = req.headers['x-idempotency-key'] as string | undefined;
 
   if (!key) {
-    if (config.idempotency.required) {
+    if ((config as { idempotency?: { required?: boolean } }).idempotency?.required) {
       res.status(400).json({
         error: 'missing_idempotency_key',
         message: 'X-Idempotency-Key header is required',
