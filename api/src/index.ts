@@ -11,6 +11,7 @@ import { cexRouter } from './routes/cex';
 import { moonpayWebhookRouter, transakWebhookRouter } from './routes/webhook';
 import { webhookAdminRouter } from './routes/webhookAdmin';
 import { apiKeysRouter } from './routes/apiKeys';
+import { telemetryRouter } from './routes/telemetry';
 import { rbacAuth, seedLegacyKeys } from './middleware/rbacAuth';
 import { registerWebhookVerifier, moonpayVerifier, transakVerifier } from './middleware/webhookVerification';
 import { compressionMiddleware } from './middleware/compression';
@@ -81,6 +82,7 @@ app.get('/api/v1/deprecations', (_req, res) => {
 });
 
 app.use('/api/v1/quote', rbacAuth, quoteRouter);
+app.use('/api', telemetryRouter);
 app.use('/api/v2/quote', rbacAuth, quoteRouter);
 app.use('/api/v1/fund', rbacAuth, fundingRouter);
 app.use('/api/v2/fund', rbacAuth, fundingRouter);
