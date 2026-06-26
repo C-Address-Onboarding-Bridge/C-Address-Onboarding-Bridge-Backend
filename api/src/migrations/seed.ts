@@ -57,6 +57,4 @@ async function runSeed() {
 }
 
 // Only run when executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runSeed().catch(console.error);
-}
+runSeed().catch(console.error);

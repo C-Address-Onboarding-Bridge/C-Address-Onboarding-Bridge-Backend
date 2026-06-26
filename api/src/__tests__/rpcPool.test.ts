@@ -51,7 +51,7 @@ describe('RpcPool', () => {
     const pool = new RpcPool();
     let callCount = 0;
 
-    const fn = async (_server: SorobanRpc.Server) => {
+    const fn = async (_server: unknown) => {
       callCount++;
       // fail the first 2 calls (threshold = 2)
       if (callCount <= 2) throw new Error('fail');

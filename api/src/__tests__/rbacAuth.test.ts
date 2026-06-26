@@ -169,7 +169,7 @@ describe('requireScopes', () => {
     const { rawKey } = createApiKey({ name: 'readonly', createdBy: 'test', scopes: ['quote:read'] });
     const req = mockReq({ headers: { 'x-api-key': rawKey } });
     const { res } = mockRes();
-    rbacAuth(req, res, vi.fn());
+    rbacAuth(req, res, vi.fn() as unknown as Parameters<typeof rbacAuth>[2]);
 
     const next = vi.fn();
     const { res: res2, status } = mockRes();

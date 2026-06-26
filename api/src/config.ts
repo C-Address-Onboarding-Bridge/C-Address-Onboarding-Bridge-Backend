@@ -44,6 +44,8 @@ export const config = {
     serviceName: process.env.LOG_SERVICE_NAME || 'bridge-api',
     version: process.env.APP_VERSION || '0.1.0',
     environment: process.env.NODE_ENV || 'development',
+    sensitiveFields: (process.env.LOG_SENSITIVE_FIELDS || 'apiKey,api_key,secret,secretKey,password,token,walletAddress,email,privateKey,mnemonic,authorization,x-api-key').split(','),
+    bodyTruncateLength: parseInt(process.env.LOG_BODY_TRUNCATE_LENGTH || '200', 10),
   },
   rateLimit: {
     redisEnabled: process.env.REDIS_RATE_LIMIT === 'true',
@@ -63,6 +65,19 @@ export const config = {
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
     enabled: process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== '',
+    statusTtlSeconds: parseInt(process.env.REDIS_STATUS_TTL_SECONDS || '30', 10),
+    quoteTtlSeconds: parseInt(process.env.REDIS_QUOTE_TTL_SECONDS || '60', 10),
+  },
+  database: {
+    url: process.env.DATABASE_URL || '',
+    poolMax: parseInt(process.env.DB_POOL_MAX || '10', 10),
+    idleTimeoutMs: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
+    connectionTimeoutMs: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '5000', 10),
+    ssl: process.env.DB_SSL === 'true',
+  },
+  websocket: {
+    authRequired: process.env.WS_AUTH_REQUIRED !== 'false',
+    maxSubscriptionsPerConnection: parseInt(process.env.WS_MAX_SUBSCRIPTIONS || '10', 10),
   },
   jobs: {
     enabled: process.env.JOBS_ENABLED !== 'false' && (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),
@@ -76,9 +91,5 @@ export const config = {
       metrics: parseInt(process.env.JOB_CONCURRENCY_METRICS || '1', 10),
       cleanup: parseInt(process.env.JOB_CONCURRENCY_CLEANUP || '1', 10),
     },
-  },
-  logging: {
-    sensitiveFields: (process.env.LOG_SENSITIVE_FIELDS || 'apiKey,api_key,secret,secretKey,password,token,walletAddress,email,privateKey,mnemonic,authorization,x-api-key').split(','),
-    bodyTruncateLength: parseInt(process.env.LOG_BODY_TRUNCATE_LENGTH || '200', 10),
   },
 };

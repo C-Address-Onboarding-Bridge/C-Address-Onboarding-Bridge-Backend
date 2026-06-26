@@ -12,6 +12,10 @@ import { moonpayWebhookRouter, transakWebhookRouter } from './routes/webhook';
 import { webhookAdminRouter } from './routes/webhookAdmin';
 import { apiKeysRouter } from './routes/apiKeys';
 import { docsRouter } from './routes/docs';
+import { metricsRouter } from './routes/metrics';
+import { telemetryRouter } from './routes/telemetry';
+import { transactionsRouter } from './routes/transactions';
+import { adminRouter } from './routes/admin';
 import { rbacAuth, seedLegacyKeys } from './middleware/rbacAuth';
 import { registerWebhookVerifier, moonpayVerifier, transakVerifier } from './middleware/webhookVerification';
 import { compressionMiddleware } from './middleware/compression';
@@ -23,6 +27,10 @@ import { securityMiddleware, contentTypeEnforcement } from './middleware/securit
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
+import { isRedisEnabled, getCacheMetrics } from './services/cache';
+import { getHealthStatus } from './services/health';
+import { updateCircuitBreakerMetrics, activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
+import { createWebSocketServer, handleUpgrade } from './services/websocket';
 
 export { logger } from './logger';
 
@@ -52,22 +60,57 @@ app.use(versionCompatibility);
 app.use(rateLimitMiddleware);
 app.use(applyRateLimitHeaders);
 
+// Prometheus instrumentation middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  activeRequestsGauge.inc();
+  res.on('finish', () => {
+    activeRequestsGauge.dec();
+    const route = req.route?.path ?? req.path;
+    const labels = { method: req.method, path: route, status: String(res.statusCode) };
+    httpRequestCounter.inc(labels);
+    httpRequestDuration.observe(labels, (Date.now() - start) / 1000);
+    updateCircuitBreakerMetrics(circuitBreakers);
+  });
+  next();
+});
+
 // Health check registered BEFORE requestTracker so Kubernetes preStop hooks always reach it
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
   if (gracefulShutdown.shuttingDown) {
-    res.status(503).json({ status: 'shutting_down', timestamp: Date.now(), circuits: {} });
+    res.status(503).json({ status: 'shutting_down', timestamp: Date.now() });
     return;
   }
+
   const circuits: Record<string, string> = {};
   for (const [name, cb] of circuitBreakers) {
     circuits[name] = cb.getState();
   }
-  res.json({
-    status: 'ok',
-    timestamp: Date.now(),
+
+  const health = await getHealthStatus();
+  const statusCode = health.status === 'unhealthy' ? 503 : health.status === 'degraded' ? 207 : 200;
+
+  res.status(statusCode).json({
+    ...health,
     circuits,
     cache: { redis: isRedisEnabled(), metrics: getCacheMetrics() },
   });
+});
+
+// Kubernetes readiness probe — fails if any critical dependency is down
+app.get('/health/ready', async (_req, res) => {
+  if (gracefulShutdown.shuttingDown) {
+    res.status(503).json({ ready: false, reason: 'shutting_down' });
+    return;
+  }
+  const health = await getHealthStatus();
+  const ready = health.status !== 'unhealthy';
+  res.status(ready ? 200 : 503).json({ ready, status: health.status });
+});
+
+// Kubernetes liveness probe — always 200 unless process is broken
+app.get('/health/live', (_req, res) => {
+  res.json({ alive: true, timestamp: Date.now() });
 });
 
 // Reject new requests during shutdown and track active request count
@@ -119,11 +162,26 @@ app.use('/api/v1/keys', rbacAuth, apiKeysRouter);
 app.use('/api/v1/transactions', rbacAuth, transactionsRouter);
 app.use('/api/v1/admin', rbacAuth, adminRouter);
 
+// Prometheus metrics — internal only, protected by RBAC
+app.use('/metrics', rbacAuth, metricsRouter);
+
 app.use(errorHandler);
 
 if (process.env.NODE_ENV !== 'test') {
+  const wss = createWebSocketServer();
+
   const server = app.listen(config.port, config.host, () => {
     logger.info({ port: config.port, rpcUrls: config.soroban.rpcUrls.length }, 'bridge api server started');
+  });
+
+  // WebSocket upgrade at /ws
+  server.on('upgrade', (req, socket, head) => {
+    const { pathname } = new URL(req.url ?? '/', `http://${req.headers.host}`);
+    if (pathname === '/ws') {
+      handleUpgrade(wss, req, socket as import('net').Socket, head);
+    } else {
+      socket.destroy();
+    }
   });
 
   gracefulShutdown.attach(server, logger);
