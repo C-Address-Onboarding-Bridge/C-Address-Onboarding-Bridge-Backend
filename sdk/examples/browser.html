@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Bridge SDK Browser Example</title>
+  </head>
+  <body>
+    <script src="../dist/bridge.umd.js"></script>
+    <script>
+      const client = new window.BridgeSDK.BridgeClient({ baseUrl: 'https://example.com' });
+      client.getQuote({
+        sourceAsset: 'XLM',
+        amount: '1000',
+        targetAddress: 'CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW',
+      }).catch((error) => console.error(error));
+    </script>
+  </body>
+</html>
