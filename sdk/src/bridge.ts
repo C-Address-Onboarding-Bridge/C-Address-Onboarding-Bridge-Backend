@@ -19,44 +19,41 @@ import {
 import { SimpleCache } from './cache';
 import { TelemetryClient } from './telemetry';
 
-export interface BridgeClientConfig {
-  baseUrl: string;
-  apiKey?: string;
-  telemetry?: boolean;
-  cache?: {
-    quoteTtlMs?: number;
-    statusTtlMs?: number;
-    healthTtlMs?: number;
-    staleWhileRevalidate?: boolean;
-    maxEntries?: number;
-    debug?: boolean;
-  };
-}
-
 const REQUEST_TIMEOUT_MS = 30_000;
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 export class BridgeClient {
   private baseUrl: string;
   private apiKey?: string;
-  private readonly cache: SimpleCache;
-  private readonly telemetry: TelemetryClient;
-  private readonly config: BridgeClientConfig;
+  private retryConfig: Required<NonNullable<BridgeClientConfig['retry']>>;
 
   constructor(config: BridgeClientConfig) {
     this.config = config;
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
     this.apiKey = config.apiKey;
-    this.cache = new SimpleCache({
-      maxEntries: config.cache?.maxEntries,
-      debug: config.cache?.debug,
-    });
-    const runtimeProcess = typeof process !== 'undefined' ? process : undefined;
-    this.telemetry = new TelemetryClient({
-      enabled: config.telemetry ?? (runtimeProcess?.env?.SDK_TELEMETRY_ENABLED !== 'false'),
-      intervalMs: 60_000,
-      endpoint: `${this.baseUrl}/api/telemetry`,
-    });
+    this.retryConfig = {
+      maxRetries: config.retry?.maxRetries ?? 3,
+      baseDelayMs: config.retry?.baseDelayMs ?? 100,
+      maxDelayMs: config.retry?.maxDelayMs ?? 5000,
+      retryBudgetMs: config.retry?.retryBudgetMs ?? 10_000,
+      jitterMs: config.retry?.jitterMs ?? 50,
+      logger: config.retry?.logger ?? console,
+    };
+  }
+
+  private shouldRetry(status?: number, error?: unknown): boolean {
+    if (error instanceof DOMException && error.name === 'AbortError') return false;
+    if (status !== undefined) {
+      return status === 408 || status === 429 || status >= 500;
+    }
+    return true;
+  }
+
+  private computeDelay(attempt: number): number {
+    const exponential = this.retryConfig.baseDelayMs * 3 ** attempt;
+    const capped = Math.min(exponential, this.retryConfig.maxDelayMs);
+    const jitter = Math.floor((Math.random() * this.retryConfig.jitterMs * 2) - this.retryConfig.jitterMs);
+    return Math.max(0, capped + jitter);
   }
 
   private async request<T>(
@@ -79,29 +76,51 @@ export class BridgeClient {
     };
     if (this.apiKey) headers['X-API-Key'] = this.apiKey;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let attempt = 0;
+    const startedAt = Date.now();
 
-    try {
-      const res = await fetch(url.toString(), {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
+    while (true) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({} as Record<string, unknown>));
-        const errorMessage = typeof errBody === 'object' && errBody !== null && 'message' in errBody && typeof errBody.message === 'string'
-          ? errBody.message
-          : `request failed: ${res.statusText}`;
-        throw new Error(errorMessage);
+      try {
+        const res = await fetch(url.toString(), {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({} as Record<string, string>));
+          const error = new Error((errBody as { message?: string }).message || `request failed: ${res.statusText}`);
+          if (this.shouldRetry(res.status) && attempt < this.retryConfig.maxRetries && Date.now() - startedAt < this.retryConfig.retryBudgetMs) {
+            attempt += 1;
+            this.retryConfig.logger.debug?.(`retrying ${method} ${path} attempt ${attempt} after ${res.status}`);
+            await this.delay(this.computeDelay(attempt - 1));
+            continue;
+          }
+          throw error;
+        }
+
+        return res.json() as Promise<T>;
+      } catch (error) {
+        if (this.shouldRetry(undefined, error) && attempt < this.retryConfig.maxRetries && Date.now() - startedAt < this.retryConfig.retryBudgetMs) {
+          attempt += 1;
+          this.retryConfig.logger.debug?.(`retrying ${method} ${path} attempt ${attempt} after error`);
+          await this.delay(this.computeDelay(attempt - 1));
+          continue;
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
       }
-
-      return res.json() as Promise<T>;
-    } finally {
-      clearTimeout(timeout);
     }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
   }
 
   async requestPaginated<T>(path: string, params?: PaginatedRequestParams): Promise<PaginatedResponse<T>> {

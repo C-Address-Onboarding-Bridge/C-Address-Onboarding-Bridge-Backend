@@ -40,6 +40,11 @@ export const config = {
   },
   apiKeys: (process.env.API_KEYS || '').split(',').filter(Boolean),
   logLevel: process.env.LOG_LEVEL || 'info',
+  logging: {
+    serviceName: process.env.LOG_SERVICE_NAME || 'bridge-api',
+    version: process.env.APP_VERSION || '0.1.0',
+    environment: process.env.NODE_ENV || 'development',
+  },
   rateLimit: {
     redisEnabled: process.env.REDIS_RATE_LIMIT === 'true',
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
@@ -51,5 +56,29 @@ export const config = {
   },
   rbac: {
     enabled: process.env.RBAC_ENABLED !== 'false',
+  },
+  shutdown: {
+    timeoutMs: parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS || '30000', 10),
+  },
+  redis: {
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    enabled: process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== '',
+  },
+  jobs: {
+    enabled: process.env.JOBS_ENABLED !== 'false' && (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),
+    txPollIntervalMs: parseInt(process.env.JOB_TX_POLL_INTERVAL_MS || '60000', 10),
+    metricsIntervalMs: parseInt(process.env.JOB_METRICS_INTERVAL_MS || '3600000', 10),
+    cleanupIntervalMs: parseInt(process.env.JOB_CLEANUP_INTERVAL_MS || '86400000', 10),
+    concurrency: {
+      txStatus: parseInt(process.env.JOB_CONCURRENCY_TX_STATUS || '5', 10),
+      webhookRetry: parseInt(process.env.JOB_CONCURRENCY_WEBHOOK_RETRY || '3', 10),
+      cacheWarmup: parseInt(process.env.JOB_CONCURRENCY_CACHE_WARMUP || '2', 10),
+      metrics: parseInt(process.env.JOB_CONCURRENCY_METRICS || '1', 10),
+      cleanup: parseInt(process.env.JOB_CONCURRENCY_CLEANUP || '1', 10),
+    },
+  },
+  logging: {
+    sensitiveFields: (process.env.LOG_SENSITIVE_FIELDS || 'apiKey,api_key,secret,secretKey,password,token,walletAddress,email,privateKey,mnemonic,authorization,x-api-key').split(','),
+    bodyTruncateLength: parseInt(process.env.LOG_BODY_TRUNCATE_LENGTH || '200', 10),
   },
 };
