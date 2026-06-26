@@ -82,6 +82,14 @@ export interface CexWithdrawalResult {
 export interface BridgeClientConfig {
   baseUrl: string;
   apiKey?: string;
+  retry?: {
+    maxRetries?: number;
+    baseDelayMs?: number;
+    maxDelayMs?: number;
+    retryBudgetMs?: number;
+    jitterMs?: number;
+    logger?: Pick<Console, 'debug'>;
+  };
 }
 
 export interface PaginatedRequestParams {
