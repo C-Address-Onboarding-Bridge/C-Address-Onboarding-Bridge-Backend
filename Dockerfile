@@ -1,11 +1,11 @@
-FROM node:20-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY api/ api/
 COPY sdk/ sdk/
 RUN npm ci && npm run build --workspaces
 
-FROM node:20-alpine
+FROM node:26-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY api/package.json api/
