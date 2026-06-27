@@ -88,9 +88,17 @@ export interface CexWithdrawalResult {
   fee?: string;
 }
 
+export interface RequestSigningConfig {
+  /** Enable HMAC-SHA256 request signing. Unsigned requests still work when false. */
+  enabled: boolean;
+  /** Clock skew tolerance in milliseconds (default: 30 000). */
+  clockSkewToleranceMs?: number;
+}
+
 export interface BridgeClientConfig {
   baseUrl: string;
   apiKey?: string;
+  signing?: RequestSigningConfig;
   retry?: {
     maxRetries?: number;
     baseDelayMs?: number;
