@@ -10,9 +10,18 @@
   "scripts": {
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
-    "lint": "npm run lint --workspaces"
+    "lint": "npm run lint --workspaces",
+    "prepare": "husky"
   },
   "dependencies": {
     "ioredis": "^5.11.1"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.10"
+  },
+  "lint-staged": {
+    "api/src/**/*.ts": "eslint --fix",
+    "sdk/src/**/*.ts": "eslint --fix"
   }
 }

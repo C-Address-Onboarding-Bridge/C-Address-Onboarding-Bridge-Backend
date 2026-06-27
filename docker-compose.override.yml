@@ -1,0 +1,23 @@
+# Dev overrides: hot reload, source mounts, debug ports.
+# Applied automatically by Docker Compose when both files are present.
+services:
+  api:
+    build:
+      target: build                  # stop at build stage — no prod image needed
+    command: npm run dev -w api      # tsx watch for hot reload
+    ports:
+      - "${PORT:-3001}:3001"
+      - "9229:9229"                  # Node.js inspector
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: debug
+    volumes:
+      - .:/app
+      - /app/node_modules            # keep container's node_modules
+      - /app/api/node_modules
+      - /app/sdk/node_modules
+
+  # Expose Soroban friendbot locally for manual funding
+  soroban-quickstart:
+    ports:
+      - "8000:8000"

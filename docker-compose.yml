@@ -1,0 +1,78 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-3001}:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgres://bridge:bridge@postgres:5432/bridge
+      REDIS_URL: redis://redis:6379
+      SOROBAN_RPC_URL: ${SOROBAN_RPC_URL:-http://soroban-quickstart:8000/soroban/rpc}
+      SOROBAN_NETWORK_PASSPHRASE: ${SOROBAN_NETWORK_PASSPHRASE:-Standalone Network ; February 2017}
+      BRIDGE_CONTRACT_ID: ${BRIDGE_CONTRACT_ID}
+      BRIDGE_FEE_BPS: ${BRIDGE_FEE_BPS:-30}
+      API_KEYS: ${API_KEYS:-dev-api-key}
+      MOONPAY_API_KEY: ${MOONPAY_API_KEY}
+      MOONPAY_SECRET_KEY: ${MOONPAY_SECRET_KEY}
+      TRANSAK_API_KEY: ${TRANSAK_API_KEY}
+      TRANSAK_ENVIRONMENT: ${TRANSAK_ENVIRONMENT:-STAGING}
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:-dev-signing-secret-change-in-prod}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: bridge
+      POSTGRES_PASSWORD: bridge
+      POSTGRES_DB: bridge
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bridge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  soroban-quickstart:
+    image: stellar/quickstart:latest
+    ports:
+      - "8000:8000"
+    environment:
+      NETWORK: local
+    command: --local --enable-soroban-rpc
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/friendbot || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
