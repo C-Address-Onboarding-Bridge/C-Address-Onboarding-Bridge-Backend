@@ -1,0 +1,46 @@
+name: Testnet Integration Tests
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # Daily at 6am UTC
+  workflow_dispatch:
+    inputs:
+      testnet_api_url:
+        description: 'Override TESTNET_API_URL'
+        required: false
+
+jobs:
+  testnet-integration:
+    name: Soroban Testnet Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TESTNET_API_URL: ${{ inputs.testnet_api_url || secrets.TESTNET_API_URL }}
+      TESTNET_API_KEY: ${{ secrets.TESTNET_API_KEY }}
+      TESTNET_TARGET_C_ADDRESS: ${{ secrets.TESTNET_TARGET_C_ADDRESS }}
+      TESTNET_SOURCE_G_ADDRESS: ${{ secrets.TESTNET_SOURCE_G_ADDRESS }}
+      TESTNET_TOKEN_ADDRESS: ${{ secrets.TESTNET_TOKEN_ADDRESS }}
+      TESTNET_KNOWN_TX_HASH: ${{ secrets.TESTNET_KNOWN_TX_HASH }}
+      # Slow down requests to avoid testnet rate limits
+      TESTNET_RATE_LIMIT_DELAY_MS: '750'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run testnet integration tests
+        run: npm run test:integration --workspace=sdk
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testnet-integration-results
+          path: sdk/test-results/
+          if-no-files-found: ignore
