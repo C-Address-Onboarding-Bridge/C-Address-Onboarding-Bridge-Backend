@@ -20,11 +20,37 @@ import {
 } from './types';
 import { SimpleCache } from './cache';
 import { TelemetryClient } from './telemetry';
+import { parseHttpError, NetworkError, TimeoutError, BridgeError } from './errors';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
 export type { BridgeClientConfig } from './types';
 import type { BridgeClientConfig } from './types';
+
+// ─── HMAC-SHA256 signing helpers ───────────────────────────────────────────────
+
+async function hmacSha256Hex(key: string, data: string): Promise<string> {
+  const enc = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(data));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function generateNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ─── BridgeClient ─────────────────────────────────────────────────────────────
 
 export class BridgeClient {
   private readonly config: BridgeClientConfig;
@@ -55,11 +81,11 @@ export class BridgeClient {
     };
   }
 
-  private shouldRetry(status?: number, error?: unknown): boolean {
-    if (error instanceof DOMException && error.name === 'AbortError') return false;
-    if (status !== undefined) {
-      return status === 408 || status === 429 || status >= 500;
-    }
+  private shouldRetry(err: unknown): boolean {
+    if (err instanceof DOMException && err.name === 'AbortError') return false;
+    if (err instanceof Error && err.name === 'AbortError') return false;
+    if (err instanceof BridgeError) return err.retryable;
+    // Non-bridge errors (network-level) are retryable
     return true;
   }
 
@@ -68,6 +94,21 @@ export class BridgeClient {
     const capped = Math.min(exponential, this.retryConfig.maxDelayMs);
     const jitter = Math.floor((Math.random() * this.retryConfig.jitterMs * 2) - this.retryConfig.jitterMs);
     return Math.max(0, capped + jitter);
+  }
+
+  private async buildSigningHeaders(bodyStr: string): Promise<Record<string, string>> {
+    if (!this.config.signing?.enabled || !this.apiKey) return {};
+
+    const timestamp = String(Date.now());
+    const nonce = generateNonce();
+    const payload = `${bodyStr}.${timestamp}.${nonce}`;
+    const signature = await hmacSha256Hex(this.apiKey, payload);
+
+    return {
+      'X-Timestamp': timestamp,
+      'X-Nonce': nonce,
+      'X-Signature': `sha256=${signature}`,
+    };
   }
 
   protected async request<T>(
@@ -89,7 +130,13 @@ export class BridgeClient {
       }
     }
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const bodyStr = body ? JSON.stringify(body) : '';
+    const signingHeaders = await this.buildSigningHeaders(bodyStr);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...signingHeaders,
+    };
     if (this.apiKey) headers['X-API-Key'] = this.apiKey;
 
     let attempt = 0;
@@ -97,31 +144,46 @@ export class BridgeClient {
 
     while (true) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const abortTimeout = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
         const res = await fetch(url.toString(), {
           method,
           headers,
-          body: body ? JSON.stringify(body) : undefined,
+          body: bodyStr || undefined,
           signal: controller.signal,
         });
 
         if (!res.ok) {
-          const errBody = await res.json().catch(() => ({} as Record<string, string>));
-          const error = new Error((errBody as { message?: string }).message || `request failed: ${res.statusText}`);
-          if (this.shouldRetry(res.status) && attempt < this.retryConfig.maxRetries && Date.now() - startedAt < this.retryConfig.retryBudgetMs) {
+          const errBody = await res.json().catch(() => ({}));
+          const bridgeErr = parseHttpError(res.status, errBody as { message?: string; code?: string; fields?: Record<string, string>; retryAfter?: number });
+          if (bridgeErr.retryable && attempt < this.retryConfig.maxRetries && Date.now() - startedAt < this.retryConfig.retryBudgetMs) {
             attempt += 1;
             this.retryConfig.logger.debug?.(`retrying ${method} ${path} attempt ${attempt} after ${res.status}`);
             await this.delay(this.computeDelay(attempt - 1));
             continue;
           }
-          throw error;
+          throw bridgeErr;
         }
 
         return res.json() as Promise<T>;
       } catch (error) {
-        if (this.shouldRetry(undefined, error) && attempt < this.retryConfig.maxRetries && Date.now() - startedAt < this.retryConfig.retryBudgetMs) {
+        // Re-wrap abort as TimeoutError
+        if ((error instanceof DOMException || error instanceof Error) && error.name === 'AbortError') {
+          throw new TimeoutError(`${method} ${path}`, timeoutMs);
+        }
+        // Re-wrap network failures
+        if (error instanceof TypeError && !(error instanceof Error && 'statusCode' in error)) {
+          const netErr = new NetworkError(error.message, { cause: error });
+          if (this.shouldRetry(netErr) && attempt < this.retryConfig.maxRetries && Date.now() - startedAt < this.retryConfig.retryBudgetMs) {
+            attempt += 1;
+            this.retryConfig.logger.debug?.(`retrying ${method} ${path} attempt ${attempt} after network error`);
+            await this.delay(this.computeDelay(attempt - 1));
+            continue;
+          }
+          throw netErr;
+        }
+        if (this.shouldRetry(error) && attempt < this.retryConfig.maxRetries && Date.now() - startedAt < this.retryConfig.retryBudgetMs) {
           attempt += 1;
           this.retryConfig.logger.debug?.(`retrying ${method} ${path} attempt ${attempt} after error`);
           await this.delay(this.computeDelay(attempt - 1));
@@ -129,7 +191,7 @@ export class BridgeClient {
         }
         throw error;
       } finally {
-        clearTimeout(timeout);
+        clearTimeout(abortTimeout);
       }
     }
   }

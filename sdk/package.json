@@ -50,6 +50,7 @@
     "bundle:analyze": "node scripts/build-bundle.mjs --analyze",
     "bundle:check": "npm run build:bundle && node scripts/check-bundle-size.mjs",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "lint": "eslint --ext .ts src/"
   },
   "devDependencies": {
@@ -57,6 +58,7 @@
     "@typescript-eslint/parser": "^8.62.0",
     "esbuild": "^0.21.5",
     "eslint": "^8.56.0",
+    "fast-check": "^4.8.0",
     "typescript": "^5.3.3",
     "vitest": "^4.1.9"
   }
