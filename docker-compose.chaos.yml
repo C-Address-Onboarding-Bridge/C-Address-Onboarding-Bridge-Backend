@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  toxiproxy:
+    image: shopify/toxiproxy:2.5.0
+    ports:
+      - "8474:8474"
+      - "8001:8001"
+      - "8002:8002"
+    command: -host=0.0.0.0
