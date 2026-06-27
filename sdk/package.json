@@ -35,6 +35,11 @@
       "import": "./dist/esm/pagination.js",
       "require": "./dist/pagination.js",
       "types": "./dist/pagination.d.ts"
+    },
+    "./testing": {
+      "import": "./dist/esm/testing/index.js",
+      "require": "./dist/testing/index.js",
+      "types": "./dist/testing/index.d.ts"
     }
   },
   "sideEffects": false,
