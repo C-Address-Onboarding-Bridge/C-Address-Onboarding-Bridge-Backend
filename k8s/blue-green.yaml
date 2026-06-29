@@ -1,0 +1,137 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: onboarding-blue
+  namespace: onboarding
+  labels:
+    app: onboarding
+    environment: blue
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: onboarding
+      environment: blue
+  template:
+    metadata:
+      labels:
+        app: onboarding
+        environment: blue
+    spec:
+      containers:
+      - name: onboarding
+        image: onboarding:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: ENVIRONMENT
+          value: "blue"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: onboarding-green
+  namespace: onboarding
+  labels:
+    app: onboarding
+    environment: green
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: onboarding
+      environment: green
+  template:
+    metadata:
+      labels:
+        app: onboarding
+        environment: green
+    spec:
+      containers:
+      - name: onboarding
+        image: onboarding:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: ENVIRONMENT
+          value: "green"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: onboarding-service
+  namespace: onboarding
+  labels:
+    app: onboarding
+spec:
+  selector:
+    app: onboarding
+    environment: blue  # Updated during deployment
+  ports:
+  - port: 80
+    targetPort: 3000
+  type: LoadBalancer
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: onboarding-ingress
+  namespace: onboarding
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+spec:
+  rules:
+  - host: onboarding.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: onboarding-service
+            port:
+              number: 80

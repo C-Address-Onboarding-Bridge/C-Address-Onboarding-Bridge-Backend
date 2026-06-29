@@ -7,12 +7,19 @@
     "api",
     "sdk"
   ],
-  "scripts": {
-    "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces",
-    "lint": "npm run lint --workspaces",
-    "prepare": "husky"
-  },
+ "scripts": {
+  "build": "npm run build --workspaces",
+  "test": "npm run test --workspaces",
+  "lint": "npm run lint --workspaces",
+  "prepare": "husky",
+  "deploy:blue-green": "./scripts/deploy-blue-green.sh",
+  "deploy:ecs": "./scripts/deploy-ecs-blue-green.sh",
+  "test:smoke": "node scripts/smoke-test.js",
+  "test:smoke:blue": "ENVIRONMENT=blue BASE_URL=http://localhost:3000 npm run test:smoke",
+  "test:smoke:green": "ENVIRONMENT=green BASE_URL=http://localhost:3001 npm run test:smoke",
+  "rollback": "./scripts/rollback.sh",
+  "monitor": "./scripts/monitor.sh"
+},
   "dependencies": {
     "ioredis": "^5.11.1"
   },

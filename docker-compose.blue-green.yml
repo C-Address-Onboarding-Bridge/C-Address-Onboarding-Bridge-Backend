@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  blue:
+    build:
+      context: .
+      args:
+        ENVIRONMENT: blue
+    image: onboarding:blue
+    container_name: onboarding-blue
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - ENVIRONMENT=blue
+    volumes:
+      - ./api:/app/api
+      - ./sdk:/app/sdk
+    networks:
+      - onboarding
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  green:
+    build:
+      context: .
+      args:
+        ENVIRONMENT: green
+    image: onboarding:green
+    container_name: onboarding-green
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=production
+      - ENVIRONMENT=green
+    volumes:
+      - ./api:/app/api
+      - ./sdk:/app/sdk
+    networks:
+      - onboarding
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  nginx:
+    image: nginx:alpine
+    container_name: onboarding-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - blue
+      - green
+    networks:
+      - onboarding
+
+networks:
+  onboarding:
+    driver: bridge
