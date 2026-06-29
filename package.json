@@ -11,7 +11,8 @@
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
-    "prepare": "husky"
+    "prepare": "husky",
+    "deploy:blue-green": "bash ./scripts/blue-green-deploy.sh"
   },
   "dependencies": {
     "ioredis": "^5.11.1"

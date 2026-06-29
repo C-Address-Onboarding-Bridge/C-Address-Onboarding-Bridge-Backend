@@ -525,6 +525,20 @@ export PORT=3001
 npm start -w api
 ```
 
+### Blue-Green Deployment
+
+```bash
+export BLUE_URL=https://blue.example.com
+export GREEN_URL=https://green.example.com
+export DEPLOY_GREEN_COMMAND='bash ./scripts/deploy.sh --network testnet'
+export SWITCH_TRAFFIC_COMMAND='echo "switch traffic to {{color}}"'
+export POST_SWITCH_CHECK_COMMAND='bash ./scripts/smoke-test.sh'
+
+npm run deploy:blue-green
+```
+
+The blue-green flow deploys to the inactive environment, runs smoke tests, switches traffic, keeps the previous environment warm for rollback, drains old connections, and records the active color for the next release.
+
 ---
 
 ## Environment Variables
