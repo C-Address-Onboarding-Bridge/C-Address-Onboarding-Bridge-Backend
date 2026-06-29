@@ -101,6 +101,10 @@ pub enum DataKey {
     TierThreshold(u32),
     TierDiscount(u32),
     TierCount,
+    // #20: analytics counters
+    TotalVolume,
+    UniqueFunder(Address),
+    UniqueFunderCount,
 }
 
 #[contracttype]
@@ -145,6 +149,16 @@ pub struct Proposal {
     pub approval_count: u32,
     pub executed: bool,
     pub expiry: u32,
+}
+
+/// #20: Batch analytics view returned by `get_stats`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stats {
+    pub total_volume: i128,
+    pub total_fees: i128,
+    pub funding_count: u32,
+    pub unique_funder_count: u64,
 }
 
 #[contract]
@@ -248,6 +262,8 @@ impl OnboardingBridge {
         assert!(min_amount > 0, "min_amount must be > 0");
         assert!(max_amount >= min_amount, "max_amount must be >= min_amount");
 
+        Self::validate_admins(&env, &admins);
+
         env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage()
             .instance()
@@ -277,6 +293,9 @@ impl OnboardingBridge {
         env.storage()
             .instance()
             .set(&DataKey::MaxAmount, &max_amount);
+        // #20: analytics counters
+        env.storage().instance().set(&DataKey::TotalVolume, &0i128);
+        env.storage().instance().set(&DataKey::UniqueFunderCount, &0u64);
 
         env.events().publish(
             (Symbol::new(&env, "initialize"),),
@@ -375,16 +394,6 @@ impl OnboardingBridge {
     }
 
     /// Returns the total unclaimed fees accumulated in the contract (stroops).
-    ///
-    /// # Returns
-    ///
-    /// Running fee balance as `i128`, or `0` if none have been collected.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let fees = contract.accumulated_fees(env);
-    /// ```
     pub fn accumulated_fees(env: Env) -> i128 {
         Self::extend_ttl(&env);
         env.storage()
@@ -412,6 +421,16 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::Threshold)
             .expect("not initialized")
+    }
+
+    /// #20: Batch analytics view — returns all counters in one call.
+    pub fn get_stats(env: Env) -> Stats {
+        Stats {
+            total_volume: env.storage().instance().get(&DataKey::TotalVolume).unwrap_or(0),
+            total_fees: env.storage().instance().get(&DataKey::AccumulatedFees).unwrap_or(0),
+            funding_count: env.storage().instance().get(&DataKey::FundingCount).unwrap_or(0),
+            unique_funder_count: env.storage().instance().get(&DataKey::UniqueFunderCount).unwrap_or(0),
+        }
     }
 
     pub fn set_rebate_tier(env: Env, tier_index: u32, threshold: i128, discount_bps: u32) {
@@ -558,6 +577,17 @@ impl OnboardingBridge {
             .extend_ttl(&DataKey::Funding(id), TTL_THRESHOLD, TTL_EXTEND);
         env.storage().instance().set(&DataKey::FundingCount, &id);
 
+        // #20: increment analytics counters atomically
+        let total_vol: i128 = env.storage().instance().get(&DataKey::TotalVolume).unwrap_or(0);
+        env.storage().instance().set(&DataKey::TotalVolume, &(total_vol + amount));
+
+        let unique_key = DataKey::UniqueFunder(source.clone());
+        if !env.storage().persistent().has(&unique_key) {
+            env.storage().persistent().set(&unique_key, &true);
+            let uc: u64 = env.storage().instance().get(&DataKey::UniqueFunderCount).unwrap_or(0);
+            env.storage().instance().set(&DataKey::UniqueFunderCount, &(uc + 1));
+        }
+
         env.events().publish(
             (Symbol::new(env, "funded"),),
             (source.clone(), target.clone(), amount, fee, discount),
@@ -612,36 +642,6 @@ impl OnboardingBridge {
     }
 
     /// Route a CEX withdrawal to a C-address.
-    ///
-    /// Convenience wrapper around `fund_c_address` that requires the calling
-    /// exchange address to authorise the transaction, then delegates all fee
-    /// logic and event emission to `fund_c_address`.
-    ///
-    /// # Parameters
-    ///
-    /// - `exchange` — Authorised exchange address initiating the withdrawal.
-    /// - `target` — Destination C-address.
-    /// - `token_address` — Token being transferred.
-    /// - `amount` — Gross transfer amount.
-    /// - `memo` — Memo for off-chain tracking (format: `bridge:{exchange}:{suffix}`).
-    ///
-    /// # Returns
-    ///
-    /// Fee amount deducted (see `fund_c_address`).
-    ///
-    /// # Panics
-    ///
-    /// - Auth failure — if the transaction is not signed by `exchange`.
-    ///
-    /// # Events
-    ///
-    /// Emits `("funded",) → (exchange, target, amount, fee_amount)` (via `fund_c_address`).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let fee = contract.route_from_exchange(env, exchange, target, token, 10_000_000, memo);
-    /// ```
     pub fn route_from_exchange(
         env: Env,
         exchange: Address,

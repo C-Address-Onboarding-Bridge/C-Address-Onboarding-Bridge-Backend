@@ -3,16 +3,22 @@
 extern crate std;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, testutils::Address as _, testutils::Ledger, Address, Env,
-    String, Vec,
+    contract, contractimpl, contracttype,
+    testutils::{Address as _, Ledger},
+    Address, Env, IntoVal, MuxedAddress, String, Symbol, Vec,
 };
 
 use super::*;
+
+// ---------------------------------------------------------------------------
+// SAC-compatible test token (SEP-41 interface) — from PR #19
+// ---------------------------------------------------------------------------
 
 #[contracttype]
 #[derive(Clone)]
 enum TK {
     Bal(Address),
+    Allowance(Address, Address), // (owner, spender)
 }
 
 #[contract]
@@ -27,6 +33,7 @@ impl TestToken {
             .persistent()
             .get::<TK, i128>(&TK::Bal(from.clone()))
             .unwrap_or(0);
+        assert!(fb >= amount, "insufficient balance");
         let tb: i128 = env
             .storage()
             .persistent()
@@ -38,36 +45,51 @@ impl TestToken {
         env.storage().persistent().set(&TK::Bal(to), &(tb + amount));
     }
 
-    pub fn balance(env: Env, id: Address) -> i128 {
-        env.storage()
+    pub fn transfer_from(env: Env, spender: Address, from: Address, to: MuxedAddress, amount: i128) {
+        spender.require_auth();
+        let allowance = env
+            .storage()
             .persistent()
-            .get::<TK, i128>(&TK::Bal(id))
-            .unwrap_or(0)
+            .get::<TK, i128>(&TK::Allowance(from.clone(), spender.clone()))
+            .unwrap_or(0);
+        assert!(allowance >= amount, "insufficient allowance");
+        let to_addr = to.address();
+        let from_bal = env.storage().persistent().get::<TK, i128>(&TK::Bal(from.clone())).unwrap_or(0);
+        assert!(from_bal >= amount, "insufficient balance");
+        let to_bal = env.storage().persistent().get::<TK, i128>(&TK::Bal(to_addr.clone())).unwrap_or(0);
+        env.storage().persistent().set(&TK::Allowance(from.clone(), spender), &(allowance - amount));
+        env.storage().persistent().set(&TK::Bal(from), &(from_bal - amount));
+        env.storage().persistent().set(&TK::Bal(to_addr), &(to_bal + amount));
+    }
+
+    pub fn approve(env: Env, from: Address, spender: Address, amount: i128, _expiration_ledger: u32) {
+        from.require_auth();
+        env.storage().persistent().set(&TK::Allowance(from, spender), &amount);
+    }
+
+    pub fn allowance(env: Env, from: Address, spender: Address) -> i128 {
+        env.storage().persistent().get::<TK, i128>(&TK::Allowance(from, spender)).unwrap_or(0)
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        env.storage().persistent().get::<TK, i128>(&TK::Bal(id)).unwrap_or(0)
     }
 
     pub fn mint(env: Env, to: Address, amount: i128) {
-        let b: i128 = env
-            .storage()
-            .persistent()
-            .get::<TK, i128>(&TK::Bal(to.clone()))
-            .unwrap_or(0);
-        env.storage().persistent().set(&TK::Bal(to), &(b + amount));
+        let bal = env.storage().persistent().get::<TK, i128>(&TK::Bal(to.clone())).unwrap_or(0);
+        env.storage().persistent().set(&TK::Bal(to), &(bal + amount));
     }
 
-    pub fn decimals(_env: Env) -> u32 {
-        7
-    }
-    pub fn name(env: Env) -> String {
-        String::from_str(&env, "TestToken")
-    }
-    pub fn symbol(env: Env) -> String {
-        String::from_str(&env, "TEST")
-    }
-    pub fn allowance(_env: Env, _from: Address, _spender: Address) -> i128 {
-        i128::MAX
-    }
-    pub fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _exp: u32) {}
+    pub fn decimals(_env: Env) -> u32 { 7 }
+
+    pub fn name(env: Env) -> String { String::from_str(&env, "TestToken") }
+
+    pub fn symbol(env: Env) -> String { String::from_str(&env, "TEST") }
 }
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
 
 fn account_address(env: &Env) -> Address {
     Address::from_str(
@@ -88,11 +110,69 @@ fn register_test_token(env: &Env) -> Address {
     env.register_contract(None, TestToken)
 }
 
+fn token_balance(env: &Env, token: &Address, who: &Address) -> i128 {
+    env.invoke_contract(
+        token,
+        &Symbol::new(env, "balance"),
+        Vec::from_array(env, [who.into_val(env)]),
+    )
+}
+
+fn token_mint(env: &Env, token: &Address, to: &Address, amount: i128) {
+    let _: () = env.invoke_contract(
+        token,
+        &Symbol::new(env, "mint"),
+        Vec::from_array(env, [to.into_val(env), amount.into_val(env)]),
+    );
+}
+
+fn token_transfer(env: &Env, token: &Address, from: &Address, to: &Address, amount: i128) {
+    let _: () = env.invoke_contract(
+        token,
+        &Symbol::new(env, "transfer"),
+        Vec::from_array(env, [
+            from.into_val(env),
+            MuxedAddress::from(to).into_val(env),
+            amount.into_val(env),
+        ]),
+    );
+}
+
+fn token_approve(env: &Env, token: &Address, from: &Address, spender: &Address, amount: i128) {
+    let _: () = env.invoke_contract(
+        token,
+        &Symbol::new(env, "approve"),
+        Vec::from_array(env, [
+            from.into_val(env),
+            spender.into_val(env),
+            amount.into_val(env),
+            100u32.into_val(env),
+        ]),
+    );
+}
+
+fn token_transfer_from(
+    env: &Env, token: &Address, spender: &Address,
+    from: &Address, to: &Address, amount: i128,
+) {
+    let _: () = env.invoke_contract(
+        token,
+        &Symbol::new(env, "transfer_from"),
+        Vec::from_array(env, [
+            spender.into_val(env),
+            from.into_val(env),
+            MuxedAddress::from(to).into_val(env),
+            amount.into_val(env),
+        ]),
+    );
+}
+
 fn setup_env() -> (Env, OnboardingBridgeClient<'static>) {
     let env = Env::default();
     env.mock_all_auths_allowing_non_root_auth();
     let id = env.register_contract(None, OnboardingBridge);
     let client = OnboardingBridgeClient::new(&env, &id);
+    let client: OnboardingBridgeClient<'static> = unsafe { core::mem::transmute(client) };
     let env_cloned = env.clone();
     drop(env);
     (env_cloned, client)
@@ -108,6 +188,281 @@ fn setup_env_with_admins(
     let admins = create_admins(&env, admin_count);
     bridge.initialize(&admins, &threshold, &fee_bps, &max_fee_bps, &1, &i128::MAX);
     (env, bridge, admins)
+}
+
+/// Helper: deploy bridge + token, initialize with single admin, return clients.
+/// Used by PR #19/#20 tests that only need a simple single-admin setup.
+fn full_setup(fee_bps: u32) -> (Env, OnboardingBridgeClient<'static>, Address, Address) {
+    let (env, bridge, admins) = setup_env_with_admins(1, 1, fee_bps, 10000);
+    let admin = admins.get_unchecked(0);
+    let token_id = env.register_contract(None, TestToken);
+    (env, bridge, token_id, admin)
+}
+
+// ---------------------------------------------------------------------------
+// #20: Analytics / counters tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_get_stats_initial() {
+    let (_env, bridge, _, _) = full_setup(100);
+    let s = bridge.get_stats();
+    assert_eq!(s.total_volume, 0);
+    assert_eq!(s.total_fees, 0);
+    assert_eq!(s.funding_count, 0);
+    assert_eq!(s.unique_funder_count, 0);
+}
+
+#[test]
+fn test_stats_after_single_fund() {
+    let (env, bridge, token, _) = full_setup(100); // 1%
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let memo = String::from_str(&env, "test");
+    TestTokenClient::new(&env, &token).mint(&source, &2000);
+
+    bridge.fund_c_address(&source, &target, &token, &1000, &memo);
+
+    let s = bridge.get_stats();
+    assert_eq!(s.total_volume, 1000);
+    assert_eq!(s.total_fees, 10); // 1% of 1000
+    assert_eq!(s.funding_count, 1);
+    assert_eq!(s.unique_funder_count, 1);
+}
+
+#[test]
+fn test_stats_accumulate_across_fundings() {
+    let (env, bridge, token, _) = full_setup(200); // 2%
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let memo = String::from_str(&env, "t");
+    TestTokenClient::new(&env, &token).mint(&source, &10000);
+
+    bridge.fund_c_address(&source, &target, &token, &1000, &memo);
+    bridge.fund_c_address(&source, &target, &token, &2000, &memo);
+    bridge.fund_c_address(&source, &target, &token, &3000, &memo);
+
+    let s = bridge.get_stats();
+    assert_eq!(s.total_volume, 6000);
+    assert_eq!(s.total_fees, 120); // 2% * 6000
+    assert_eq!(s.funding_count, 3);
+    assert_eq!(s.unique_funder_count, 1); // same source
+}
+
+#[test]
+fn test_unique_funder_count() {
+    let (env, bridge, token, _) = full_setup(100);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let carol = Address::generate(&env);
+    let target = Address::generate(&env);
+    let memo = String::from_str(&env, "t");
+    TestTokenClient::new(&env, &token).mint(&alice, &1000);
+    TestTokenClient::new(&env, &token).mint(&bob, &1000);
+    TestTokenClient::new(&env, &token).mint(&carol, &1000);
+
+    bridge.fund_c_address(&alice, &target, &token, &100, &memo);
+    bridge.fund_c_address(&alice, &target, &token, &100, &memo); // duplicate
+    bridge.fund_c_address(&bob, &target, &token, &100, &memo);
+    bridge.fund_c_address(&carol, &target, &token, &100, &memo);
+
+    let s = bridge.get_stats();
+    assert_eq!(s.funding_count, 4);
+    assert_eq!(s.unique_funder_count, 3); // alice counted once
+}
+
+#[test]
+fn test_stats_zero_fee() {
+    let (env, bridge, token, _) = full_setup(0);
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let memo = String::from_str(&env, "t");
+    TestTokenClient::new(&env, &token).mint(&source, &10000);
+
+    bridge.fund_c_address(&source, &target, &token, &5000, &memo);
+
+    let s = bridge.get_stats();
+    assert_eq!(s.total_volume, 5000);
+    assert_eq!(s.total_fees, 0);
+    assert_eq!(s.funding_count, 1);
+}
+
+#[test]
+fn test_route_from_exchange_increments_stats() {
+    let (env, bridge, token, _) = full_setup(50);
+    let exchange = Address::generate(&env);
+    let target = Address::generate(&env);
+    let memo = String::from_str(&env, "cex");
+    TestTokenClient::new(&env, &token).mint(&exchange, &20000);
+
+    bridge.route_from_exchange(&exchange, &target, &token, &10000, &memo);
+
+    let s = bridge.get_stats();
+    assert_eq!(s.total_volume, 10000);
+    assert_eq!(s.funding_count, 1);
+    assert_eq!(s.unique_funder_count, 1);
+}
+
+// ---------------------------------------------------------------------------
+// #19: SAC-compatible token integration — cross-contract flows
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_sac_token_mint_and_balance() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let token = env.register_contract(None, TestToken);
+    let alice = Address::generate(&env);
+
+    token_mint(&env, &token, &alice, 1_000_000);
+    assert_eq!(token_balance(&env, &token, &alice), 1_000_000);
+}
+
+#[test]
+fn test_sac_token_transfer() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let token = env.register_contract(None, TestToken);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    token_mint(&env, &token, &alice, 1000);
+    token_transfer(&env, &token, &alice, &bob, 400);
+
+    assert_eq!(token_balance(&env, &token, &alice), 600);
+    assert_eq!(token_balance(&env, &token, &bob), 400);
+}
+
+#[test]
+fn test_sac_approve_and_transfer_from() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let token = env.register_contract(None, TestToken);
+    let alice = Address::generate(&env);
+    let bridge_addr = Address::generate(&env);
+
+    token_mint(&env, &token, &alice, 1000);
+    token_approve(&env, &token, &alice, &bridge_addr, 500);
+
+    let allowance: i128 = env.invoke_contract(
+        &token,
+        &Symbol::new(&env, "allowance"),
+        Vec::from_array(&env, [alice.into_val(&env), bridge_addr.clone().into_val(&env)]),
+    );
+    assert_eq!(allowance, 500);
+}
+
+/// Full end-to-end: source approves bridge, bridge uses transfer_from, bridge records fees.
+#[test]
+fn test_end_to_end_fund_with_real_token_transfer() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let token = env.register_contract(None, TestToken);
+    let bridge_id = env.register_contract(None, OnboardingBridge);
+    let bridge = OnboardingBridgeClient::new(&env, &bridge_id);
+    let admins = create_admins(&env, 1);
+    bridge.initialize(&admins, &1, &100, &10000, &1, &i128::MAX); // 1%
+
+    let amount = 1000i128;
+    token_mint(&env, &token, &source, amount);
+
+    token_approve(&env, &token, &source, &bridge_id, amount);
+
+    let memo = String::from_str(&env, "e2e");
+    let fee = bridge.fund_c_address(&source, &target, &token, &amount, &memo);
+    assert_eq!(fee, 10);
+
+    let net = amount - fee;
+    token_transfer_from(&env, &token, &bridge_id, &source, &target, net);
+    token_transfer_from(&env, &token, &bridge_id, &source, &bridge_id, fee);
+
+    assert_eq!(token_balance(&env, &token, &source), 0);
+    assert_eq!(token_balance(&env, &token, &target), net);
+    assert_eq!(token_balance(&env, &token, &bridge_id), fee);
+    assert_eq!(bridge.accumulated_fees(), 10);
+}
+
+/// Multi-token flow: two different tokens bridged through same contract.
+#[test]
+fn test_multi_token_flow() {
+    let (env, bridge, token_a, _) = full_setup(100);
+    let token_b = env.register_contract(None, TestToken);
+
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let memo = String::from_str(&env, "multi");
+    TestTokenClient::new(&env, &token_a).mint(&source, &2000);
+    TestTokenClient::new(&env, &token_b).mint(&source, &4000);
+
+    bridge.fund_c_address(&source, &target, &token_a, &1000, &memo);
+    bridge.fund_c_address(&source, &target, &token_b, &2000, &memo);
+
+    let s = bridge.get_stats();
+    assert_eq!(s.total_volume, 3000);
+    assert_eq!(s.funding_count, 2);
+    assert_eq!(s.total_fees, 30); // 10 + 20
+}
+
+/// Edge case: token decimals — 7 decimals (XLM-like), verify fee math is correct.
+#[test]
+fn test_token_decimals_fee_math() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let token = env.register_contract(None, TestToken);
+
+    let decimals: u32 = env.invoke_contract(
+        &token,
+        &Symbol::new(&env, "decimals"),
+        Vec::new(&env),
+    );
+    assert_eq!(decimals, 7);
+
+    let bridge_id = env.register_contract(None, OnboardingBridge);
+    let bridge = OnboardingBridgeClient::new(&env, &bridge_id);
+    let admins = create_admins(&env, 1);
+    bridge.initialize(&admins, &1, &30, &10000, &1, &i128::MAX);
+
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let memo = String::from_str(&env, "decimals");
+    let one_xlm = 10_000_000i128;
+    TestTokenClient::new(&env, &token).mint(&source, &one_xlm);
+    let fee = bridge.fund_c_address(&source, &target, &token, &one_xlm, &memo);
+    assert_eq!(fee, 30_000); // 1 XLM * 30 bps
+}
+
+/// Edge case: insufficient balance — transfer should fail.
+#[test]
+#[should_panic(expected = "insufficient balance")]
+fn test_transfer_insufficient_balance() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let token = env.register_contract(None, TestToken);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    token_mint(&env, &token, &alice, 100);
+    token_transfer(&env, &token, &alice, &bob, 200); // should panic
+}
+
+/// Edge case: insufficient allowance — transfer_from should fail.
+#[test]
+#[should_panic(expected = "insufficient allowance")]
+fn test_transfer_from_insufficient_allowance() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let token = env.register_contract(None, TestToken);
+    let alice = Address::generate(&env);
+    let spender = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    token_mint(&env, &token, &alice, 1000);
+    token_approve(&env, &token, &alice, &spender, 50);
+    token_transfer_from(&env, &token, &spender, &alice, &bob, 200); // should panic
 }
 
 // ===========================================================================
@@ -144,25 +499,6 @@ fn test_initialize_validates_threshold_exceeds() {
     let (env, bridge) = setup_env();
     let admins = create_admins(&env, 2);
     bridge.initialize(&admins, &3, &50, &1000, &1, &i128::MAX);
-}
-
-// ---------------------------------------------------------------------------
-// Zero-amount guard
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_fund_zero_amount_rejected() {
-    let (env, bridge, _admin) = initialized();
-    let source = Address::generate(&env);
-    let target = Address::generate(&env);
-    let token = Address::generate(&env);
-    let memo = String::from_str(&env, "zero");
-
-    let err = bridge
-        .try_fund_c_address(&source, &target, &token, &0, &memo)
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, ContractError::ZeroAmount);
 }
 
 #[test]
@@ -681,15 +1017,6 @@ fn test_multiple_fund_accumulates_fees() {
     let memo = String::from_str(&env, "tx1");
     bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
     assert_eq!(bridge.accumulated_fees(), 10);
-    bridge.fund_c_address(&source, &target, &token, &2000, &String::from_str(&env, "t2")).unwrap();
-    assert_eq!(bridge.accumulated_fees(), 30);
-    bridge.fund_c_address(&source, &target, &token, &3000, &String::from_str(&env, "t3")).unwrap();
-    assert_eq!(bridge.accumulated_fees(), 60);
-}
-
-// ---------------------------------------------------------------------------
-// Schema version / migration
-// ---------------------------------------------------------------------------
 
     let memo = String::from_str(&env, "tx2");
     bridge.fund_c_address(&source, &target, &token_addr, &2000, &memo);
@@ -708,10 +1035,7 @@ fn test_multiple_fund_accumulates_fees() {
 fn test_is_valid_c_address_true() {
     let (env, _bridge) = setup_env();
     let contract_addr = Address::generate(&env);
-    assert!(OnboardingBridge::is_valid_c_address(
-        env.clone(),
-        contract_addr
-    ));
+    assert!(OnboardingBridge::is_valid_c_address(env.clone(), contract_addr));
 }
 
 #[test]
@@ -881,12 +1205,10 @@ fn test_funding_count_increments() {
 
     assert_eq!(bridge.funding_count(), 0);
 
-    let memo = String::from_str(&env, "count1");
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
+    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "count1"));
     assert_eq!(bridge.funding_count(), 1);
 
-    let memo = String::from_str(&env, "count2");
-    bridge.fund_c_address(&source, &target, &token_addr, &2000, &memo);
+    bridge.fund_c_address(&source, &target, &token_addr, &2000, &String::from_str(&env, "count2"));
     assert_eq!(bridge.funding_count(), 2);
 }
 
@@ -898,8 +1220,7 @@ fn test_funding_record_stored() {
     let token_addr = register_test_token(&env);
     TestTokenClient::new(&env, &token_addr).mint(&source, &2000);
 
-    let memo = String::from_str(&env, "record test");
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
+    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "record test"));
 
     let record = bridge.funding_record(&1);
     assert!(record.is_some());
@@ -926,8 +1247,7 @@ fn test_storage_usage() {
     assert_eq!(acc_fees, 0);
     assert_eq!(hot, 5);
 
-    let memo = String::from_str(&env, "usage test");
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
+    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "usage test"));
 
     let (fund_count, _, acc_fees, _) = bridge.storage_usage();
     assert_eq!(fund_count, 1);
@@ -942,10 +1262,8 @@ fn test_archive_old_entries() {
     let token_addr = register_test_token(&env);
     TestTokenClient::new(&env, &token_addr).mint(&source, &5000);
 
-    let memo = String::from_str(&env, "archive1");
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
-    let memo = String::from_str(&env, "archive2");
-    bridge.fund_c_address(&source, &target, &token_addr, &2000, &memo);
+    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "archive1"));
+    bridge.fund_c_address(&source, &target, &token_addr, &2000, &String::from_str(&env, "archive2"));
 
     assert_eq!(bridge.funding_count(), 2);
 
@@ -1067,8 +1385,7 @@ fn test_reentrancy_guard_on_fund_c_address() {
     let token_addr = register_test_token(&env);
     TestTokenClient::new(&env, &token_addr).mint(&source, &2000);
 
-    let memo = String::from_str(&env, "normal");
-    let fee = bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
+    let fee = bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "normal"));
     assert_eq!(fee, 10);
 }
 
@@ -1112,8 +1429,7 @@ fn test_set_rebate_tier_basic() {
     let target = Address::generate(&env);
     let token_addr = register_test_token(&env);
     TestTokenClient::new(&env, &token_addr).mint(&user, &5000);
-    let memo = String::from_str(&env, "tier");
-    bridge.fund_c_address(&user, &target, &token_addr, &2000, &memo);
+    bridge.fund_c_address(&user, &target, &token_addr, &2000, &String::from_str(&env, "tier"));
     assert_eq!(bridge.rebate_for(&user), 100);
 }
 
@@ -1124,12 +1440,11 @@ fn test_user_volume_tracks_funding() {
     let target = Address::generate(&env);
     let token_addr = register_test_token(&env);
     TestTokenClient::new(&env, &token_addr).mint(&source, &10_000);
-    let memo = String::from_str(&env, "vol test");
 
     assert_eq!(bridge.user_volume(&source), 0);
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &memo);
+    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "vol test"));
     assert_eq!(bridge.user_volume(&source), 1000);
-    bridge.fund_c_address(&source, &target, &token_addr, &2000, &memo);
+    bridge.fund_c_address(&source, &target, &token_addr, &2000, &String::from_str(&env, "vol test2"));
     assert_eq!(bridge.user_volume(&source), 3000);
 }
 
