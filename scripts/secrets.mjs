@@ -81,7 +81,8 @@ function scan() {
     lines.forEach((line, index) => {
       const isEnvReference = /process\.env\.[A-Z0-9_]+/.test(line);
       const isConfigReference = /\bconfig\.[A-Za-z0-9_.]*(?:apiKey|secretKey|token|password|privateKey)\b/i.test(line);
-      if ((isEnvReference || isConfigReference) && /(?:api[_-]?key|secret|token|password|private[_-]?key)/i.test(line)) return;
+      const isObjectReference = /[:=]\s*(?:params|config|this|input|req\.body|process\.env)\.[A-Za-z0-9_.]*(?:apiKey|secret|secretKey|token|password|privateKey)\b/i.test(line);
+      if ((isEnvReference || isConfigReference || isObjectReference) && /(?:api[_-]?key|secret|token|password|private[_-]?key)/i.test(line)) return;
       if (secretPatterns.some((pattern) => pattern.test(line))) findings.push(`${file}:${index + 1}`);
     });
   }

@@ -330,6 +330,7 @@ Avoid adding indexes for every filter in isolation. Each write to `transactions`
 | `001` | `initial_schema` | `api/src/migrations/001_initial_schema.ts` | Base migration metadata, transactions, webhook registrations, webhook delivery log, webhook DLQ. |
 | `002` | `api_keys_schema` | `api/src/migrations/002_api_keys_schema.ts` | API key metadata and API key audit log. |
 | `003` | `analytics_schema` | `api/src/migrations/003_analytics_schema.ts` | Inbound webhook event storage and analytics metrics. |
+| `004` | `integrity_audit_log` | `api/src/migrations/004_integrity_audit_log.ts` | Hash-chained audit log entries and published checkpoints. |
 
 ## Migration Management
 
@@ -451,5 +452,5 @@ Partitioning/sharding:
 - Wire migrations to a real `pg` client and persist migration state in `schema_migrations`.
 - Add explicit foreign key for `webhook_dlq.registration_id` or document why DLQ rows must survive registration deletion.
 - Align backup incremental table list with actual schema; the script currently references `idempotency_keys`, which is not present in current migrations.
-- Convert serialized JSON `TEXT` fields to `JSONB` where queryability is needed, especially `api_keys.scopes`, `api_keys.ip_whitelist`, webhook events, and DLQ payloads.
+- Convert serialized JSON `TEXT` fields to `JSONB` where queryability is needed, especially `api_keys.scopes`, `api_keys.ip_whitelist`, webhook events, DLQ payloads, and audit log payloads.
 - Decide whether `transactions.amount` remains `TEXT` or becomes exact `NUMERIC`.
