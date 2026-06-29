@@ -67,6 +67,17 @@ Credit Card ──▶ Moonpay/Transak ──▶ Bridge Contract ──▶ C-Addr
 
 ---
 
+## Dependency Vulnerability Monitoring
+
+The repository runs automated dependency vulnerability scanning through GitHub Actions and scheduled audits. The workflow currently:
+
+- runs a weekly dependency audit on the default branch and for pull requests,
+- publishes a machine-readable audit report plus a human-readable summary artifact,
+- tracks severity-based patch SLAs of critical (24 hours), high (7 days), moderate (30 days), and low (next release),
+- sends Slack notifications when the workflow is configured with a webhook secret.
+
+Accepted-risk overrides must be documented in the issue tracker with the dependency name, severity, owner, and expiry date, and they should be reviewed on the next scheduled scan.
+
 ## Project Structure
 
 ```

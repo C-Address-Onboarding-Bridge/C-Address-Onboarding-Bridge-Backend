@@ -11,8 +11,8 @@
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
-    "prepare": "husky",
-    "deploy:blue-green": "bash ./scripts/blue-green-deploy.sh"
+    "audit:dependencies": "npm audit --omit=dev --json > reports/dependency-audit.json || true && node scripts/dependency-vulnerability-monitor.mjs reports/dependency-audit.json",
+    "prepare": "husky"
   },
   "dependencies": {
     "ioredis": "^5.11.1"
