@@ -1,0 +1,182 @@
+global:
+  # Default SMTP settings — override via env vars in production
+  smtp_smarthost: "${SMTP_HOST}:587"
+  smtp_from: "alerts@c-address-bridge.io"
+  smtp_auth_username: "${SMTP_USER}"
+  smtp_auth_password: "${SMTP_PASS}"
+  smtp_require_tls: true
+
+  # PagerDuty default
+  pagerduty_url: "https://events.pagerduty.com/v2/enqueue"
+
+  # Slack default
+  slack_api_url: "${SLACK_WEBHOOK_URL}"
+
+  resolve_timeout: 5m
+
+# ──────────────────────────────────────────────────────────────
+# Templates
+# ──────────────────────────────────────────────────────────────
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
+
+# ──────────────────────────────────────────────────────────────
+# Route tree
+# ──────────────────────────────────────────────────────────────
+route:
+  receiver: "default-slack"
+  group_by: ["alertname", "severity", "team"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # ── Critical alerts → PagerDuty ──────────────────────────
+    - match:
+        severity: critical
+      receiver: pagerduty-critical
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+      continue: true   # also send to Slack
+
+    - match:
+        severity: critical
+      receiver: slack-critical
+      group_wait: 10s
+      continue: false
+
+    # ── Warning alerts → Slack #alerts-warning ───────────────
+    - match:
+        severity: warning
+      receiver: slack-warning
+      group_wait: 1m
+      repeat_interval: 4h
+      continue: true
+
+    - match:
+        severity: warning
+      receiver: email-oncall
+      repeat_interval: 12h
+      continue: false
+
+    # ── Blockchain / Soroban team ─────────────────────────────
+    - match:
+        team: blockchain
+      receiver: slack-blockchain
+      continue: true
+
+    # ── Info / low priority → email only ─────────────────────
+    - match:
+        severity: info
+      receiver: email-oncall
+      repeat_interval: 24h
+
+# ──────────────────────────────────────────────────────────────
+# Inhibition rules — prevent alert storms
+# ──────────────────────────────────────────────────────────────
+inhibit_rules:
+  # Suppress warning if critical already firing for same service
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ["alertname", "team"]
+
+  # Suppress SLO slow burn if fast burn is already firing
+  - source_match:
+      alertname: SLOFastBurn
+    target_match:
+      alertname: SLOSlowBurn
+    equal: ["job"]
+
+  # Suppress latency alert if health endpoint is down
+  - source_match:
+      alertname: HealthEndpointDown
+    target_match_re:
+      alertname: "(HighP99Latency|HighErrorRate)"
+    equal: ["job"]
+
+# ──────────────────────────────────────────────────────────────
+# Receivers
+# ──────────────────────────────────────────────────────────────
+receivers:
+  - name: "default-slack"
+    slack_configs:
+      - channel: "#alerts-info"
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* {{ .Labels.severity }}
+          {{ if .Annotations.runbook_url }}*Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>{{ end }}
+          {{ if .Annotations.dashboard_url }}*Dashboard:* <{{ .Annotations.dashboard_url }}|Open Dashboard>{{ end }}
+          {{ end }}
+
+  - name: "pagerduty-critical"
+    pagerduty_configs:
+      - service_key: "${PAGERDUTY_SERVICE_KEY}"
+        send_resolved: true
+        description: '{{ .CommonAnnotations.summary }}'
+        details:
+          severity: '{{ .CommonLabels.severity }}'
+          team: '{{ .CommonLabels.team }}'
+          runbook: '{{ .CommonAnnotations.runbook_url }}'
+          dashboard: '{{ .CommonAnnotations.dashboard_url }}'
+          firing: '{{ .Alerts.Firing | len }}'
+
+  - name: "slack-critical"
+    slack_configs:
+      - channel: "#alerts-critical"
+        send_resolved: true
+        icon_emoji: ":fire:"
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        title: ':fire: [CRITICAL] {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Details:* {{ .Annotations.description }}
+          {{ if .Annotations.runbook_url }}*Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>{{ end }}
+          {{ if .Annotations.dashboard_url }}*Dashboard:* <{{ .Annotations.dashboard_url }}|Open Dashboard>{{ end }}
+          {{ end }}
+
+  - name: "slack-warning"
+    slack_configs:
+      - channel: "#alerts-warning"
+        send_resolved: true
+        icon_emoji: ":warning:"
+        color: '{{ if eq .Status "firing" }}warning{{ else }}good{{ end }}'
+        title: ':warning: [WARNING] {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          {{ if .Annotations.runbook_url }}*Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>{{ end }}
+          {{ end }}
+
+  - name: "slack-blockchain"
+    slack_configs:
+      - channel: "#alerts-blockchain"
+        send_resolved: true
+        icon_emoji: ":chains:"
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Details:* {{ .Annotations.description }}
+          {{ if .Annotations.runbook_url }}*Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>{{ end }}
+          {{ end }}
+
+  - name: "email-oncall"
+    email_configs:
+      - to: "${ONCALL_EMAIL}"
+        send_resolved: true
+        headers:
+          Subject: '[{{ .Status | toUpper }}] C-Address Bridge: {{ .CommonLabels.alertname }}'
+        html: |
+          <h2>{{ .CommonAnnotations.summary }}</h2>
+          <p>{{ .CommonAnnotations.description }}</p>
+          {{ if .CommonAnnotations.runbook_url }}
+          <p><a href="{{ .CommonAnnotations.runbook_url }}">View Runbook</a></p>
+          {{ end }}
