@@ -1,0 +1,191 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: [staging, production]
+      image_tag:
+        description: 'Docker image tag to promote (defaults to latest on branch)'
+        required: false
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  # ── CI gate (always required) ──────────────────────────────────────────────
+  ci:
+    name: CI Gate
+    uses: ./.github/workflows/ci.yml
+
+  # ── Build & push image ─────────────────────────────────────────────────────
+  build:
+    name: Build Image
+    runs-on: ubuntu-latest
+    needs: ci
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Dev: auto-deploy on every push to main ─────────────────────────────────
+  deploy-dev:
+    name: Deploy → dev
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: dev
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run migrations
+        run: npm run migrate -w api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NODE_ENV: development
+
+      - name: Deploy
+        run: bash scripts/deploy.sh
+        env:
+          ENVIRONMENT: dev
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
+          SOROBAN_RPC_URL: ${{ vars.SOROBAN_RPC_URL }}
+
+      - name: Smoke tests
+        run: bash scripts/smoke-test.sh
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+
+      - name: Rollback on failure
+        if: failure()
+        run: bash scripts/deploy.sh --rollback
+        env:
+          ENVIRONMENT: dev
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+
+  # ── Staging: manual promote ────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy → staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging'
+    environment:
+      name: staging
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run migrations
+        run: npm run migrate -w api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NODE_ENV: staging
+
+      - name: Deploy
+        run: bash scripts/deploy.sh
+        env:
+          ENVIRONMENT: staging
+          IMAGE_TAG: ${{ github.event.inputs.image_tag || needs.build.outputs.image_tag }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
+          SOROBAN_RPC_URL: ${{ vars.SOROBAN_RPC_URL }}
+
+      - name: Smoke tests
+        run: bash scripts/smoke-test.sh
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+
+      - name: Rollback on failure
+        if: failure()
+        run: bash scripts/deploy.sh --rollback
+        env:
+          ENVIRONMENT: staging
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+
+  # ── Production: 2-approver manual promote ─────────────────────────────────
+  deploy-production:
+    name: Deploy → production
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production'
+    environment:
+      name: production          # GitHub Environment — configure 2 required reviewers here
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run migrations
+        run: npm run migrate -w api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NODE_ENV: production
+
+      - name: Deploy
+        run: bash scripts/deploy.sh
+        env:
+          ENVIRONMENT: production
+          IMAGE_TAG: ${{ github.event.inputs.image_tag || needs.build.outputs.image_tag }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
+          SOROBAN_RPC_URL: ${{ vars.SOROBAN_RPC_URL }}
+          SOROBAN_NETWORK_PASSPHRASE: ${{ secrets.SOROBAN_NETWORK_PASSPHRASE }}
+
+      - name: Smoke tests
+        run: bash scripts/smoke-test.sh
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+
+      - name: Rollback on failure
+        if: failure()
+        run: bash scripts/deploy.sh --rollback
+        env:
+          ENVIRONMENT: production
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}

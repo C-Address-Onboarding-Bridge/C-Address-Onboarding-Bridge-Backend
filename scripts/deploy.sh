@@ -6,8 +6,11 @@ set -euo pipefail
 
 # ── defaults ─────────────────────────────────────────────────────────────────
 NETWORK="${NETWORK:-testnet}"
+ENVIRONMENT="${ENVIRONMENT:-}"   # dev | staging | production (optional, sets env-specific defaults)
 DRY_RUN=false
 SKIP_BUILD=false
+ROLLBACK=false
+ROLLBACK_STEPS="${STEPS:-1}"
 ARTIFACTS_DIR="deployments"
 ARTIFACT_FILE=""
 CONTRACT_DIR="contracts/onboarding-bridge"
@@ -15,12 +18,42 @@ CONTRACT_DIR="contracts/onboarding-bridge"
 # ── parse args ───────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --network)   NETWORK="$2";   shift 2 ;;
-    --dry-run)   DRY_RUN=true;   shift   ;;
-    --skip-build) SKIP_BUILD=true; shift ;;
+    --network)    NETWORK="$2";         shift 2 ;;
+    --dry-run)    DRY_RUN=true;         shift   ;;
+    --skip-build) SKIP_BUILD=true;      shift   ;;
+    --rollback)   ROLLBACK=true;        shift   ;;
+    --steps)      ROLLBACK_STEPS="$2";  shift 2 ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
 done
+
+# ── environment-specific config ───────────────────────────────────────────────
+# ENVIRONMENT overrides NETWORK and sets safe defaults per deployment tier.
+case "${ENVIRONMENT}" in
+  dev)
+    NETWORK="${NETWORK:-testnet}"
+    BRIDGE_FEE_BPS="${BRIDGE_FEE_BPS:-30}"
+    ;;
+  staging)
+    NETWORK="${NETWORK:-testnet}"
+    BRIDGE_FEE_BPS="${BRIDGE_FEE_BPS:-30}"
+    # Staging mirrors production config — validate required secrets are set.
+    : "${SOURCE_ACCOUNT:?SOURCE_ACCOUNT required for staging}"
+    ;;
+  production)
+    NETWORK="${NETWORK:-mainnet}"
+    BRIDGE_FEE_BPS="${BRIDGE_FEE_BPS:-30}"
+    : "${SOURCE_ACCOUNT:?SOURCE_ACCOUNT required for production}"
+    : "${SOROBAN_NETWORK_PASSPHRASE:?SOROBAN_NETWORK_PASSPHRASE required for production}"
+    ;;
+  "")
+    # No ENVIRONMENT set — use legacy NETWORK-only mode (backwards-compatible).
+    ;;
+  *)
+    echo "ERROR: unknown ENVIRONMENT '$ENVIRONMENT'. Use dev, staging, or production." >&2
+    exit 1
+    ;;
+esac
 
 # ── network config ───────────────────────────────────────────────────────────
 case "$NETWORK" in
@@ -46,7 +79,7 @@ case "$NETWORK" in
 esac
 
 SOURCE_ACCOUNT="${SOURCE_ACCOUNT:?SOURCE_ACCOUNT (Stellar secret key) is required}"
-ARTIFACT_FILE="${ARTIFACTS_DIR}/deployment-${NETWORK}.json"
+ARTIFACT_FILE="${ARTIFACTS_DIR}/deployment-${ENVIRONMENT:-${NETWORK}}.json"
 
 log()  { echo "[$(date -u +%H:%M:%SZ)] $*"; }
 warn() { echo "[$(date -u +%H:%M:%SZ)] WARN: $*" >&2; }
@@ -137,29 +170,78 @@ verify_on_explorer() {
 
 # ── step 5: persist artifacts ─────────────────────────────────────────────────
 save_artifacts() {
+  local artifact_env="${ENVIRONMENT:-${NETWORK}}"
+  ARTIFACT_FILE="${ARTIFACTS_DIR}/deployment-${artifact_env}.json"
   mkdir -p "$ARTIFACTS_DIR"
   local ts
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   jq -n \
+    --arg environment "${artifact_env}" \
     --arg network "$NETWORK" \
     --arg contractId "$CONTRACT_ID" \
     --arg deployTx "${DEPLOY_TX:-}" \
     --arg rpcUrl "$RPC_URL" \
     --arg deployedAt "$ts" \
-    '{network: $network, contractId: $contractId, deployTx: $deployTx, rpcUrl: $rpcUrl, deployedAt: $deployedAt}' \
+    '{environment: $environment, network: $network, contractId: $contractId, deployTx: $deployTx, rpcUrl: $rpcUrl, deployedAt: $deployedAt}' \
     > "$ARTIFACT_FILE"
   log "Artifacts saved to $ARTIFACT_FILE"
 }
 
+# ── rollback ──────────────────────────────────────────────────────────────────
+rollback() {
+  local env="${ENVIRONMENT:-${NETWORK}}"
+  local rollback_file="${ARTIFACTS_DIR}/rollback-${env}.sh"
+
+  log "Rolling back $env (steps=$ROLLBACK_STEPS)..."
+
+  # If a rollback script was saved by a previous deploy hook, run it.
+  if [[ -f "$rollback_file" ]]; then
+    log "Executing rollback script: $rollback_file"
+    bash "$rollback_file" "$ROLLBACK_STEPS"
+    log "Rollback complete."
+    return
+  fi
+
+  # Fallback: re-deploy the previous artifact if available.
+  local prev_artifact="${ARTIFACTS_DIR}/deployment-${env}.prev.json"
+  if [[ -f "$prev_artifact" ]]; then
+    log "Re-deploying previous artifact from $prev_artifact"
+    local prev_id
+    prev_id=$(jq -r '.contractId // empty' "$prev_artifact")
+    [[ -z "$prev_id" ]] && err "No contractId in $prev_artifact"
+    log "Previous contract ID: $prev_id — update your service to point to this ID."
+    # Swap current ↔ prev artifacts so status is accurate
+    cp "${ARTIFACTS_DIR}/deployment-${env}.json" "${ARTIFACTS_DIR}/deployment-${env}.rolledback.json" 2>/dev/null || true
+    cp "$prev_artifact" "${ARTIFACTS_DIR}/deployment-${env}.json"
+    log "Rollback artifact swapped. CONTRACT_ID=$prev_id"
+    return
+  fi
+
+  err "No rollback script or previous artifact found for '$env'. Manual rollback required."
+}
+
 # ── main ──────────────────────────────────────────────────────────────────────
 main() {
-  log "Starting deployment to $NETWORK (dry_run=$DRY_RUN)"
+  local env_label="${ENVIRONMENT:-$NETWORK}"
+  log "Starting deployment: environment=${env_label} network=${NETWORK} dry_run=${DRY_RUN} rollback=${ROLLBACK}"
+
+  if $ROLLBACK; then
+    rollback
+    exit 0
+  fi
 
   if $DRY_RUN; then
     log "DRY RUN — validating environment only"
     build_contract
     log "DRY RUN complete. No contract was deployed."
     exit 0
+  fi
+
+  # Preserve current artifact as previous before overwriting
+  local artifact_env="${ENVIRONMENT:-${NETWORK}}"
+  local current="${ARTIFACTS_DIR}/deployment-${artifact_env}.json"
+  if [[ -f "$current" ]]; then
+    cp "$current" "${ARTIFACTS_DIR}/deployment-${artifact_env}.prev.json"
   fi
 
   check_existing
