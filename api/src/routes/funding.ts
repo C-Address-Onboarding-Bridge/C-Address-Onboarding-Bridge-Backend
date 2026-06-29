@@ -48,11 +48,13 @@ fundingRouter.post('/', idempotencyMiddleware, async (req: Request, res: Respons
 fundingRouter.post('/prepare', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = fundDirectSchema.parse(req.body);
-    // TODO: pass all validated fields (targetAddress, tokenAddress, amount, memo) into
-    // contractSimulate once the Soroban simulation is fully implemented.
     const simulation = await sorobanService.contractSimulate(
       body.sourceAddress,
       'fund_c_address',
+      body.targetAddress,
+      body.tokenAddress,
+      body.amount,
+      body.memo,
     );
     integrityAuditLog.append('transaction_submission', {
       amount: body.amount,
