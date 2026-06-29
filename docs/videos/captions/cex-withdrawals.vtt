@@ -1,0 +1,10 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:08.000
+Route a CEX withdrawal to a C-address using the bridge routing API.
+
+00:00:08.000 --> 00:00:16.000
+Copy the memo from the response into the exchange withdrawal form.
+
+00:00:16.000 --> 00:00:22.000
+Track the withdrawal ID until funds arrive on-chain.

@@ -1,0 +1,9 @@
+{"version": 2, "width": 100, "height": 24, "timestamp": 1719590400, "title": "Wallet SDK Integration", "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.0, "o", "\u001b[1;32m$\u001b[0m npm install @c-address-bridge/sdk\r\n"]
+[0.6, "o", "added 1 package\r\n"]
+[1.2, "o", "\u001b[1;32m$\u001b[0m node bridge-wallet-demo.mjs\r\n"]
+[1.8, "o", "BridgeClient → http://localhost:3001\r\n"]
+[2.4, "o", "Quote fee: 30000 stroops (30 bps)\r\n"]
+[3.0, "o", "Prepared unsigned XDR (wallet signs next)\r\n"]
+[3.6, "o", "Submitted tx hash: a1b2c3d4...\r\n"]
+[4.2, "o", "Status: success\r\n"]

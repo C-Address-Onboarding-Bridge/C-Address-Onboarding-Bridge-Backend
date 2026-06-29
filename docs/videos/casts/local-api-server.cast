@@ -1,0 +1,9 @@
+{"version": 2, "width": 100, "height": 24, "timestamp": 1719590400, "title": "Running the API Server Locally", "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.0, "o", "\u001b[1;32m$\u001b[0m docker compose up -d\r\n"]
+[0.8, "o", " Container bridge-api Started\r\n"]
+[1.4, "o", "\u001b[1;32m$\u001b[0m docker compose ps\r\n"]
+[2.0, "o", "NAME            STATUS    PORTS\r\nbridge-api      running   0.0.0.0:3001->3001/tcp\r\nbridge-postgres running   0.0.0.0:5432->5432/tcp\r\n"]
+[2.8, "o", "\u001b[1;32m$\u001b[0m curl -s http://localhost:3001/health\r\n"]
+[3.2, "o", "{\"status\":\"ok\"}\r\n"]
+[3.8, "o", "\u001b[1;32m$\u001b[0m ./scripts/smoke-test.sh\r\n"]
+[4.6, "o", "✓ health OK\r\n✓ quote OK\r\n"]

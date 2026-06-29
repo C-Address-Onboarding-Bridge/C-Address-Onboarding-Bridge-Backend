@@ -1,0 +1,10 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.000
+Configure MoonPay API and secret keys in your environment.
+
+00:00:06.000 --> 00:00:14.000
+Call the off-ramp MoonPay endpoint with wallet address and fiat amount.
+
+00:00:14.000 --> 00:00:20.000
+Open the returned widget URL in your app WebView or browser.
