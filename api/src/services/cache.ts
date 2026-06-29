@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import { config } from '../config';
+import { cacheHitCounter, cacheMissCounter } from './metrics';
 
 export interface CacheMetrics {
   hits: number;
@@ -35,12 +36,15 @@ export async function cacheGet(key: string): Promise<string | null> {
     const value = await redis.get(key);
     if (value !== null) {
       metrics.hits++;
+      cacheHitCounter.inc();
     } else {
       metrics.misses++;
+      cacheMissCounter.inc();
     }
     return value;
   } catch {
     metrics.misses++;
+    cacheMissCounter.inc();
     return null;
   }
 }

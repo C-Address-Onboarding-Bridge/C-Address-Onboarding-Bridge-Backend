@@ -2,8 +2,12 @@ import {
   Transaction,
   xdr,
 } from '@stellar/stellar-sdk';
+import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { config } from '../config';
 import { rpcPool } from './rpcPool';
+import { externalCallDuration } from './metrics';
+
+const tracer = trace.getTracer('soroban-service');
 
 /** Shape of a Soroban transaction response returned by the API. */
 export interface SorobanTxResponse {
@@ -42,18 +46,24 @@ export class SorobanService {
     feeBps: number;
     rate: string;
   }> {
-    const feeBps = config.soroban.feeBps;
-    const amountNum = BigInt(amount);
-    const feeAmount = (amountNum * BigInt(feeBps)) / BigInt(BASIS_POINTS_DENOM);
-    const receiveAmount = amountNum - feeAmount;
+    return tracer.startActiveSpan('quote.calculation', async (span) => {
+      try {
+        const feeBps = config.soroban.feeBps;
+        const amountNum = BigInt(amount);
+        const feeAmount = (amountNum * BigInt(feeBps)) / BigInt(BASIS_POINTS_DENOM);
+        const receiveAmount = amountNum - feeAmount;
 
-    return {
-      estimatedFee: feeAmount.toString(),
-      expectedReceive: receiveAmount.toString(),
-      feeBps,
-      // TODO: replace with a live exchange rate once a price-feed integration is in place.
-      rate: '1.0',
-    };
+        span.setAttributes({ 'quote.fee_bps': feeBps, 'quote.amount': amount });
+        return {
+          estimatedFee: feeAmount.toString(),
+          expectedReceive: receiveAmount.toString(),
+          feeBps,
+          rate: '1.0',
+        };
+      } finally {
+        span.end();
+      }
+    });
   }
 
   /**
@@ -65,23 +75,36 @@ export class SorobanService {
   async submitFundingTransaction(
     signedXdr: string,
   ): Promise<SorobanTxResponse> {
-    const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
-    const tx = new Transaction(envelope, this.networkPassphrase);
-    const txHash = tx.hash().toString('hex');
+    return tracer.startActiveSpan('soroban.submitFundingTransaction', async (span): Promise<SorobanTxResponse> => {
+      const start = Date.now();
+      try {
+        const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
+        const tx = new Transaction(envelope, this.networkPassphrase);
+        const txHash = tx.hash().toString('hex');
+        span.setAttribute('tx.hash', txHash);
 
-    const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
+        const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
+        externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
 
-    if (sendResponse.status === 'PENDING') {
-      return { status: 'pending', hash: txHash };
-    }
-    if (sendResponse.status === 'ERROR') {
-      return {
-        status: 'failed',
-        hash: txHash,
-        error: sendResponse.errorResult?.result().toString() || 'unknown error',
-      };
-    }
-    return { status: 'success', hash: txHash };
+        if (sendResponse.status === 'PENDING') {
+          return { status: 'pending' as const, hash: txHash };
+        }
+        if (sendResponse.status === 'ERROR') {
+          span.setStatus({ code: SpanStatusCode.ERROR });
+          return {
+            status: 'failed' as const,
+            hash: txHash,
+            error: sendResponse.errorResult?.result().toString() || 'unknown error',
+          };
+        }
+        return { status: 'success' as const, hash: txHash };
+      } catch (err) {
+        span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+        throw err;
+      } finally {
+        span.end();
+      }
+    });
   }
 
   /**

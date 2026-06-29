@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'crypto';
 import pino from 'pino';
-import { logger } from '../index';
+import { trace, context } from '@opentelemetry/api';
+import { logger } from '../logger';
 
 declare global {
   namespace Express {
@@ -16,13 +17,18 @@ declare global {
 export function correlationMiddleware(req: Request, res: Response, next: NextFunction): void {
   const requestId = (req.headers['x-request-id'] as string) || randomUUID();
   const correlationId = (req.headers['x-correlation-id'] as string) || requestId;
+  const span = trace.getSpan(context.active());
+  const traceId = span?.spanContext().traceId;
 
   req.requestId = requestId;
   req.correlationId = correlationId;
-  req.log = logger.child({ requestId, correlationId });
+  req.log = logger.child({ requestId, correlationId, trace_id: traceId });
 
   res.setHeader('X-Request-ID', requestId);
   res.setHeader('X-Correlation-ID', correlationId);
+  if (traceId) {
+    res.setHeader('X-Trace-ID', traceId);
+  }
 
   const start = Date.now();
 
