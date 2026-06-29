@@ -1,0 +1,2120 @@
+{
+  "info": {
+    "name": "C-Address Onboarding Bridge API",
+    "description": "Runnable API reference generated from api/src/openapi/spec.ts.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const network = pm.environment.get(\"network\") || \"local\";",
+          "const networkBaseUrl = pm.environment.get(`${network}BaseUrl`);",
+          "if (networkBaseUrl) pm.environment.set(\"baseUrl\", networkBaseUrl);",
+          "if (!pm.environment.get(\"apiKey\")) pm.environment.set(\"apiKey\", \"test-api-key-123\");",
+          "pm.request.headers.upsert({ key: \"X-API-Key\", value: pm.environment.get(\"apiKey\") });"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test(\"response time under 5s\", function () {",
+          "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "{{localBaseUrl}}"
+    },
+    {
+      "key": "apiKey",
+      "value": "{{apiKey}}"
+    }
+  ],
+  "item": [
+    {
+      "name": "Quote",
+      "item": [
+        {
+          "name": "Get a fee quote for a funding transaction",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/quote?sourceAsset=XLM&amount=1000000&targetAddress={{targetCAddress}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "quote"
+              ],
+              "query": [
+                {
+                  "key": "sourceAsset",
+                  "value": "XLM",
+                  "description": "Required"
+                },
+                {
+                  "key": "amount",
+                  "value": "1000000",
+                  "description": "Required"
+                },
+                {
+                  "key": "targetAddress",
+                  "value": "{{targetCAddress}}",
+                  "description": "Required"
+                }
+              ]
+            },
+            "description": "Returns estimated fee, expected receive amount, and exchange rate for a given asset and amount. Results are cached for 30 seconds."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([200, 400, 401, 429]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Quote calculated successfully",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/quote?sourceAsset=XLM&amount=1000000&targetAddress={{targetCAddress}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "quote"
+                  ],
+                  "query": [
+                    {
+                      "key": "sourceAsset",
+                      "value": "XLM",
+                      "description": "Required"
+                    },
+                    {
+                      "key": "amount",
+                      "value": "1000000",
+                      "description": "Required"
+                    },
+                    {
+                      "key": "targetAddress",
+                      "value": "{{targetCAddress}}",
+                      "description": "Required"
+                    }
+                  ]
+                },
+                "description": "Returns estimated fee, expected receive amount, and exchange rate for a given asset and amount. Results are cached for 30 seconds."
+              },
+              "status": "Quote calculated successfully",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"estimatedFee\": \"3000\",\n  \"expectedReceive\": \"997000\",\n  \"feeBps\": 30,\n  \"rate\": \"1.0\"\n}"
+            },
+            {
+              "name": "400 Validation error",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/quote?sourceAsset=XLM&amount=1000000&targetAddress={{targetCAddress}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "quote"
+                  ],
+                  "query": [
+                    {
+                      "key": "sourceAsset",
+                      "value": "XLM",
+                      "description": "Required"
+                    },
+                    {
+                      "key": "amount",
+                      "value": "1000000",
+                      "description": "Required"
+                    },
+                    {
+                      "key": "targetAddress",
+                      "value": "{{targetCAddress}}",
+                      "description": "Required"
+                    }
+                  ]
+                },
+                "description": "Returns estimated fee, expected receive amount, and exchange rate for a given asset and amount. Results are cached for 30 seconds."
+              },
+              "status": "Validation error",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"validation_error\",\n  \"message\": \"invalid request\",\n  \"details\": [\n    {\n      \"path\": \"field\",\n      \"message\": \"required\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/quote?sourceAsset=XLM&amount=1000000&targetAddress={{targetCAddress}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "quote"
+                  ],
+                  "query": [
+                    {
+                      "key": "sourceAsset",
+                      "value": "XLM",
+                      "description": "Required"
+                    },
+                    {
+                      "key": "amount",
+                      "value": "1000000",
+                      "description": "Required"
+                    },
+                    {
+                      "key": "targetAddress",
+                      "value": "{{targetCAddress}}",
+                      "description": "Required"
+                    }
+                  ]
+                },
+                "description": "Returns estimated fee, expected receive amount, and exchange rate for a given asset and amount. Results are cached for 30 seconds."
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/quote?sourceAsset=XLM&amount=1000000&targetAddress={{targetCAddress}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "quote"
+                  ],
+                  "query": [
+                    {
+                      "key": "sourceAsset",
+                      "value": "XLM",
+                      "description": "Required"
+                    },
+                    {
+                      "key": "amount",
+                      "value": "1000000",
+                      "description": "Required"
+                    },
+                    {
+                      "key": "targetAddress",
+                      "value": "{{targetCAddress}}",
+                      "description": "Required"
+                    }
+                  ]
+                },
+                "description": "Returns estimated fee, expected receive amount, and exchange rate for a given asset and amount. Results are cached for 30 seconds."
+              },
+              "status": "Rate limit exceeded",
+              "code": 429,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"rate_limited\",\n  \"message\": \"rate limit exceeded\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fund",
+      "item": [
+        {
+          "name": "Submit a signed funding transaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/fund",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "fund"
+              ]
+            },
+            "description": "Submits a pre-signed Stellar transaction XDR to the Soroban bridge contract. Use POST /api/v2/fund/prepare to build the transaction first.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"signedXdr\": \"{{signedXdr}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([201, 400, 401, 500]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "201 Transaction submitted",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/fund",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "fund"
+                  ]
+                },
+                "description": "Submits a pre-signed Stellar transaction XDR to the Soroban bridge contract. Use POST /api/v2/fund/prepare to build the transaction first.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"signedXdr\": \"{{signedXdr}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Transaction submitted",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"pending\",\n  \"hash\": \"{{txHash}}\",\n  \"explorerUrl\": \"https://stellar.expert/explorer/testnet/tx/{{txHash}}\"\n}"
+            },
+            {
+              "name": "400 Invalid XDR or validation error",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/fund",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "fund"
+                  ]
+                },
+                "description": "Submits a pre-signed Stellar transaction XDR to the Soroban bridge contract. Use POST /api/v2/fund/prepare to build the transaction first.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"signedXdr\": \"{{signedXdr}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Invalid XDR or validation error",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"validation_error\",\n  \"message\": \"invalid request\",\n  \"details\": [\n    {\n      \"path\": \"field\",\n      \"message\": \"required\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/fund",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "fund"
+                  ]
+                },
+                "description": "Submits a pre-signed Stellar transaction XDR to the Soroban bridge contract. Use POST /api/v2/fund/prepare to build the transaction first.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"signedXdr\": \"{{signedXdr}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            },
+            {
+              "name": "500 Soroban RPC error",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/fund",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "fund"
+                  ]
+                },
+                "description": "Submits a pre-signed Stellar transaction XDR to the Soroban bridge contract. Use POST /api/v2/fund/prepare to build the transaction first.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"signedXdr\": \"{{signedXdr}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Soroban RPC error",
+              "code": 500,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"internal_error\",\n  \"message\": \"upstream service error\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Prepare an unsigned funding transaction for signing",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/fund/prepare",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "fund",
+                "prepare"
+              ]
+            },
+            "description": "Simulates the contract call and returns an unsigned transaction XDR for the client to sign. Sign this with your wallet and POST it to /api/v2/fund.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sourceAddress\": \"{{sourceAddress}}\",\n  \"targetAddress\": \"{{targetCAddress}}\",\n  \"tokenAddress\": \"{{tokenAddress}}\",\n  \"amount\": \"1000000\",\n  \"memo\": \"bridge-payment\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([200, 400, 401]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Unsigned transaction ready for signing",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/fund/prepare",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "fund",
+                    "prepare"
+                  ]
+                },
+                "description": "Simulates the contract call and returns an unsigned transaction XDR for the client to sign. Sign this with your wallet and POST it to /api/v2/fund.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"sourceAddress\": \"{{sourceAddress}}\",\n  \"targetAddress\": \"{{targetCAddress}}\",\n  \"tokenAddress\": \"{{tokenAddress}}\",\n  \"amount\": \"1000000\",\n  \"memo\": \"bridge-payment\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Unsigned transaction ready for signing",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"instruction\": \"Sign the returned transaction XDR, then submit it to POST /api/v2/fund.\",\n  \"simulation\": {\n    \"successful\": true\n  },\n  \"params\": {\n    \"sourceAddress\": \"{{sourceAddress}}\",\n    \"targetAddress\": \"{{targetCAddress}}\",\n    \"tokenAddress\": \"{{tokenAddress}}\",\n    \"amount\": \"1000000\",\n    \"memo\": \"bridge-payment\"\n  }\n}"
+            },
+            {
+              "name": "400 Validation error",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/fund/prepare",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "fund",
+                    "prepare"
+                  ]
+                },
+                "description": "Simulates the contract call and returns an unsigned transaction XDR for the client to sign. Sign this with your wallet and POST it to /api/v2/fund.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"sourceAddress\": \"{{sourceAddress}}\",\n  \"targetAddress\": \"{{targetCAddress}}\",\n  \"tokenAddress\": \"{{tokenAddress}}\",\n  \"amount\": \"1000000\",\n  \"memo\": \"bridge-payment\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Validation error",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"validation_error\",\n  \"message\": \"invalid request\",\n  \"details\": [\n    {\n      \"path\": \"field\",\n      \"message\": \"required\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/fund/prepare",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "fund",
+                    "prepare"
+                  ]
+                },
+                "description": "Simulates the contract call and returns an unsigned transaction XDR for the client to sign. Sign this with your wallet and POST it to /api/v2/fund.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"sourceAddress\": \"{{sourceAddress}}\",\n  \"targetAddress\": \"{{targetCAddress}}\",\n  \"tokenAddress\": \"{{tokenAddress}}\",\n  \"amount\": \"1000000\",\n  \"memo\": \"bridge-payment\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Status",
+      "item": [
+        {
+          "name": "Poll transaction status by hash",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/status/:txHash",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "status",
+                ":txHash"
+              ],
+              "variable": [
+                {
+                  "key": "txHash",
+                  "value": "{{txHash}}"
+                }
+              ]
+            },
+            "description": "Returns the current on-chain status of a Soroban transaction. Poll this endpoint until status is `success` or `failed`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([200, 400, 401]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Transaction status",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/status/:txHash",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "status",
+                    ":txHash"
+                  ],
+                  "variable": [
+                    {
+                      "key": "txHash",
+                      "value": "{{txHash}}"
+                    }
+                  ]
+                },
+                "description": "Returns the current on-chain status of a Soroban transaction. Poll this endpoint until status is `success` or `failed`."
+              },
+              "status": "Transaction status",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"success\",\n  \"hash\": \"{{txHash}}\",\n  \"explorerUrl\": \"https://stellar.expert/explorer/testnet/tx/{{txHash}}\"\n}"
+            },
+            {
+              "name": "400 Invalid tx hash",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/status/:txHash",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "status",
+                    ":txHash"
+                  ],
+                  "variable": [
+                    {
+                      "key": "txHash",
+                      "value": "{{txHash}}"
+                    }
+                  ]
+                },
+                "description": "Returns the current on-chain status of a Soroban transaction. Poll this endpoint until status is `success` or `failed`."
+              },
+              "status": "Invalid tx hash",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"validation_error\",\n  \"message\": \"invalid request\",\n  \"details\": [\n    {\n      \"path\": \"field\",\n      \"message\": \"required\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/status/:txHash",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "status",
+                    ":txHash"
+                  ],
+                  "variable": [
+                    {
+                      "key": "txHash",
+                      "value": "{{txHash}}"
+                    }
+                  ]
+                },
+                "description": "Returns the current on-chain status of a Soroban transaction. Poll this endpoint until status is `success` or `failed`."
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Offramp",
+      "item": [
+        {
+          "name": "Generate a MoonPay offramp widget URL",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/offramp/moonpay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "offramp",
+                "moonpay"
+              ]
+            },
+            "description": "Returns a pre-filled MoonPay widget URL for converting XLM to fiat.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currencyCode\": \"xlm\",\n  \"walletAddress\": \"{{targetCAddress}}\",\n  \"walletNetwork\": \"stellar\",\n  \"baseCurrencyAmount\": 100,\n  \"baseCurrencyCode\": \"USD\",\n  \"email\": \"user@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([200, 400, 401]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Widget URL",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/offramp/moonpay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "offramp",
+                    "moonpay"
+                  ]
+                },
+                "description": "Returns a pre-filled MoonPay widget URL for converting XLM to fiat.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"currencyCode\": \"xlm\",\n  \"walletAddress\": \"{{targetCAddress}}\",\n  \"walletNetwork\": \"stellar\",\n  \"baseCurrencyAmount\": 100,\n  \"baseCurrencyCode\": \"USD\",\n  \"email\": \"user@example.com\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Widget URL",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"url\": \"https://buy.moonpay.com?currencyCode=xlm&walletAddress={{targetCAddress}}\"\n}"
+            },
+            {
+              "name": "400 Validation error",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/offramp/moonpay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "offramp",
+                    "moonpay"
+                  ]
+                },
+                "description": "Returns a pre-filled MoonPay widget URL for converting XLM to fiat.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"currencyCode\": \"xlm\",\n  \"walletAddress\": \"{{targetCAddress}}\",\n  \"walletNetwork\": \"stellar\",\n  \"baseCurrencyAmount\": 100,\n  \"baseCurrencyCode\": \"USD\",\n  \"email\": \"user@example.com\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Validation error",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"validation_error\",\n  \"message\": \"invalid request\",\n  \"details\": [\n    {\n      \"path\": \"field\",\n      \"message\": \"required\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/offramp/moonpay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "offramp",
+                    "moonpay"
+                  ]
+                },
+                "description": "Returns a pre-filled MoonPay widget URL for converting XLM to fiat.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"currencyCode\": \"xlm\",\n  \"walletAddress\": \"{{targetCAddress}}\",\n  \"walletNetwork\": \"stellar\",\n  \"baseCurrencyAmount\": 100,\n  \"baseCurrencyCode\": \"USD\",\n  \"email\": \"user@example.com\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Generate a Transak offramp widget URL",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/offramp/transak",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "offramp",
+                "transak"
+              ]
+            },
+            "description": "Returns a pre-filled Transak widget URL for converting XLM to fiat.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletAddress\": \"{{targetCAddress}}\",\n  \"network\": \"stellar\",\n  \"fiatCurrency\": \"USD\",\n  \"cryptoCurrency\": \"XLM\",\n  \"fiatAmount\": 100,\n  \"email\": \"user@example.com\",\n  \"redirectURL\": \"https://example.com/complete\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([200, 400, 401]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Widget URL",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/offramp/transak",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "offramp",
+                    "transak"
+                  ]
+                },
+                "description": "Returns a pre-filled Transak widget URL for converting XLM to fiat.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"walletAddress\": \"{{targetCAddress}}\",\n  \"network\": \"stellar\",\n  \"fiatCurrency\": \"USD\",\n  \"cryptoCurrency\": \"XLM\",\n  \"fiatAmount\": 100,\n  \"email\": \"user@example.com\",\n  \"redirectURL\": \"https://example.com/complete\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Widget URL",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"url\": \"https://global.transak.com?cryptoCurrency=XLM&walletAddress={{targetCAddress}}\"\n}"
+            },
+            {
+              "name": "400 Validation error",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/offramp/transak",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "offramp",
+                    "transak"
+                  ]
+                },
+                "description": "Returns a pre-filled Transak widget URL for converting XLM to fiat.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"walletAddress\": \"{{targetCAddress}}\",\n  \"network\": \"stellar\",\n  \"fiatCurrency\": \"USD\",\n  \"cryptoCurrency\": \"XLM\",\n  \"fiatAmount\": 100,\n  \"email\": \"user@example.com\",\n  \"redirectURL\": \"https://example.com/complete\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Validation error",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"validation_error\",\n  \"message\": \"invalid request\",\n  \"details\": [\n    {\n      \"path\": \"field\",\n      \"message\": \"required\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/offramp/transak",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "offramp",
+                    "transak"
+                  ]
+                },
+                "description": "Returns a pre-filled Transak widget URL for converting XLM to fiat.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"walletAddress\": \"{{targetCAddress}}\",\n  \"network\": \"stellar\",\n  \"fiatCurrency\": \"USD\",\n  \"cryptoCurrency\": \"XLM\",\n  \"fiatAmount\": 100,\n  \"email\": \"user@example.com\",\n  \"redirectURL\": \"https://example.com/complete\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "CEX",
+      "item": [
+        {
+          "name": "Get CEX withdrawal routing instructions",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/cex/route",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "cex",
+                "route"
+              ]
+            },
+            "description": "Returns withdrawal configuration for routing from a supported CEX to a C-Address.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"binance\",\n  \"sourceAsset\": \"XLM\",\n  \"amount\": \"10000000\",\n  \"targetCAddress\": \"{{targetCAddress}}\",\n  \"targetNetwork\": \"stellar\",\n  \"memo\": \"cex-withdrawal\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([201, 400, 401]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "201 CEX withdrawal route",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/cex/route",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "cex",
+                    "route"
+                  ]
+                },
+                "description": "Returns withdrawal configuration for routing from a supported CEX to a C-Address.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"exchange\": \"binance\",\n  \"sourceAsset\": \"XLM\",\n  \"amount\": \"10000000\",\n  \"targetCAddress\": \"{{targetCAddress}}\",\n  \"targetNetwork\": \"stellar\",\n  \"memo\": \"cex-withdrawal\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "CEX withdrawal route",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"exchange\": \"binance\",\n  \"withdrawalAddress\": \"{{targetCAddress}}\",\n  \"memo\": \"cex-withdrawal\",\n  \"network\": \"stellar\",\n  \"amount\": \"10000000\"\n}"
+            },
+            {
+              "name": "400 Validation error",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/cex/route",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "cex",
+                    "route"
+                  ]
+                },
+                "description": "Returns withdrawal configuration for routing from a supported CEX to a C-Address.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"exchange\": \"binance\",\n  \"sourceAsset\": \"XLM\",\n  \"amount\": \"10000000\",\n  \"targetCAddress\": \"{{targetCAddress}}\",\n  \"targetNetwork\": \"stellar\",\n  \"memo\": \"cex-withdrawal\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Validation error",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"validation_error\",\n  \"message\": \"invalid request\",\n  \"details\": [\n    {\n      \"path\": \"field\",\n      \"message\": \"required\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v2/cex/route",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v2",
+                    "cex",
+                    "route"
+                  ]
+                },
+                "description": "Returns withdrawal configuration for routing from a supported CEX to a C-Address.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"exchange\": \"binance\",\n  \"sourceAsset\": \"XLM\",\n  \"amount\": \"10000000\",\n  \"targetCAddress\": \"{{targetCAddress}}\",\n  \"targetNetwork\": \"stellar\",\n  \"memo\": \"cex-withdrawal\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "API Keys",
+      "item": [
+        {
+          "name": "Create a new API key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "keys"
+              ]
+            },
+            "description": "Creates an API key with specified scopes. The raw key is only returned once — store it securely.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"my-integration\",\n  \"scopes\": [\n    \"quote:read\",\n    \"fund:write\",\n    \"status:read\"\n  ],\n  \"ipWhitelist\": [],\n  \"expiresAt\": null,\n  \"rateLimit\": \"standard\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([201, 400, 401]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "201 API key created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/keys",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "keys"
+                  ]
+                },
+                "description": "Creates an API key with specified scopes. The raw key is only returned once — store it securely.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"my-integration\",\n  \"scopes\": [\n    \"quote:read\",\n    \"fund:write\",\n    \"status:read\"\n  ],\n  \"ipWhitelist\": [],\n  \"expiresAt\": null,\n  \"rateLimit\": \"standard\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "API key created",
+              "code": 201,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"rawKey\": \"cab_example_raw_key_store_securely\",\n  \"id\": \"{{apiKeyId}}\",\n  \"name\": \"my-integration\",\n  \"scopes\": [\n    \"quote:read\",\n    \"fund:write\",\n    \"status:read\"\n  ]\n}"
+            },
+            {
+              "name": "400 Validation error",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/keys",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "keys"
+                  ]
+                },
+                "description": "Creates an API key with specified scopes. The raw key is only returned once — store it securely.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"my-integration\",\n  \"scopes\": [\n    \"quote:read\",\n    \"fund:write\",\n    \"status:read\"\n  ],\n  \"ipWhitelist\": [],\n  \"expiresAt\": null,\n  \"rateLimit\": \"standard\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Validation error",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"validation_error\",\n  \"message\": \"invalid request\",\n  \"details\": [\n    {\n      \"path\": \"field\",\n      \"message\": \"required\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/keys",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "keys"
+                  ]
+                },
+                "description": "Creates an API key with specified scopes. The raw key is only returned once — store it securely.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"my-integration\",\n  \"scopes\": [\n    \"quote:read\",\n    \"fund:write\",\n    \"status:read\"\n  ],\n  \"ipWhitelist\": [],\n  \"expiresAt\": null,\n  \"rateLimit\": \"standard\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "List all API keys",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "keys"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 List of keys",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/keys",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "keys"
+                  ]
+                }
+              },
+              "status": "List of keys",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"keys\": [\n    {\n      \"id\": \"{{apiKeyId}}\",\n      \"name\": \"my-integration\",\n      \"scopes\": [\n        \"quote:read\",\n        \"fund:write\",\n        \"status:read\"\n      ],\n      \"revoked\": false\n    }\n  ]\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/keys",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "keys"
+                  ]
+                }
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Revoke an API key",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/keys/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "keys",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "{{apiKeyId}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([200, 401, 404]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Key revoked",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/keys/:id",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "keys",
+                    ":id"
+                  ],
+                  "variable": [
+                    {
+                      "key": "id",
+                      "value": "{{apiKeyId}}"
+                    }
+                  ]
+                }
+              },
+              "status": "Key revoked",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"revoked\": true\n}"
+            },
+            {
+              "name": "401 Missing or invalid API key",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/keys/:id",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "keys",
+                    ":id"
+                  ],
+                  "variable": [
+                    {
+                      "key": "id",
+                      "value": "{{apiKeyId}}"
+                    }
+                  ]
+                }
+              },
+              "status": "Missing or invalid API key",
+              "code": 401,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"missing API key\"\n}"
+            },
+            {
+              "name": "404 Key not found",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/v1/keys/:id",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "keys",
+                    ":id"
+                  ],
+                  "variable": [
+                    {
+                      "key": "id",
+                      "value": "{{apiKeyId}}"
+                    }
+                  ]
+                }
+              },
+              "status": "Key not found",
+              "code": 404,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"not_found\",\n  \"message\": \"resource not found\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Server health check",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Returns server health and circuit breaker states. Returns 503 during graceful shutdown."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status code is documented\", function () {",
+                  "  pm.expect([200, 503]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test(\"JSON responses are valid\", function () {",
+                  "  if ((pm.response.headers.get(\"Content-Type\") || \"\").includes(\"application/json\")) pm.response.json();",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Healthy",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/health",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "health"
+                  ]
+                },
+                "description": "Returns server health and circuit breaker states. Returns 503 during graceful shutdown."
+              },
+              "status": "Healthy",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"ok\",\n  \"timestamp\": 1767225600000,\n  \"circuits\": {\n    \"soroban\": \"closed\",\n    \"moonpay\": \"closed\",\n    \"transak\": \"closed\",\n    \"cex\": \"closed\"\n  }\n}"
+            },
+            {
+              "name": "503 Shutting down",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/health",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "health"
+                  ]
+                },
+                "description": "Returns server health and circuit breaker states. Returns 503 during graceful shutdown."
+              },
+              "status": "Shutting down",
+              "code": 503,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"validation_error\",\n  \"message\": \"invalid request\",\n  \"details\": [\n    {\n      \"path\": \"field\",\n      \"message\": \"required\"\n    }\n  ]\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

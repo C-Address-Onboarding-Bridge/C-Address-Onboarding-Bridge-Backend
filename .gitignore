@@ -16,3 +16,6 @@ coverage/
 !.vscode/extensions.json
 test_snapshots/
 deployments/*.json
+.secrets.local.json
+.secrets.local.enc
+logs/secrets-audit.jsonl

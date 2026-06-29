@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { logger } from '../index';
+import { hashPayload, integrityAuditLog } from './auditLog';
 
 export interface WebhookRegistration {
   id: string;
@@ -118,6 +119,16 @@ export class WebhookDeliveryService {
       clearTimeout(timeout);
       attempt.statusCode = response.status;
 
+      integrityAuditLog.append('webhook_delivery', {
+        payloadHash: hashPayload(payload),
+        destination: registration.url,
+        registrationId: registration.id,
+        event,
+        attemptNumber: attemptNumber + 1,
+        statusCode: response.status,
+        result: response.ok ? 'success' : 'failed',
+      }, registration.apiKey);
+
       if (response.ok) {
         logger.info(
           { registrationId: registration.id, url: registration.url, event, attempt: attemptNumber + 1 },
@@ -134,6 +145,15 @@ export class WebhookDeliveryService {
       );
     } catch (err) {
       attempt.error = err instanceof Error ? err.message : 'unknown error';
+      integrityAuditLog.append('webhook_delivery', {
+        payloadHash: hashPayload(payload),
+        destination: registration.url,
+        registrationId: registration.id,
+        event,
+        attemptNumber: attemptNumber + 1,
+        result: 'error',
+        error: attempt.error,
+      }, registration.apiKey);
       logger.warn(
         { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
         'webhook delivery error',

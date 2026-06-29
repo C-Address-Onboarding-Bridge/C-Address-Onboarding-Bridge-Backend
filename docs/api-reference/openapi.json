@@ -1,0 +1,1197 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "C-Address Onboarding Bridge API",
+    "version": "2.0.0",
+    "description": "Bridge API for seamless C-Address onboarding on the Stellar network.\n\n## Authentication\n\nAll endpoints (except `/health` and webhooks) require an **API key** in the `X-API-Key` header.\n\n```\nX-API-Key: your-api-key-here\n```\n\nKeys are scoped — you need the matching scope for each endpoint (e.g. `quote:read` for the quote endpoint).\n\n## Rate Limits\n\n| Scope | Limit |\n|-------|-------|\n| quote | 30 req/min |\n| fund, offramp, cex, status | 100 req/min |\n| admin | 500 req/min |\n\nRate limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`) are returned on every response.\n\n## Idempotency\n\nFunding submissions are idempotent — retrying with the same signed XDR will return the existing result.\n\n## Versioning\n\nThe API supports versioned paths (`/api/v1/`, `/api/v2/`) and content-type negotiation via the `Accept: application/vnd.bridge+json; version=2` header.\n\n## Example: full funding flow\n\n```bash\n# 1. Get a quote\ncurl -X GET \"http://localhost:3001/api/v2/quote?sourceAsset=XLM&amount=1000000&targetAddress=GABCDE...XYZ\" \\\n  -H \"X-API-Key: your-key\"\n\n# 2. Prepare the transaction (sign in your wallet)\ncurl -X POST http://localhost:3001/api/v2/fund/prepare \\\n  -H \"X-API-Key: your-key\" -H \"Content-Type: application/json\" \\\n  -d '{\"sourceAddress\":\"GABCD...\",\"targetAddress\":\"CABCD...\",\"tokenAddress\":\"CABCD...\",\"amount\":\"1000000\"}'\n\n# 3. Submit the signed XDR\ncurl -X POST http://localhost:3001/api/v2/fund \\\n  -H \"X-API-Key: your-key\" -H \"Content-Type: application/json\" \\\n  -d '{\"signedXdr\":\"AAAAAgAAAA...\"}'\n\n# 4. Poll for status\ncurl -X GET http://localhost:3001/api/v2/status/abc123...def \\\n  -H \"X-API-Key: your-key\"\n```",
+    "contact": {
+      "name": "Bridge API",
+      "url": "https://github.com/C-Address-Onboarding-Bridge"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3001",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Server health and readiness"
+    },
+    {
+      "name": "Quote",
+      "description": "Get fee quotes for funding transactions"
+    },
+    {
+      "name": "Fund",
+      "description": "Submit and prepare funding transactions"
+    },
+    {
+      "name": "Status",
+      "description": "Poll transaction status on Soroban"
+    },
+    {
+      "name": "Offramp",
+      "description": "Generate offramp widget URLs (MoonPay, Transak)"
+    },
+    {
+      "name": "CEX",
+      "description": "CEX withdrawal routing"
+    },
+    {
+      "name": "API Keys",
+      "description": "Manage API keys and permissions"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "API key for authenticating requests. Obtainable via POST /api/v1/keys."
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "validation_error"
+          },
+          "message": {
+            "type": "string",
+            "example": "invalid request"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "message"
+              ]
+            }
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse"
+      },
+      "TxStatusResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "success",
+              "failed"
+            ]
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "64-char hex transaction hash",
+            "example": "a1b2c3d4..."
+          },
+          "explorerUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "explorerUrls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "hash"
+        ],
+        "title": "TxStatusResponse"
+      },
+      "QuoteParams": {
+        "type": "object",
+        "properties": {
+          "sourceAsset": {
+            "type": "string",
+            "minLength": 1,
+            "example": "XLM"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d+$",
+            "description": "Amount in stroops (1 XLM = 10,000,000 stroops)",
+            "example": "1000000"
+          },
+          "targetAddress": {
+            "type": "string",
+            "pattern": "^[GC][A-Z2-7]{55}$",
+            "description": "Stellar/C-Address (56-char base32)",
+            "example": "GABCDE...WXYZ"
+          }
+        },
+        "required": [
+          "sourceAsset",
+          "amount",
+          "targetAddress"
+        ],
+        "title": "QuoteParams"
+      },
+      "QuoteResponse": {
+        "type": "object",
+        "properties": {
+          "estimatedFee": {
+            "type": "string",
+            "example": "3000"
+          },
+          "expectedReceive": {
+            "type": "string",
+            "example": "997000"
+          },
+          "feeBps": {
+            "type": "integer",
+            "example": 30
+          },
+          "rate": {
+            "type": "string",
+            "example": "1.0"
+          }
+        },
+        "required": [
+          "estimatedFee",
+          "expectedReceive",
+          "feeBps",
+          "rate"
+        ],
+        "title": "QuoteResponse"
+      },
+      "FundRequest": {
+        "type": "object",
+        "properties": {
+          "signedXdr": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Base64-encoded signed Stellar transaction XDR",
+            "example": "AAAAAgAAAABxy..."
+          }
+        },
+        "required": [
+          "signedXdr"
+        ],
+        "title": "FundRequest"
+      },
+      "FundPrepareRequest": {
+        "type": "object",
+        "properties": {
+          "sourceAddress": {
+            "type": "string",
+            "pattern": "^[GC][A-Z2-7]{55}$",
+            "description": "Stellar/C-Address (56-char base32)",
+            "example": "GABCDE...WXYZ"
+          },
+          "targetAddress": {
+            "type": "string",
+            "pattern": "^[GC][A-Z2-7]{55}$",
+            "description": "Stellar/C-Address (56-char base32)",
+            "example": "GABCDE...WXYZ"
+          },
+          "tokenAddress": {
+            "type": "string",
+            "pattern": "^[GC][A-Z2-7]{55}$",
+            "description": "Token contract address",
+            "example": "GABCDE...WXYZ"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d+$",
+            "description": "Amount in stroops (1 XLM = 10,000,000 stroops)",
+            "example": "1000000"
+          },
+          "memo": {
+            "type": "string",
+            "maxLength": 64,
+            "example": "bridge-payment"
+          }
+        },
+        "required": [
+          "sourceAddress",
+          "targetAddress",
+          "tokenAddress",
+          "amount"
+        ],
+        "title": "FundPrepareRequest"
+      },
+      "MoonpayOfframpRequest": {
+        "type": "object",
+        "properties": {
+          "currencyCode": {
+            "type": "string",
+            "default": "xlm",
+            "example": "xlm"
+          },
+          "walletAddress": {
+            "type": "string",
+            "pattern": "^[GC][A-Z2-7]{55}$",
+            "description": "Stellar/C-Address (56-char base32)",
+            "example": "GABCDE...WXYZ"
+          },
+          "walletNetwork": {
+            "type": "string",
+            "default": "stellar",
+            "example": "stellar"
+          },
+          "baseCurrencyAmount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "example": 100
+          },
+          "baseCurrencyCode": {
+            "type": "string",
+            "example": "USD"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "user@example.com"
+          }
+        },
+        "required": [
+          "walletAddress"
+        ],
+        "title": "MoonpayOfframpRequest"
+      },
+      "TransakOfframpRequest": {
+        "type": "object",
+        "properties": {
+          "walletAddress": {
+            "type": "string",
+            "pattern": "^[GC][A-Z2-7]{55}$",
+            "description": "Stellar/C-Address (56-char base32)",
+            "example": "GABCDE...WXYZ"
+          },
+          "network": {
+            "type": "string",
+            "default": "stellar",
+            "example": "stellar"
+          },
+          "fiatCurrency": {
+            "type": "string",
+            "example": "USD"
+          },
+          "cryptoCurrency": {
+            "type": "string",
+            "example": "XLM"
+          },
+          "fiatAmount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "example": 100
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "user@example.com"
+          },
+          "redirectURL": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "walletAddress"
+        ],
+        "title": "TransakOfframpRequest"
+      },
+      "WidgetUrlResponse": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "WidgetUrlResponse"
+      },
+      "CexRouteRequest": {
+        "type": "object",
+        "properties": {
+          "exchange": {
+            "type": "string",
+            "enum": [
+              "binance",
+              "coinbase",
+              "kraken",
+              "generic"
+            ],
+            "example": "binance"
+          },
+          "sourceAsset": {
+            "type": "string",
+            "minLength": 1,
+            "example": "XLM"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d+$",
+            "description": "Amount in stroops (1 XLM = 10,000,000 stroops)",
+            "example": "1000000"
+          },
+          "targetCAddress": {
+            "type": "string",
+            "pattern": "^[GC][A-Z2-7]{55}$",
+            "description": "Stellar/C-Address (56-char base32)",
+            "example": "GABCDE...WXYZ"
+          },
+          "targetNetwork": {
+            "type": "string",
+            "default": "stellar"
+          },
+          "memo": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "exchange",
+          "sourceAsset",
+          "amount",
+          "targetCAddress"
+        ],
+        "title": "CexRouteRequest"
+      },
+      "CreateKeyRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "example": "my-integration"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "quote:read",
+                "fund:write",
+                "status:read",
+                "offramp:write",
+                "cex:read",
+                "admin:keys"
+              ]
+            },
+            "minItems": 1,
+            "example": [
+              "quote:read",
+              "fund:write",
+              "status:read"
+            ]
+          },
+          "ipWhitelist": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "192.168.1.0/24"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "example": 1893456000000
+          },
+          "rateLimit": {
+            "type": "string",
+            "enum": [
+              "low",
+              "standard",
+              "high"
+            ],
+            "example": "standard"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "title": "CreateKeyRequest"
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/api/v2/quote": {
+      "get": {
+        "operationId": "getQuote",
+        "summary": "Get a fee quote for a funding transaction",
+        "description": "Returns estimated fee, expected receive amount, and exchange rate for a given asset and amount. Results are cached for 30 seconds.",
+        "tags": [
+          "Quote"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "quote:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "XLM"
+            },
+            "required": true,
+            "name": "sourceAsset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$",
+              "description": "Amount in stroops (1 XLM = 10,000,000 stroops)",
+              "example": "1000000"
+            },
+            "required": true,
+            "name": "amount",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[GC][A-Z2-7]{55}$",
+              "description": "Stellar/C-Address (56-char base32)",
+              "example": "GABCDE...WXYZ"
+            },
+            "required": true,
+            "name": "targetAddress",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Quote calculated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/fund": {
+      "post": {
+        "operationId": "submitFunding",
+        "summary": "Submit a signed funding transaction",
+        "description": "Submits a pre-signed Stellar transaction XDR to the Soroban bridge contract. Use POST /api/v2/fund/prepare to build the transaction first.",
+        "tags": [
+          "Fund"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "fund:write"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FundRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Transaction submitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TxStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid XDR or validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Soroban RPC error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/fund/prepare": {
+      "post": {
+        "operationId": "prepareFunding",
+        "summary": "Prepare an unsigned funding transaction for signing",
+        "description": "Simulates the contract call and returns an unsigned transaction XDR for the client to sign. Sign this with your wallet and POST it to /api/v2/fund.",
+        "tags": [
+          "Fund"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "fund:write"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FundPrepareRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Unsigned transaction ready for signing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "instruction": {
+                      "type": "string"
+                    },
+                    "simulation": {},
+                    "params": {
+                      "$ref": "#/components/schemas/FundPrepareRequest"
+                    }
+                  },
+                  "required": [
+                    "instruction",
+                    "params"
+                  ],
+                  "title": "FundPrepareResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/status/{txHash}": {
+      "get": {
+        "operationId": "getTransactionStatus",
+        "summary": "Poll transaction status by hash",
+        "description": "Returns the current on-chain status of a Soroban transaction. Poll this endpoint until status is `success` or `failed`.",
+        "tags": [
+          "Status"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "status:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "description": "64-char hex transaction hash",
+              "example": "a1b2c3d4..."
+            },
+            "required": true,
+            "name": "txHash",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TxStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid tx hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/offramp/moonpay": {
+      "post": {
+        "operationId": "moonpayOfframp",
+        "summary": "Generate a MoonPay offramp widget URL",
+        "description": "Returns a pre-filled MoonPay widget URL for converting XLM to fiat.",
+        "tags": [
+          "Offramp"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "offramp:write"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoonpayOfframpRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Widget URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WidgetUrlResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/offramp/transak": {
+      "post": {
+        "operationId": "transakOfframp",
+        "summary": "Generate a Transak offramp widget URL",
+        "description": "Returns a pre-filled Transak widget URL for converting XLM to fiat.",
+        "tags": [
+          "Offramp"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "offramp:write"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransakOfframpRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Widget URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WidgetUrlResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/cex/route": {
+      "post": {
+        "operationId": "cexRoute",
+        "summary": "Get CEX withdrawal routing instructions",
+        "description": "Returns withdrawal configuration for routing from a supported CEX to a C-Address.",
+        "tags": [
+          "CEX"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "cex:read"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CexRouteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "CEX withdrawal route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "exchange": {
+                      "type": "string"
+                    },
+                    "withdrawalAddress": {
+                      "type": "string"
+                    },
+                    "memo": {
+                      "type": "string"
+                    },
+                    "network": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "exchange",
+                    "withdrawalAddress",
+                    "network",
+                    "amount"
+                  ],
+                  "title": "CexRouteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/keys": {
+      "post": {
+        "operationId": "createApiKey",
+        "summary": "Create a new API key",
+        "description": "Creates an API key with specified scopes. The raw key is only returned once — store it securely.",
+        "tags": [
+          "API Keys"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateKeyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "API key created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rawKey": {
+                      "type": "string",
+                      "description": "Store this — it cannot be retrieved again"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "rawKey",
+                    "id",
+                    "name",
+                    "scopes"
+                  ],
+                  "title": "CreateKeyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listApiKeys",
+        "summary": "List all API keys",
+        "tags": [
+          "API Keys"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {}
+                    }
+                  },
+                  "required": [
+                    "keys"
+                  ],
+                  "title": "KeyListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/keys/{id}": {
+      "delete": {
+        "operationId": "revokeApiKey",
+        "summary": "Revoke an API key",
+        "tags": [
+          "API Keys"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "example": "uuid-v4"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Key revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "revoked"
+                  ],
+                  "title": "RevokeKeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Key not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "summary": "Server health check",
+        "description": "Returns server health and circuit breaker states. Returns 503 during graceful shutdown.",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "shutting_down"
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "number"
+                    },
+                    "circuits": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "timestamp",
+                    "circuits"
+                  ],
+                  "title": "HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Shutting down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

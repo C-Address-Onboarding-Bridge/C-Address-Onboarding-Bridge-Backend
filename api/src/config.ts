@@ -1,3 +1,7 @@
+import { initializeSecrets } from './secrets/manager';
+
+initializeSecrets();
+
 /** Thrown at startup when a required environment variable is missing. */
 export class ConfigError extends Error {
   constructor(key: string) {

@@ -8,18 +8,68 @@ jobs:
   benchmark:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: npm
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build API
+      run: npm run build --workspace api
+
     - name: Install k6
+      uses: grafana/setup-k6-action@v1
+
+    - name: Start API
+      env:
+        NODE_ENV: benchmark
+        PORT: 3001
+        SOROBAN_RPC_URL: https://soroban-rpc.testnet.stellar.org
+        BRIDGE_FEE_BPS: 30
+        JOBS_ENABLED: 'false'
       run: |
-        sudo gpg -k
-        sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
-        echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
-        sudo apt-get update
-        sudo apt-get install k6
+        export API_KEYS="$(seq -f 'benchmark-api-key-%.0f' -s, 1 20)"
+        npm run start --workspace api > /tmp/bridge-api.log 2>&1 &
+        echo $! > /tmp/bridge-api.pid
+        for i in {1..30}; do
+          if curl -fsS http://localhost:3001/health/live >/dev/null; then
+            exit 0
+          fi
+          sleep 1
+        done
+        cat /tmp/bridge-api.log
+        exit 1
+
     - name: Run k6 benchmarks
+      env:
+        API_BASE_URL: http://localhost:3001
+        API_KEY_PREFIX: benchmark-api-key-
+        K6_TARGET_VUS: 20
+        K6_SLEEP_SECONDS: 3
       run: k6 run api/tests/performance.k6.js
+
+    - name: Stop API
+      if: always()
+      run: |
+        if [ -f /tmp/bridge-api.pid ]; then
+          kill $(cat /tmp/bridge-api.pid) || true
+        fi
+
+    - name: Upload API logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-api-logs
+        path: /tmp/bridge-api.log
+
     - name: Comment PR
-      uses: actions/github-script@v6
+      if: success()
+      uses: actions/github-script@v7
       with:
         script: |
           github.rest.issues.createComment({

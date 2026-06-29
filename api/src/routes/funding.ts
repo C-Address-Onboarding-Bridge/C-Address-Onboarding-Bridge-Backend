@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { sorobanService } from '../services/soroban';
 import { explorerService } from '../services/explorer';
 import { idempotencyMiddleware } from '../middleware/idempotency';
+import { hashPayload, integrityAuditLog } from '../services/auditLog';
+import { config } from '../config';
 
 /** Express router for funding endpoints. Mounted at `/api/v1/fund`. */
 export const fundingRouter = Router();
@@ -26,6 +28,12 @@ fundingRouter.post('/', idempotencyMiddleware, async (req: Request, res: Respons
     req.log?.info({ path: req.path }, 'fund transaction submission started');
     const body = fundSchema.parse(req.body);
     const result = await sorobanService.submitFundingTransaction(body.signedXdr);
+    integrityAuditLog.append('transaction_submission_result', {
+      txHash: result.hash,
+      status: result.status,
+      signedXdrHash: hashPayload(body.signedXdr),
+      error: result.error,
+    }, req.apiKeyRecord?.id ?? 'api-key');
     req.log?.info({ txHash: result.hash, status: result.status }, 'fund transaction submitted');
     res.status(201).json({
       ...result,
@@ -46,6 +54,14 @@ fundingRouter.post('/prepare', async (req: Request, res: Response, next: NextFun
       body.sourceAddress,
       'fund_c_address',
     );
+    integrityAuditLog.append('transaction_submission', {
+      amount: body.amount,
+      feeBps: config.soroban.feeBps,
+      source: body.sourceAddress,
+      destination: body.targetAddress,
+      tokenAddress: body.tokenAddress,
+      memoHash: body.memo ? hashPayload(body.memo) : undefined,
+    }, req.apiKeyRecord?.id ?? 'api-key');
     res.json({
       instruction: 'sign the following transaction with your wallet and submit to POST /api/v1/fund',
       simulation,

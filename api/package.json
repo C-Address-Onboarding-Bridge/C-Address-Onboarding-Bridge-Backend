@@ -15,7 +15,9 @@
     "migrate:status": "tsx scripts/migrate.ts status",
     "migrate:seed": "tsx scripts/migrate.ts seed",
     "worker": "tsx src/jobs/worker.ts",
-    "worker:prod": "node dist/jobs/worker.js"
+    "worker:prod": "node dist/jobs/worker.js",
+    "api-reference:generate": "tsx src/scripts/generate-api-reference.ts",
+    "api-reference:check": "vitest run src/__tests__/apiReference.test.ts"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.4",

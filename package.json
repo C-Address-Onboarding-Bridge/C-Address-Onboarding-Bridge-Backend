@@ -12,7 +12,13 @@
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
     "audit:dependencies": "npm audit --omit=dev --json > reports/dependency-audit.json || true && node scripts/dependency-vulnerability-monitor.mjs reports/dependency-audit.json",
-    "prepare": "husky"
+    "prepare": "husky",
+    "secrets:scan": "node scripts/secrets.mjs scan --staged",
+    "secrets:encrypt": "node scripts/secrets.mjs encrypt",
+    "secrets:decrypt": "node scripts/secrets.mjs decrypt",
+    "secrets:rotate": "node scripts/secrets.mjs rotate",
+    "secrets:schema": "node scripts/secrets.mjs schema",
+    "secrets:scan:all": "node scripts/secrets.mjs scan --all"
   },
   "dependencies": {
     "ioredis": "^5.11.1"
