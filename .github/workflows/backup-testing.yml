@@ -1,0 +1,140 @@
+name: Automated Backup Testing
+
+on:
+  schedule:
+    # Monthly backup restoration test (1st of each month at 2:00 AM UTC)
+    - cron: "0 2 1 * *"
+  workflow_dispatch:
+    inputs:
+      backup_id:
+        description: "Specific backup ID to test (leave empty for latest)"
+        required: false
+        type: string
+
+env:
+  AWS_REGION: us-east-1
+  BACKUP_S3_BUCKET: bridge-backups
+
+jobs:
+  test-backup-restore:
+    name: Test Backup Restoration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_BACKUP_TEST_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-15
+
+      - name: Make scripts executable
+        run: |
+          chmod +x scripts/backup-db.sh
+          chmod +x scripts/verify-backup.sh
+          chmod +x scripts/test-restore.sh
+
+      - name: Run backup restoration test
+        id: restore-test
+        env:
+          BACKUP_S3_BUCKET: ${{ env.BACKUP_S3_BUCKET }}
+          TEST_DB_HOST: ${{ secrets.TEST_DB_HOST }}
+          TEST_DB_PORT: ${{ secrets.TEST_DB_PORT }}
+          TEST_DB_USER: ${{ secrets.TEST_DB_USER }}
+          PGPASSWORD: ${{ secrets.TEST_DB_PASSWORD }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -n "${{ inputs.backup_id }}" ]; then
+            ./scripts/test-restore.sh \
+              --target test \
+              --backup-id "${{ inputs.backup_id }}"
+          else
+            ./scripts/test-restore.sh \
+              --target test \
+              --latest-backup
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-restoration-test-results
+          path: |
+            /tmp/restore-test-report.json
+          retention-days: 90
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "# Backup Restoration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Details" >> $GITHUB_STEP_SUMMARY
+          echo "- Target Environment: test" >> $GITHUB_STEP_SUMMARY
+          echo "- Backup Source: ${{ inputs.backup_id || 'latest' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review test results in artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "2. Verify database connectivity and data integrity" >> $GITHUB_STEP_SUMMARY
+          echo "3. Document any issues in incident log" >> $GITHUB_STEP_SUMMARY
+
+  verify-backup-integrity:
+    name: Verify Latest Backup Integrity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_BACKUP_TEST_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-15
+
+      - name: Make scripts executable
+        run: chmod +x scripts/verify-backup.sh
+
+      - name: Get latest backup ID
+        id: get-backup
+        run: |
+          LATEST_BACKUP=$(aws s3 ls s3://${{ env.BACKUP_S3_BUCKET }}/database/full/ | \
+            awk '{print $2}' | tr -d '/' | sort -r | head -1)
+          echo "backup_id=$LATEST_BACKUP" >> $GITHUB_OUTPUT
+          echo "Latest backup: $LATEST_BACKUP"
+
+      - name: Verify backup integrity
+        env:
+          BACKUP_S3_BUCKET: ${{ env.BACKUP_S3_BUCKET }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          ./scripts/verify-backup.sh --backup-id "${{ steps.get-backup.outputs.backup_id }}"
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-verification-report
+          path: |
+            /tmp/verification-report.json
+          retention-days: 90
