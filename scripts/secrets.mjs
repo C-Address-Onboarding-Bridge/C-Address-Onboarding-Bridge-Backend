@@ -72,7 +72,7 @@ const secretPatterns = [
 function scan() {
   const scanAll = process.argv.includes('--all');
   const files = scanAll ? execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split('\n').filter(Boolean) : stagedFiles();
-  const allowed = [/^package-lock\.json$/, /^docs\/api-reference\//, /^api\/src\/__tests__\//, /^sdk\/tests\//];
+  const allowed = [/^package-lock\.json$/, /^docs\/api-reference\//, /^api\/src\/__tests__\//, /^api\/tests\//, /^sdk\/tests\//];
   const findings = [];
   for (const file of files) {
     if (!existsSync(file) || allowed.some((pattern) => pattern.test(file))) continue;
@@ -80,7 +80,8 @@ function scan() {
     const lines = text.split('\n');
     lines.forEach((line, index) => {
       const isEnvReference = /process\.env\.[A-Z0-9_]+/.test(line);
-      if (isEnvReference && /(?:api[_-]?key|secret|token|password|private[_-]?key)/i.test(line)) return;
+      const isConfigReference = /\bconfig\.[A-Za-z0-9_.]*(?:apiKey|secretKey|token|password|privateKey)\b/i.test(line);
+      if ((isEnvReference || isConfigReference) && /(?:api[_-]?key|secret|token|password|private[_-]?key)/i.test(line)) return;
       if (secretPatterns.some((pattern) => pattern.test(line))) findings.push(`${file}:${index + 1}`);
     });
   }

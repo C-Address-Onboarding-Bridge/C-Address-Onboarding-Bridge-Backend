@@ -4,6 +4,7 @@ import { sorobanService } from '../services/soroban';
 import { cacheGet, cacheSet } from '../services/cache';
 import { config } from '../config';
 
+/** Express router for quote endpoints. Mounted at `/api/v1/quote`. */
 export const quoteRouter = Router();
 
 const stellarAddressRegex = /^[GC][A-Z2-7]{55}$/;

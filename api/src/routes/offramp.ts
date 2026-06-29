@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { moonpayService } from '../services/moonpay';
 import { transakService } from '../services/transak';
 
+/** Express router for off-ramp widget URL generation. Mounted at `/api/v1/offramp`. */
 export const offrampRouter = Router();
 
 const stellarAddressRegex = /^[GC][A-Z2-7]{55}$/;

@@ -4,10 +4,10 @@ import { sorobanService } from '../services/soroban';
 import { explorerService } from '../services/explorer';
 import { idempotencyMiddleware } from '../middleware/idempotency';
 
+/** Express router for funding endpoints. Mounted at `/api/v1/fund`. */
 export const fundingRouter = Router();
 
 const stellarAddressRegex = /^[GC][A-Z2-7]{55}$/;
-const contractIdRegex = /^[GC][A-Z2-7]{55}$/;
 
 const fundSchema = z.object({
   signedXdr: z.string().min(1, 'signed transaction XDR is required'),
@@ -16,7 +16,7 @@ const fundSchema = z.object({
 const fundDirectSchema = z.object({
   sourceAddress: z.string().regex(stellarAddressRegex, 'invalid source Stellar address'),
   targetAddress: z.string().regex(stellarAddressRegex, 'invalid target C-address'),
-  tokenAddress: z.string().regex(contractIdRegex, 'invalid token contract address'),
+  tokenAddress: z.string().regex(stellarAddressRegex, 'invalid token contract address'),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
   memo: z.string().max(64).default(''),
 });
@@ -40,6 +40,8 @@ fundingRouter.post('/', idempotencyMiddleware, async (req: Request, res: Respons
 fundingRouter.post('/prepare', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = fundDirectSchema.parse(req.body);
+    // TODO: pass all validated fields (targetAddress, tokenAddress, amount, memo) into
+    // contractSimulate once the Soroban simulation is fully implemented.
     const simulation = await sorobanService.contractSimulate(
       body.sourceAddress,
       'fund_c_address',

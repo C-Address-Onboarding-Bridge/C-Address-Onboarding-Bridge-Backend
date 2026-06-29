@@ -11,6 +11,7 @@ interface TransakWidgetParams {
   redirectURL?: string;
 }
 
+/** Handles Transak widget URL generation for fiat on-ramp flows. */
 export class TransakService {
   private apiKey: string;
   private environment: string;
@@ -20,6 +21,13 @@ export class TransakService {
     this.environment = config.transak.environment;
   }
 
+  /**
+   * Builds a Transak widget URL for the given parameters.
+   * Uses the staging endpoint unless `TRANSAK_ENVIRONMENT=PRODUCTION`.
+   *
+   * @param params - Widget configuration; `apiKey` is injected automatically.
+   * @returns Fully-formed URL to open in a browser or WebView.
+   */
   generateWidgetUrl(params: Omit<TransakWidgetParams, 'apiKey'>): string {
     const baseUrl = this.environment === 'PRODUCTION'
       ? 'https://global.transak.com'

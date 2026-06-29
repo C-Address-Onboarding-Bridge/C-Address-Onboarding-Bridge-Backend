@@ -44,11 +44,15 @@ export class WebhookSimulator {
    * Returns the supertest Test so callers can chain .expect() assertions.
    */
   send(provider: Provider, payload: object, opts: SendOptions = {}): Test {
-    // Patch timestamp so the replay-window check passes
+    // Patch timestamp so the replay-window check passes and each call produces a unique body.
+    // Transak always requires webhookTimestamp; Moonpay embeds timestamp only when explicitly provided
+    // (ensures the idempotency tests produce different raw bodies → different signatures).
     const body: Record<string, unknown> = { ...payload };
     const ts = opts.timestamp ?? Date.now();
     if (provider === 'transak') {
       body.webhookTimestamp = ts;
+    } else if (opts.timestamp !== undefined) {
+      body.timestamp = ts;
     }
 
     const raw = opts.rawBody ?? JSON.stringify(body);

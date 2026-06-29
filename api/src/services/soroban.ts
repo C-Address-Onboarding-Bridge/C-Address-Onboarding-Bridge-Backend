@@ -5,6 +5,7 @@ import {
 import { config } from '../config';
 import { rpcPool } from './rpcPool';
 
+/** Shape of a Soroban transaction response returned by the API. */
 export interface SorobanTxResponse {
   status: 'pending' | 'success' | 'failed';
   hash: string;
@@ -13,6 +14,7 @@ export interface SorobanTxResponse {
 
 const BASIS_POINTS_DENOM = 10000;
 
+/** Wraps the Soroban RPC server and bridge contract interactions. */
 export class SorobanService {
   private networkPassphrase: string;
   private contractId: string;
@@ -22,8 +24,16 @@ export class SorobanService {
     this.contractId = config.soroban.bridgeContractId;
   }
 
+  /**
+   * Returns a fee quote for a prospective funding transaction.
+   * Rate is currently fixed at 1:1; replace with live price feed when available.
+   *
+   * @param _sourceAsset - Asset code (e.g. `XLM`, `USDC`). Reserved for future rate lookup.
+   * @param amount - Amount in stroops as an integer string.
+   * @param _targetAddress - Destination C-address. Reserved for future per-address logic.
+   */
   async getQuote(
-    sourceAsset: string,
+    _sourceAsset: string,
     amount: string,
     _targetAddress: string,
   ): Promise<{
@@ -41,10 +51,17 @@ export class SorobanService {
       estimatedFee: feeAmount.toString(),
       expectedReceive: receiveAmount.toString(),
       feeBps,
+      // TODO: replace with a live exchange rate once a price-feed integration is in place.
       rate: '1.0',
     };
   }
 
+  /**
+   * Submits a signed Soroban transaction XDR to the network.
+   *
+   * @param signedXdr - Base64-encoded signed transaction envelope.
+   * @returns Transaction status and hash.
+   */
   async submitFundingTransaction(
     signedXdr: string,
   ): Promise<SorobanTxResponse> {
@@ -67,6 +84,12 @@ export class SorobanService {
     return { status: 'success', hash: txHash };
   }
 
+  /**
+   * Polls the Soroban RPC for the current status of a submitted transaction.
+   *
+   * @param txHash - Hex-encoded transaction hash.
+   * @returns Latest known transaction status.
+   */
   async getTransactionStatus(txHash: string): Promise<SorobanTxResponse> {
     try {
       const tx = await rpcPool.execute((server) => server.getTransaction(txHash));
@@ -78,14 +101,26 @@ export class SorobanService {
       }
       return { status: 'success', hash: txHash };
     } catch {
+      // TODO: distinguish RPC errors from "not found" so callers can detect
+      // connectivity failures rather than treating them as a pending state.
       return { status: 'pending', hash: txHash };
     }
   }
 
+  /**
+   * Simulates a contract call to obtain the resource footprint and minimum fee.
+   * Currently a stub — returns placeholder values until Soroban simulation is wired up.
+   *
+   * @param _sourceAddress - Signing account address.
+   * @param _functionName - Contract function to simulate.
+   */
   async contractSimulate(
     _sourceAddress: string,
     _functionName: string,
   ): Promise<{ footprint: string; minResourceFee: string }> {
+    // TODO: implement Soroban simulation using SorobanRpc.Server.simulateTransaction.
+    // Should build the contract invocation, simulate it, and return the real footprint
+    // and minResourceFee so the caller can construct a properly-budgeted transaction.
     if (!this.contractId) {
       return { footprint: 'not_configured', minResourceFee: '0' };
     }

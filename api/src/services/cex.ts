@@ -1,3 +1,4 @@
+/** Request parameters for routing a CEX withdrawal to a C-address. */
 export interface CexWithdrawalRequest {
   exchange: string;
   sourceAsset: string;
@@ -7,6 +8,7 @@ export interface CexWithdrawalRequest {
   memo?: string;
 }
 
+/** Response from a CEX withdrawal routing operation. */
 export interface CexWithdrawalResponse {
   status: 'pending' | 'completed' | 'failed';
   withdrawalId: string;
@@ -15,8 +17,14 @@ export interface CexWithdrawalResponse {
   fee?: string;
 }
 
+/** Function signature for a pluggable exchange withdrawal handler. */
 export type ExchangeHandler = (req: CexWithdrawalRequest) => Promise<CexWithdrawalResponse>;
 
+/**
+ * Routes withdrawal requests to exchange-specific handlers.
+ * Supports Binance, Coinbase, Kraken, and a generic endpoint out of the box.
+ * Additional exchanges can be registered via `registerExchange`.
+ */
 export class CexRoutingService {
   private exchangeHandlers: Map<string, ExchangeHandler> = new Map();
 
@@ -31,10 +39,23 @@ export class CexRoutingService {
     this.exchangeHandlers.set('generic', this.handleGeneric.bind(this));
   }
 
+  /**
+   * Registers a custom handler for an exchange.
+   * Overwrites any existing handler for the same name (case-insensitive).
+   *
+   * @param name - Exchange identifier (e.g. `"my-exchange"`).
+   * @param handler - Async function that performs the withdrawal and returns a result.
+   */
   registerExchange(name: string, handler: ExchangeHandler) {
     this.exchangeHandlers.set(name.toLowerCase(), handler);
   }
 
+  /**
+   * Dispatches a withdrawal request to the appropriate exchange handler.
+   *
+   * @param req - Withdrawal details including exchange name, asset, amount, and target address.
+   * @throws {Error} If the exchange is not registered.
+   */
   async routeWithdrawal(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
     const exchange = req.exchange.toLowerCase();
     const handler = this.exchangeHandlers.get(exchange);
@@ -46,6 +67,7 @@ export class CexRoutingService {
     return handler(req);
   }
 
+  /** Returns the list of currently registered exchange names. */
   getSupportedExchanges(): string[] {
     return [...this.exchangeHandlers.keys()];
   }
@@ -79,6 +101,9 @@ export class CexRoutingService {
   }
 
   private async handleBinance(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
+    // TODO: inject BINANCE_API_KEY and BINANCE_API_SECRET from env and pass to
+    // postToExchange so requests are authenticated. Without credentials the
+    // Binance API returns 401 and falls through to the fallback response below.
     const memo = req.memo || `bridge:binance:${req.targetCAddress.slice(-8)}`;
 
     try {
@@ -114,6 +139,8 @@ export class CexRoutingService {
   }
 
   private async handleCoinbase(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
+    // TODO: inject COINBASE_API_KEY and COINBASE_API_SECRET from env and pass to
+    // postToExchange. Without credentials Coinbase returns 401.
     const memo = req.memo || `bridge:coinbase:${req.targetCAddress.slice(-8)}`;
 
     try {
@@ -148,6 +175,8 @@ export class CexRoutingService {
   }
 
   private async handleKraken(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
+    // TODO: inject KRAKEN_API_KEY and KRAKEN_API_SECRET from env and pass to
+    // postToExchange. Without credentials Kraken returns an auth error.
     const memo = req.memo || `bridge:kraken:${req.targetCAddress.slice(-8)}`;
 
     try {
@@ -180,6 +209,9 @@ export class CexRoutingService {
     }
   }
 
+  // TODO: fallbackResponse returns `status: 'pending'` even when the exchange
+  // API call definitively failed. Consider introducing a distinct `status: 'failed'`
+  // path so callers can detect submission errors rather than polling indefinitely.
   private fallbackResponse(prefix: string, req: CexWithdrawalRequest): CexWithdrawalResponse {
     return {
       status: 'pending',

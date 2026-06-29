@@ -5,6 +5,7 @@ import { explorerService } from '../services/explorer';
 import { cacheGet, cacheSet, cacheDel } from '../services/cache';
 import { config } from '../config';
 
+/** Express router for transaction status endpoints. Mounted at `/api/v1/status`. */
 export const statusRouter = Router();
 
 export const STATUS_CACHE_PREFIX = 'status:';

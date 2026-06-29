@@ -14,7 +14,7 @@ import {
   Asset,
   Operation,
 } from "@stellar/stellar-sdk";
-import type { Server as SorobanServer } from "@stellar/stellar-sdk/lib/soroban";
+type SorobanServer = SorobanRpc.Server;
 
 // ─── Test Configuration ───────────────────────────────────────────────────────
 

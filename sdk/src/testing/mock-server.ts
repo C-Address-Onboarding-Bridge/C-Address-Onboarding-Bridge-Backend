@@ -305,7 +305,6 @@ export class BridgeMockServer {
       headers: new Headers({ 'content-type': 'application/json' }),
       json: () => Promise.resolve(responseBody),
       text: () => Promise.resolve(JSON.stringify(responseBody)),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as unknown as Response;
   }
 

@@ -27,9 +27,9 @@ vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
   text: vi.fn().mockResolvedValue('ok'),
 }));
 
-import { WebhookSimulator } from '../helpers/WebhookSimulator';
-import { moonpaySuccess, moonpayFailed } from '../fixtures/moonpay-payloads';
-import { transakSuccess, transakFailed } from '../fixtures/transak-payloads';
+import { WebhookSimulator } from './helpers/WebhookSimulator';
+import { moonpaySuccess, moonpayFailed } from './fixtures/moonpay-payloads';
+import { transakSuccess, transakFailed } from './fixtures/transak-payloads';
 
 const SECRETS = {
   moonpay: process.env.MOONPAY_SECRET_KEY!,
