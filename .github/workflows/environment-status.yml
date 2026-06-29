@@ -1,0 +1,51 @@
+name: Environment Status
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/30 * * * *'  # every 30 minutes
+
+jobs:
+  status:
+    name: Check ${{ matrix.env.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env:
+          - name: dev
+            url_var: DEV_APP_URL
+          - name: staging
+            url_var: STAGING_APP_URL
+          - name: production
+            url_var: PROD_APP_URL
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Health check
+        id: health
+        run: |
+          url="${{ vars[matrix.env.url_var] }}"
+          if [[ -z "$url" ]]; then
+            echo "status=unconfigured" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          http_code=$(curl -s -o /tmp/health_body.json -w "%{http_code}" --max-time 10 "$url/health" || echo "000")
+          if [[ "$http_code" == "200" ]]; then
+            svc_status=$(grep -o '"status":"[^"]*"' /tmp/health_body.json | head -1 | cut -d'"' -f4 || echo "unknown")
+            echo "status=$svc_status" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=unreachable (HTTP $http_code)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report status
+        run: |
+          env_name="${{ matrix.env.name }}"
+          svc_status="${{ steps.health.outputs.status }}"
+          if [[ "$svc_status" == "ok" ]]; then
+            echo "::notice title=${env_name}::✅ ${env_name}: healthy"
+          elif [[ "$svc_status" == "unconfigured" ]]; then
+            echo "::warning title=${env_name}::⚠️ ${env_name}: URL not configured (set ${{ matrix.env.url_var }} in repo vars)"
+          else
+            echo "::error title=${env_name}::❌ ${env_name}: $svc_status"
+          fi

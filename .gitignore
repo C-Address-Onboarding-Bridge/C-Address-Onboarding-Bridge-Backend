@@ -10,4 +10,9 @@ coverage/
 *.wasm
 .claude/
 .idea/
-.vscode/
+# Track .vscode/settings.json and extensions.json; ignore personal overrides
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+test_snapshots/
+deployments/*.json

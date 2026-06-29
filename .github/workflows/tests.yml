@@ -1,0 +1,44 @@
+name: E2E and Mutation Tests
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Daily at 2am
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-node@v3
+      with:
+        node-version: 18
+        cache: 'npm'
+    - run: npm ci
+    - name: Run E2E tests
+      run: npm run test:e2e
+    - name: Upload Test Artifacts
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: e2e-reports
+        path: coverage/
+
+  mutation:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-node@v3
+      with:
+        node-version: 18
+        cache: 'npm'
+    - run: npm ci
+    - name: Run Stryker Mutation Tests
+      run: npx stryker run
+    - name: Upload Mutation Report
+      uses: actions/upload-artifact@v3
+      with:
+        name: mutation-report
+        path: reports/mutation/html

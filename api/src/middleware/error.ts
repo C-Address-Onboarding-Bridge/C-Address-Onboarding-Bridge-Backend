@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
+import { logger } from '../logger';
 
 /**
  * Application-level error with an explicit HTTP status code.
@@ -47,7 +48,7 @@ export function errorHandler(
     return;
   }
 
-  console.error('unhandled error:', err);
+  logger.error({ err }, 'unhandled error');
   res.status(500).json({
     error: 'internal_error',
     message: 'an unexpected error occurred',

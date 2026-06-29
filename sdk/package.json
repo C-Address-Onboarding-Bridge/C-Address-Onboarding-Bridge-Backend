@@ -3,17 +3,63 @@
   "version": "0.1.0",
   "private": true,
   "main": "dist/index.js",
+  "module": "dist/esm/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./core": {
+      "import": "./dist/esm/core.js",
+      "require": "./dist/core.js",
+      "types": "./dist/core.d.ts"
+    },
+    "./offline": {
+      "import": "./dist/esm/offline.js",
+      "require": "./dist/offline.js",
+      "types": "./dist/offline.d.ts"
+    },
+    "./events": {
+      "import": "./dist/esm/events.js",
+      "require": "./dist/events.js",
+      "types": "./dist/events.d.ts"
+    },
+    "./telemetry": {
+      "import": "./dist/esm/telemetry.js",
+      "require": "./dist/telemetry.js",
+      "types": "./dist/telemetry.d.ts"
+    },
+    "./pagination": {
+      "import": "./dist/esm/pagination.js",
+      "require": "./dist/pagination.js",
+      "types": "./dist/pagination.d.ts"
+    },
+    "./testing": {
+      "import": "./dist/esm/testing/index.js",
+      "require": "./dist/testing/index.js",
+      "types": "./dist/testing/index.d.ts"
+    }
+  },
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json && tsc -p tsconfig.umd.json",
+    "build:strict-consumer": "tsc -p tests/fixtures/strict-consumer/tsconfig.json",
+    "build:bundle": "node scripts/build-bundle.mjs",
+    "bundle:analyze": "node scripts/build-bundle.mjs --analyze",
+    "bundle:check": "npm run build:bundle && node scripts/check-bundle-size.mjs",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "lint": "eslint --ext .ts src/"
   },
   "devDependencies": {
     "@types/node": "^20.11.5",
     "@typescript-eslint/parser": "^8.62.0",
+    "esbuild": "^0.21.5",
     "eslint": "^8.56.0",
+    "fast-check": "^4.8.0",
     "typescript": "^5.3.3",
-    "vitest": "^1.2.2"
+    "vitest": "^4.1.9"
   }
 }

@@ -1,0 +1,21 @@
+name: Chaos Testing
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Daily at 2am
+  workflow_dispatch:
+
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Use Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18.x'
+    - run: npm ci
+    - name: Start Toxiproxy
+      run: docker-compose -f docker-compose.chaos.yml up -d
+    - name: Run Chaos Tests
+      run: npm run test --workspace=api -- --run tests/chaos.test.ts

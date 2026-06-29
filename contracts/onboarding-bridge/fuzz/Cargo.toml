@@ -1,0 +1,29 @@
+[package]
+name = "onboarding-bridge-fuzz"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+onboarding-bridge = { path = "..", features = ["testutils"] }
+soroban-sdk = { version = "26.0.1", features = ["testutils"] }
+
+[[bin]]
+name = "fuzz_fee_calculation"
+path = "src/fuzz_fee_calculation.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_fund_sequence"
+path = "src/fuzz_fund_sequence.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_admin_ops"
+path = "src/fuzz_admin_ops.rs"
+test = false
+doc = false

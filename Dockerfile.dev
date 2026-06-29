@@ -1,0 +1,46 @@
+FROM node:20-alpine AS build
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY api/ api/
+COPY sdk/ sdk/
+
+# Install all dependencies (including dev dependencies)
+RUN npm ci
+
+# Build workspaces
+RUN npm run build --workspaces
+
+FROM node:20-alpine
+
+# Install development tools
+RUN apk add --no-cache \
+    curl \
+    bash \
+    git
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json ./
+COPY api/package.json api/
+COPY sdk/package.json sdk/
+
+# Copy built artifacts and source
+COPY --from=build /app/api/dist/ api/dist/
+COPY --from=build /app/sdk/dist/ sdk/dist/
+COPY api/src/ api/src/
+COPY sdk/src/ sdk/src/
+
+# Install all dependencies (including dev dependencies for development)
+RUN npm ci
+
+# Expose API port
+EXPOSE 3000
+
+# Set development environment
+ENV NODE_ENV=development
+
+# Start with nodemon for hot reload
+CMD ["npm", "run", "dev", "-w", "api"]

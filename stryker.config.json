@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "reporters": [
+    "html",
+    "clear-text",
+    "progress"
+  ],
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "api/src/**/*.ts",
+    "sdk/src/**/*.ts",
+    "!**/*.test.ts",
+    "!**/config/**",
+    "!**/types/**"
+  ],
+  "thresholds": {
+    "high": 90,
+    "low": 80,
+    "break": 80
+  },
+  "mutator": {
+    "plugins": ["typescript"],
+    "excludedMutations": ["StringLiteral"]
+  }
+}

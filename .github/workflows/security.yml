@@ -1,0 +1,82 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '0 0 * * *' # Daily at midnight
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: CodeQL and Dependency Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run NPM Audit
+      run: npm run audit:dependencies
+
+    - name: Upload dependency audit report
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependency-audit-summary
+        path: |
+          reports/dependency-audit.json
+          reports/dependency-audit-summary.md
+        retention-days: 30
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: typescript
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+
+    - name: TruffleHog Secrets Scan
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.repository.default_branch }}
+        head: HEAD
+
+    - name: Run OWASP Dependency-Check
+      uses: dependency-check/Dependency-Check_Action@main
+      env:
+        JAVA_HOME: /opt/jdk
+      with:
+        project: 'c-address-onboarding'
+        path: '.'
+        format: 'HTML'
+        out: 'reports'
+
+  notify:
+    name: Vulnerability Alerts
+    needs: analyze
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack for critical findings
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data '{"text":"Dependency vulnerability scan completed for C-Address Onboarding Bridge."}' "$SLACK_WEBHOOK_URL"

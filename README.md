@@ -67,6 +67,17 @@ Credit Card ──▶ Moonpay/Transak ──▶ Bridge Contract ──▶ C-Addr
 
 ---
 
+## Dependency Vulnerability Monitoring
+
+The repository runs automated dependency vulnerability scanning through GitHub Actions and scheduled audits. The workflow currently:
+
+- runs a weekly dependency audit on the default branch and for pull requests,
+- publishes a machine-readable audit report plus a human-readable summary artifact,
+- tracks severity-based patch SLAs of critical (24 hours), high (7 days), moderate (30 days), and low (next release),
+- sends Slack notifications when the workflow is configured with a webhook secret.
+
+Accepted-risk overrides must be documented in the issue tracker with the dependency name, severity, owner, and expiry date, and they should be reviewed on the next scheduled scan.
+
 ## Project Structure
 
 ```
@@ -162,6 +173,21 @@ Fees are calculated in basis points (1 bps = 0.01%):
 ```
 
 ---
+
+## API Versioning
+
+The API now supports URL-based versioning and Accept header versioning. Version negotiation is handled by the middleware and returns standard deprecation headers on v1 responses.
+
+- `v1`: current stable endpoint family with deprecation headers and a sunset date
+- `v2`: compatible successor endpoints that can coexist with `v1`
+- `alpha -> beta -> stable -> deprecated -> sunset`: lifecycle is documented in the changelog below
+
+### Version Lifecycle and Changelog
+
+| Version | Status | Notes |
+|---------|--------|-------|
+| `v1` | deprecated | Legacy endpoints with deprecation and sunset headers |
+| `v2` | beta | Newer routing surface with version negotiation support |
 
 ## API Reference
 
@@ -510,7 +536,25 @@ export PORT=3001
 npm start -w api
 ```
 
+### Blue-Green Deployment
+
+```bash
+export BLUE_URL=https://blue.example.com
+export GREEN_URL=https://green.example.com
+export DEPLOY_GREEN_COMMAND='bash ./scripts/deploy.sh --network testnet'
+export SWITCH_TRAFFIC_COMMAND='echo "switch traffic to {{color}}"'
+export POST_SWITCH_CHECK_COMMAND='bash ./scripts/smoke-test.sh'
+
+npm run deploy:blue-green
+```
+
+The blue-green flow deploys to the inactive environment, runs smoke tests, switches traffic, keeps the previous environment warm for rollback, drains old connections, and records the active color for the next release.
+
 ---
+
+## Architecture Decision Records
+
+Architectural decisions are documented in [docs/adr/README.md](docs/adr/README.md). Use the ADR template at [docs/adr/template.md](docs/adr/template.md) for new proposals.
 
 ## Environment Variables
 

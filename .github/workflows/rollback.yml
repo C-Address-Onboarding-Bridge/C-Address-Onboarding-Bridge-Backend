@@ -1,0 +1,50 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to roll back'
+        required: true
+        type: choice
+        options: [dev, staging, production]
+      steps:
+        description: 'Number of releases to roll back (default: 1)'
+        required: false
+        default: '1'
+
+jobs:
+  rollback:
+    name: Rollback ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+    # Production rollback still requires the environment's required reviewers
+    environment:
+      name: ${{ github.event.inputs.environment }}
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rollback deploy
+        run: bash scripts/deploy.sh --rollback --steps "${{ github.event.inputs.steps }}"
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Rollback migrations
+        run: npm run migrate:rollback -w api -- "${{ github.event.inputs.steps }}"
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NODE_ENV: ${{ github.event.inputs.environment }}
+
+      - name: Smoke tests post-rollback
+        run: bash scripts/smoke-test.sh
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Rollback of ${{ github.event.inputs.environment }} failed — manual intervention required."
