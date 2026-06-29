@@ -17,7 +17,7 @@
     "worker:prod": "node dist/jobs/worker.js"
   },
   "dependencies": {
-    "@asteasolutions/zod-to-openapi": "^7.3.4",
+    "@asteasolutions/zod-to-openapi": "^8.5.0",
     "@bull-board/api": "^8.0.1",
     "@bull-board/express": "^8.0.1",
     "@stellar/stellar-sdk": "^12.1.0",
