@@ -1,3 +1,4 @@
+/** Thrown at startup when a required environment variable is missing. */
 export class ConfigError extends Error {
   constructor(key: string) {
     super(`missing required config: ${key}`);
@@ -11,6 +12,7 @@ function requireEnv(key: string): string {
   return val;
 }
 
+/** Centralised runtime configuration derived from environment variables. */
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   host: process.env.HOST || '0.0.0.0',
@@ -28,6 +30,7 @@ export const config = {
     apiKey: process.env.TRANSAK_API_KEY || '',
     environment: process.env.TRANSAK_ENVIRONMENT || 'STAGING',
   },
+  /** Comma-separated list of accepted `X-API-Key` values. Auth is disabled when empty. */
   apiKeys: (process.env.API_KEYS || '').split(',').filter(Boolean),
   logLevel: process.env.LOG_LEVEL || 'info',
 };

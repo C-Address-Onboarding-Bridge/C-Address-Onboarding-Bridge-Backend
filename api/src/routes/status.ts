@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { sorobanService } from '../services/soroban';
 
+/** Express router for transaction status endpoints. Mounted at `/api/v1/status`. */
 export const statusRouter = Router();
 
 const statusSchema = z.object({

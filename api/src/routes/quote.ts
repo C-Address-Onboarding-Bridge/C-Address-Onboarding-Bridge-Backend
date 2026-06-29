@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { sorobanService } from '../services/soroban';
 
+/** Express router for quote endpoints. Mounted at `/api/v1/quote`. */
 export const quoteRouter = Router();
 
 const stellarAddressRegex = /^[GC][A-Z2-7]{55}$/;
