@@ -29,11 +29,11 @@ jobs:
       env:
         NODE_ENV: benchmark
         PORT: 3001
-        API_KEYS: benchmark-api-key
         SOROBAN_RPC_URL: https://soroban-rpc.testnet.stellar.org
         BRIDGE_FEE_BPS: 30
         JOBS_ENABLED: 'false'
       run: |
+        export API_KEYS="$(seq -f 'benchmark-api-key-%.0f' -s, 1 20)"
         npm run start --workspace api > /tmp/bridge-api.log 2>&1 &
         echo $! > /tmp/bridge-api.pid
         for i in {1..30}; do
@@ -48,7 +48,9 @@ jobs:
     - name: Run k6 benchmarks
       env:
         API_BASE_URL: http://localhost:3001
-        API_KEY: benchmark-api-key
+        API_KEY_PREFIX: benchmark-api-key-
+        K6_TARGET_VUS: 20
+        K6_SLEEP_SECONDS: 3
       run: k6 run api/tests/performance.k6.js
 
     - name: Stop API
