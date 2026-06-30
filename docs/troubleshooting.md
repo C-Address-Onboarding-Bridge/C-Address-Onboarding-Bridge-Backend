@@ -389,14 +389,17 @@ console.log(
 
 ```typescript
 // Use idempotency keys for safe retries
-const result = await client.fundAddress({
+const prepared = await client.prepareFundingTransaction({
   sourceAddress: "G...",
   targetAddress: "C...",
+  tokenAddress: "CC...",
   amount: "10000000",
-  idempotencyKey: "unique-operation-id-123", // Generate unique key per operation
 });
 
-// Safe to retry with same key - will return original result
+// Sign the prepared transaction with your wallet (off-SDK), then submit
+const result = await client.submitSignedXdr({ signedXdr: "" });
+
+// Safe to retry with same signed XDR - will return original result
 ```
 
 ---
