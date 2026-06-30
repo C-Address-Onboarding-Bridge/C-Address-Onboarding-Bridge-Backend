@@ -36,6 +36,7 @@ import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { updateCircuitBreakerMetrics, activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
 import { createWebSocketServer, handleUpgrade } from './services/websocket';
+import { cacheMetricsRouter } from './routes/cacheMetrics';
 
 export { logger } from './logger';
 
@@ -170,6 +171,9 @@ app.use('/api/v1/webhooks', rbacAuth, webhookAdminRouter);
 app.use('/api/v1/keys', rbacAuth, apiKeysRouter);
 app.use('/api/v1/transactions', rbacAuth, transactionsRouter);
 app.use('/api/v1/admin', rbacAuth, adminRouter);
+
+// Cache metrics endpoint – dedicated JSON view of cache health
+app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
 app.use('/metrics', rbacAuth, metricsRouter);

@@ -10,6 +10,7 @@ import {
   withdrawAccumulatedFees,
 } from '../services/transactions';
 import { AuditEventType, integrityAuditLog } from '../services/auditLog';
+import { enqueueAudit } from '../services/asyncPipeline';
 
 export const adminRouter = Router();
 
@@ -28,25 +29,45 @@ adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Respo
     res.status(400).json({ error: 'bad_request' });
     return;
   }
+
   const result = updateFeeConfig(feeBps, timelockMs);
   const actor = req.apiKeyRecord?.id ?? 'admin';
+
+  // recordAdminAction is synchronous but lightweight (in-memory push) — keep sync.
   recordAdminAction('fee_update', { feeBps, timelockMs }, actor);
-  integrityAuditLog.append('admin_operation', { operation: 'fee_change', feeBps, timelockMs, result }, actor);
+
+  // Audit log: off the response path; sync fallback ensures durability.
+  const auditPayload = { operation: 'fee_change', feeBps, timelockMs, result };
+  enqueueAudit(
+    'admin_operation',
+    auditPayload,
+    actor,
+    () => integrityAuditLog.append('admin_operation', auditPayload, actor),
+  );
+
   res.json(result);
 });
 
 adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), (req: Request, res: Response) => {
   const result = withdrawAccumulatedFees();
   const actor = req.apiKeyRecord?.id ?? 'admin';
+
   recordAdminAction('withdraw_fees', { ...result }, actor);
-  integrityAuditLog.append('fee_withdrawal', { amount: result.withdrawn, recipient: actor, status: result.status }, actor);
+
+  const auditPayload = { amount: result.withdrawn, recipient: actor, status: result.status };
+  enqueueAudit(
+    'fee_withdrawal',
+    auditPayload,
+    actor,
+    () => integrityAuditLog.append('fee_withdrawal', auditPayload, actor),
+  );
+
   res.json(result);
 });
 
 adminRouter.get('/health', requireScopes('admin:keys'), (_req: Request, res: Response) => {
   res.json(getHealthSnapshot());
 });
-
 
 adminRouter.get('/audit/integrity', requireScopes('admin:keys'), (req: Request, res: Response) => {
   const type = typeof req.query.type === 'string' ? (req.query.type as AuditEventType) : undefined;

@@ -53,6 +53,27 @@ export const cacheMissCounter = new Counter({
   registers: [register],
 });
 
+/** Rolling hit-ratio gauge updated on every cache access. */
+export const cacheHitRatioGauge = new Gauge({
+  name: 'cache_hit_ratio',
+  help: 'Cache hit ratio (0.0 – 1.0)',
+  registers: [register],
+});
+
+/** Number of keys currently in Redis (sampled periodically via DBSIZE). */
+export const cacheEntryCountGauge = new Gauge({
+  name: 'cache_entry_count',
+  help: 'Number of keys currently stored in Redis (DBSIZE)',
+  registers: [register],
+});
+
+/** Memory used by Redis in bytes (sampled periodically via INFO memory). */
+export const cacheMemoryBytesGauge = new Gauge({
+  name: 'cache_memory_bytes',
+  help: 'Bytes of memory used by Redis (used_memory from INFO)',
+  registers: [register],
+});
+
 export const circuitBreakerState = new Gauge({
   name: 'circuit_breaker_state',
   help: 'Circuit breaker state (0=closed, 1=open, 2=half-open)',
@@ -184,3 +205,46 @@ export function updateCircuitBreakerMetrics(circuits: Map<string, { getState(): 
     circuitBreakerState.set({ service: name }, CB_STATE_MAP[state] ?? 0);
   }
 }
+
+// ─── Async Pipeline metrics ───────────────────────────────────────────────────
+
+/** Current number of waiting jobs per queue (sampled when jobs are enqueued). */
+export const asyncPipelineQueueDepth = new Gauge({
+  name: 'async_pipeline_queue_depth',
+  help: 'Number of waiting jobs in the async pipeline queue',
+  labelNames: ['queue'],
+  registers: [register],
+});
+
+/** End-to-end processing time for async pipeline jobs. */
+export const asyncPipelineJobDuration = new Histogram({
+  name: 'async_pipeline_job_duration_seconds',
+  help: 'Processing time for async pipeline jobs',
+  labelNames: ['queue', 'job'],
+  buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5],
+  registers: [register],
+});
+
+/** Cumulative count of async pipeline job failures. */
+export const asyncPipelineFailureCounter = new Counter({
+  name: 'async_pipeline_failures_total',
+  help: 'Total number of async pipeline job failures',
+  labelNames: ['queue', 'job'],
+  registers: [register],
+});
+
+/** Total jobs enqueued — differentiates critical vs best-effort traffic. */
+export const asyncPipelineEnqueueCounter = new Counter({
+  name: 'async_pipeline_enqueued_total',
+  help: 'Total jobs enqueued to the async pipeline',
+  labelNames: ['queue', 'job'],
+  registers: [register],
+});
+
+/** Jobs dropped due to backpressure (best-effort queue over threshold). */
+export const asyncPipelineDroppedCounter = new Counter({
+  name: 'async_pipeline_dropped_total',
+  help: 'Jobs dropped because the pipeline was backpressured',
+  labelNames: ['job'],
+  registers: [register],
+});
