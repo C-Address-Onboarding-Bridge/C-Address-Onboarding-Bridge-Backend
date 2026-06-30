@@ -17,7 +17,11 @@ import {
   RequestOptions,
   FundingPrepareResult,
   HttpMethod,
+  Token,
+  TokenMetadata,
+  TokenMetadataParams,
 } from "./types";
+import { tokenToSourceAsset, tokenFromLegacy, getDefaultDecimals, isSacTokenAddress, isSacToken } from "./token";
 import { SimpleCache } from "./cache";
 import { TelemetryClient } from "./telemetry";
 import {
@@ -261,8 +265,12 @@ export class BridgeClient {
     );
   }
 
-  async getQuote(params: QuoteParams): Promise<Quote> {
-    const cacheKey = `quote:${params.sourceAsset}:${params.amount}:${params.targetAddress}`;
+   async getQuote(params: QuoteParams): Promise<Quote> {
+        // Resolve token for cache key and API serialization
+    const token = params.token;
+    const sourceAssetForApi = token ? tokenToSourceAsset(token) : params.sourceAsset;
+    const cacheKey = `quote:${sourceAssetForApi}:${params.amount}:${params.targetAddress}`;
+
     const cached = this.cache.get<Quote>(cacheKey);
     if (cached) {
       return cached.value;
@@ -275,7 +283,7 @@ export class BridgeClient {
         "/api/v1/quote",
         undefined,
         {
-          sourceAsset: params.sourceAsset,
+          sourceAsset: sourceAssetForApi,
           amount: params.amount,
           targetAddress: params.targetAddress,
         },
@@ -301,6 +309,40 @@ export class BridgeClient {
     }
   }
 
+    /**
+   * Fetches metadata for a SAC token from the bridge API.
+   * Falls back to default metadata for native XLM.
+   */
+  async getTokenMetadata(params: TokenMetadataParams): Promise<TokenMetadata> {
+    if (params.contractId === 'native') {
+      return {
+        decimals: 7,
+        name: 'Stellar Lumens',
+        symbol: 'XLM',
+      };
+    }
+
+    const startedAt = Date.now();
+    try {
+      const result = await this.request<TokenMetadata>(
+        "GET",
+        `/api/v1/token/${params.contractId}/metadata`,
+      );
+      this.telemetry.record({
+        method: "getTokenMetadata",
+        responseTimeMs: Date.now() - startedAt,
+      });
+      return result;
+    } catch (error) {
+      this.telemetry.record({
+        method: "getTokenMetadata",
+        responseTimeMs: Date.now() - startedAt,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+      throw error;
+    }
+  }
+
   async submitSignedXdr(
     params: FundWithXdrParams,
     options?: RequestOptions,
@@ -314,13 +356,17 @@ export class BridgeClient {
     );
   }
 
-  async prepareFundingTransaction(
+   async prepareFundingTransaction(
     params: FundParams,
   ): Promise<FundingPrepareResult> {
+    // Resolve token with backward compatibility: prefer explicit token, fall back to legacy tokenAddress
+    const token = params.token ?? tokenFromLegacy(params.tokenAddress);
+    const tokenAddressForApi = isSacToken(token) ? token.contractId : params.tokenAddress;
+
     return this.request<FundingPrepareResult>("POST", "/api/v1/fund/prepare", {
       sourceAddress: params.sourceAddress,
       targetAddress: params.targetAddress,
-      tokenAddress: params.tokenAddress,
+      tokenAddress: tokenAddressForApi,
       amount: params.amount,
       memo: params.memo || "",
     });
@@ -428,7 +474,9 @@ export class BridgeClient {
   }
 
   invalidateQuoteCache(params: QuoteParams): void {
-    const cacheKey = `quote:${params.sourceAsset}:${params.amount}:${params.targetAddress}`;
+       const token = params.token;
+    const sourceAssetForApi = token ? tokenToSourceAsset(token) : params.sourceAsset;
+    const cacheKey = `quote:${sourceAssetForApi}:${params.amount}:${params.targetAddress}`;
     this.cache.invalidate(cacheKey);
   }
 
@@ -550,13 +598,14 @@ export class BridgeClient {
     // Check Contract Status (using a quote request as proxy)
     if (options?.checkContractStatus !== false) {
       try {
-        // Make a minimal quote request to verify contract is accessible
+              // Make a minimal quote request to verify contract is accessible
         await this.getQuote({
           sourceAsset: "XLM",
           amount: "10000000",
           targetAddress:
             options?.targetAddress ||
             "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+          token: { type: 'native' },
         });
         checks.contractStatus = {
           status: "pass",

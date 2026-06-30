@@ -9,6 +9,8 @@ import type {
   BridgeStatus,
   QuoteParams,
   FundParams,
+  Token,
+  TokenMetadata,
 } from '../types';
 
 /** Valid 56-char Stellar C-address (Soroban contract) for use in tests. */
@@ -34,6 +36,20 @@ export const MOCK_FUND_PARAMS: FundParams = {
   tokenAddress: MOCK_TOKEN_ADDRESS,
   amount: '10000',
   memo: 'test',
+};
+
+/** Ready-to-use native Token fixture. */
+export const MOCK_NATIVE_TOKEN: Token = { type: 'native' };
+
+/** Ready-to-use SAC Token fixture. */
+export const MOCK_SAC_TOKEN: Token = { type: 'sac', contractId: MOCK_TOKEN_ADDRESS };
+
+/** Ready-to-use TokenMetadata fixture for a SAC token. */
+export const MOCK_TOKEN_METADATA: TokenMetadata = {
+  decimals: 6,
+  name: 'USD Coin',
+  symbol: 'USDC',
+  issuer: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTU',
 };
 
 /**
@@ -109,5 +125,19 @@ export const fixtures = {
   /** Standard API error body shape, matching what the real API returns. */
   apiError(message: string, code?: string): { message: string; code?: string } {
     return code !== undefined ? { message, code } : { message };
+  },
+
+    token(overrides?: Partial<Token>): Token {
+    return { type: 'sac', contractId: MOCK_TOKEN_ADDRESS, ...overrides };
+  },
+
+  tokenMetadata(overrides?: Partial<TokenMetadata>): TokenMetadata {
+    return {
+      decimals: 6,
+      name: 'USD Coin',
+      symbol: 'USDC',
+      issuer: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTU',
+      ...overrides,
+    };
   },
 };

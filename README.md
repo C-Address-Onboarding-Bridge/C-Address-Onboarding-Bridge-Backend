@@ -361,14 +361,16 @@ const quote = await client.getQuote({
 console.log(`Fee: ${quote.estimatedFee} stroops`);
 console.log(`You receive: ${quote.expectedReceive} stroops`);
 
-// Fund a C-address
-const result = await client.fundAddress({
+// Fund a C-address (two-step: prepare → sign → submit)
+const prepared = await client.prepareFundingTransaction({
   sourceAddress: 'G...',
   targetAddress: 'C...',
   tokenAddress: 'CC...',
   amount: '10000000',
-  sourceSecretKey: 'S...',
 });
+
+// Sign the prepared transaction with your wallet (off-SDK), then submit
+const result = await client.submitSignedXdr({ signedXdr: '' });
 
 console.log(`Transaction hash: ${result.hash}`);
 

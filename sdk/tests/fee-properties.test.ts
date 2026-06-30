@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import * as fc from 'fast-check';
-import { calculateFee, calculateReceiveAmount } from '../src/utils';
+import { calculateFee, calculateReceiveAmount, formatTokenAmount, parseTokenAmount } from '../src/utils';
 
 // Arbitrary for valid bigint amounts (0 to MAX_I128)
 const MAX_I128 = (BigInt(1) << BigInt(127)) - BigInt(1);
@@ -96,6 +96,56 @@ describe('Fee calculation properties', () => {
   it('fee at zero amount with any rate is zero', () => {
     fc.assert(
       fc.property(feeBpsArb, (bps) => calculateFee(BigInt(0), bps) === BigInt(0)),
+    );
+  });
+});
+
+
+describe('Token amount formatting properties', () => {
+  const decimalArb = fc.integer({ min: 0, max: 18 });
+
+  it('parseTokenAmount is inverse of formatTokenAmount for non-negative amounts', () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: BigInt(0), max: BigInt('999999999999999999') }),
+        decimalArb,
+        (rawAmount, decimals) => {
+          const amountStr = rawAmount.toString();
+          const formatted = formatTokenAmount(amountStr, decimals);
+          const reparsed = parseTokenAmount(formatted, decimals);
+          return reparsed === amountStr;
+        },
+      ),
+    );
+  });
+
+    it('formatTokenAmount always produces a string with exactly N fractional digits', () => {
+    fc.assert(
+      fc.property(
+        fc.string({ minLength: 1, maxLength: 20 }).map(s => s.replace(/[^0-9]/g, '') || '0'),
+        decimalArb,
+        (amountStr, decimals) => {
+          const formatted = formatTokenAmount(amountStr, decimals);
+          if (decimals === 0) {
+            return !formatted.includes('.') && /^\d+$/.test(formatted);
+          }
+          const parts = formatted.split('.');
+          return parts.length === 2 && parts[1].length === decimals;
+        },
+      ),
+    );
+  });
+
+    it('parseTokenAmount always produces a valid integer string', () => {
+    fc.assert(
+      fc.property(
+        fc.float({ min: 0, max: Math.fround(1e12), noNaN: true }).map(n => n.toFixed(6)),
+        decimalArb,
+        (amountStr, decimals) => {
+          const parsed = parseTokenAmount(amountStr, decimals);
+          return /^\d+$/.test(parsed);
+        },
+      ),
     );
   });
 });
