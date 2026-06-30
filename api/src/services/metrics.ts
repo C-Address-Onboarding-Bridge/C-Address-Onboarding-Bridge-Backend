@@ -60,30 +60,121 @@ export const circuitBreakerState = new Gauge({
   registers: [register],
 });
 
+// --- Business KPI metrics ---
+
 export const fundingCount = new Counter({
   name: 'funding_operations_total',
   help: 'Total funding operations',
-  labelNames: ['status'],
+  labelNames: ['source', 'status'],
   registers: [register],
 });
 
 export const fundingVolume = new Counter({
-  name: 'funding_volume_total',
-  help: 'Total funding volume in base units',
+  name: 'funding_volume_xlm_total',
+  help: 'Total XLM funded in stroops',
+  labelNames: ['source', 'currency'],
   registers: [register],
 });
 
 export const feeCollected = new Counter({
   name: 'fee_collected_total',
-  help: 'Total fees collected in base units',
+  help: 'Total fees collected in stroops',
+  labelNames: ['source', 'currency'],
   registers: [register],
 });
 
-export const activeUsersGauge = new Gauge({
-  name: 'active_users',
-  help: 'Number of active users (unique API keys in the last hour)',
+export const uniqueFundersGauge = new Gauge({
+  name: 'unique_funders_24h',
+  help: 'Unique funders (API keys) in the last 24 hours',
   registers: [register],
 });
+
+export const fundingAmountHistogram = new Histogram({
+  name: 'funding_amount_stroops',
+  help: 'Distribution of funding amounts in stroops',
+  labelNames: ['source'],
+  buckets: [1e7, 5e7, 1e8, 5e8, 1e9, 5e9, 1e10],
+  registers: [register],
+});
+
+export const feeRateGauge = new Gauge({
+  name: 'fee_rate_bps',
+  help: 'Current bridge fee rate in basis points',
+  registers: [register],
+});
+
+export const exchangeRoutingCount = new Counter({
+  name: 'exchange_routing_total',
+  help: 'CEX withdrawal routing count per exchange',
+  labelNames: ['exchange', 'status'],
+  registers: [register],
+});
+
+export const onrampRequestCount = new Counter({
+  name: 'onramp_requests_total',
+  help: 'On-ramp widget URL generation count',
+  labelNames: ['provider', 'status'],
+  registers: [register],
+});
+
+export const transactionStatusCount = new Counter({
+  name: 'transaction_status_total',
+  help: 'Transaction status transitions',
+  labelNames: ['status', 'source'],
+  registers: [register],
+});
+
+const funderTimestamps = new Map<string, number>();
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+export function recordUniqueFunder(funderId: string): void {
+  const now = Date.now();
+  funderTimestamps.set(funderId, now);
+
+  const cutoff = now - TWENTY_FOUR_HOURS_MS;
+  for (const [id, ts] of funderTimestamps) {
+    if (ts < cutoff) funderTimestamps.delete(id);
+  }
+  uniqueFundersGauge.set(funderTimestamps.size);
+}
+
+export interface FundingMetricInput {
+  source: 'api' | 'sdk' | 'cex' | 'onramp';
+  status: 'success' | 'pending' | 'failed';
+  amountStroops?: string;
+  feeStroops?: string;
+  currency?: string;
+  funderId?: string;
+}
+
+export function recordFundingMetrics(input: FundingMetricInput): void {
+  const currency = input.currency ?? 'XLM';
+  fundingCount.inc({ source: input.source, status: input.status });
+  transactionStatusCount.inc({ status: input.status, source: input.source });
+
+  if (input.amountStroops) {
+    const amount = parseInt(input.amountStroops, 10);
+    if (!Number.isNaN(amount) && amount > 0) {
+      fundingVolume.inc({ source: input.source, currency }, amount);
+      fundingAmountHistogram.observe({ source: input.source }, amount);
+    }
+  }
+
+  if (input.feeStroops) {
+    const fee = parseInt(input.feeStroops, 10);
+    if (!Number.isNaN(fee) && fee > 0) {
+      feeCollected.inc({ source: input.source, currency }, fee);
+    }
+  }
+
+  if (input.funderId) {
+    recordUniqueFunder(input.funderId);
+  }
+}
+
+export function setFeeRateBps(bps: number): void {
+  feeRateGauge.set(bps);
+}
 
 const CB_STATE_MAP: Record<string, number> = { closed: 0, open: 1, 'half-open': 2 };
 

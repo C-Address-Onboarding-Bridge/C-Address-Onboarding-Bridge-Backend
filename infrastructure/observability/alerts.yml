@@ -1,0 +1,43 @@
+groups:
+  - name: bridge-api-alerts
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High HTTP 5xx error rate
+          description: More than 5% of requests are failing with 5xx errors.
+
+      - alert: FundEndpointAbuse
+        expr: increase(funding_operations_total{status="failed"}[5m]) > 50
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Elevated failed funding operations
+          description: Failed funding operations spiked in the last 5 minutes.
+
+      - alert: RateLimitSpike
+        expr: increase(http_requests_total{status="429"}[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rate limit rejections spiking
+          description: Clients are hitting rate limits frequently.
+
+  - name: bridge-api-log-alerts
+    rules:
+      - alert: ErrorLogSpike
+        expr: |
+          sum(rate({job="bridge-api", level="error"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Error log rate spike
+          description: Error-level logs are exceeding 1/sec — check Grafana Explore.

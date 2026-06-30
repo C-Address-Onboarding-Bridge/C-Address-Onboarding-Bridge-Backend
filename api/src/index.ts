@@ -1,3 +1,6 @@
+import { initTracing, shutdownTracing } from './tracing';
+initTracing();
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -22,7 +25,9 @@ import { compressionMiddleware } from './middleware/compression';
 import { errorHandler } from './middleware/error';
 import { CircuitBreaker } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
-import { rateLimitMiddleware, applyRateLimitHeaders } from './middleware/rateLimit';
+import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware } from './middleware/rateLimit';
+import { correlationMiddleware } from './middleware/correlation';
+import { setFeeRateBps } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
@@ -48,6 +53,8 @@ if (config.apiKeys.length > 0) {
   seedLegacyKeys(config.apiKeys);
 }
 
+setFeeRateBps(config.soroban.feeBps);
+
 const app = express();
 
 app.set('logger', logger);
@@ -57,7 +64,8 @@ app.use(cors());
 
 app.use(compressionMiddleware);
 app.use(versionCompatibility);
-app.use(rateLimitMiddleware);
+app.use(correlationMiddleware);
+app.use(ipRateLimitMiddleware);
 app.use(applyRateLimitHeaders);
 
 // Prometheus instrumentation middleware
@@ -124,6 +132,7 @@ app.use('/api', express.json({ limit: '32kb' }));
 
 app.use('/api', securityMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
+app.use('/api', tierRateLimitMiddleware);
 
 app.get('/api/v1/deprecations', (_req, res) => {
   res.json({
@@ -202,14 +211,19 @@ if (process.env.NODE_ENV !== 'test') {
 
       registerSignalHandlers(async () => {
         await closeQueues();
+        await shutdownTracing();
         logger.info('job queues closed');
       });
     }).catch((err: Error) => {
       logger.error({ err }, 'failed to initialize job queues');
-      registerSignalHandlers(async () => {});
+      registerSignalHandlers(async () => {
+        await shutdownTracing();
+      });
     });
   } else {
-    registerSignalHandlers(async () => {});
+    registerSignalHandlers(async () => {
+      await shutdownTracing();
+    });
   }
 }
 
