@@ -534,6 +534,10 @@ export PORT=3001
 
 # Start
 npm start -w api
+
+# Or using Docker
+docker build -t c-address-bridge-api .
+docker run -p 3001:3001 --env-file .env c-address-bridge-api
 ```
 
 ### Blue-Green Deployment
