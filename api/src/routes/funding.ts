@@ -7,6 +7,7 @@ import { hashPayload, integrityAuditLog } from '../services/auditLog';
 import { config } from '../config';
 import { fundEndpointRateLimit, fundAbuseDetectionMiddleware } from '../middleware/rateLimit';
 import { recordFundingMetrics } from '../services/metrics';
+import { XdrValidationError, MAX_XDR_BYTE_LENGTH } from '../services/xdrValidator';
 
 /** Express router for funding endpoints. Mounted at `/api/v1/fund`. */
 export const fundingRouter = Router();
@@ -16,7 +17,13 @@ fundingRouter.use(fundAbuseDetectionMiddleware);
 const stellarAddressRegex = /^[GC][A-Z2-7]{55}$/;
 
 const fundSchema = z.object({
-  signedXdr: z.string().min(1, 'signed transaction XDR is required'),
+  // Size-limit the field before the validator runs so we catch oversized
+  // payloads at the schema layer as well (belt-and-suspenders with the
+  // XDR validator's own size guard).
+  signedXdr: z
+    .string()
+    .min(1, 'signed transaction XDR is required')
+    .max(MAX_XDR_BYTE_LENGTH, `signedXdr must not exceed ${MAX_XDR_BYTE_LENGTH} characters`),
 });
 
 const fundDirectSchema = z.object({
@@ -50,6 +57,13 @@ fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req
       explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
     });
   } catch (err) {
+    if (err instanceof XdrValidationError) {
+      res.status(400).json({
+        error: err.code,
+        message: err.detail,
+      });
+      return;
+    }
     next(err);
   }
 });

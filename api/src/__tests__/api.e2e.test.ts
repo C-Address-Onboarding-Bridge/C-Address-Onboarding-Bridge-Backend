@@ -100,7 +100,7 @@ describe('API E2E', () => {
     expect(res.body.error).toBe('validation_error');
   });
 
-  it('POST /api/v1/fund returns 500 for invalid XDR', async () => {
+  it('POST /api/v1/fund returns 400 for invalid XDR', async () => {
     const res = await request(app)
       .post('/api/v1/fund')
       .send({
@@ -108,7 +108,8 @@ describe('API E2E', () => {
       })
       .set('X-API-Key', 'test-api-key-123');
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
   });
 
   it('POST /api/v1/fund returns 400 for missing signedXdr', async () => {
