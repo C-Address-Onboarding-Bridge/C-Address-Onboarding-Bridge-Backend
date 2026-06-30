@@ -1,0 +1,44 @@
+{
+  "name": "@c-address-bridge/react-hooks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "React hooks for the C-Address Onboarding Bridge SDK",
+  "main": "dist/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint --ext .ts,.tsx src/"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "@c-address-bridge/sdk": "*"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^14.3.1",
+    "@testing-library/react-hooks": "^8.0.1",
+    "@types/node": "^20.11.5",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/parser": "^8.62.0",
+    "eslint": "^8.56.0",
+    "jsdom": "^24.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.9"
+  }
+}
