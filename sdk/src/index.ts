@@ -7,6 +7,18 @@ export type {
   RequestSigningConfig,
 } from './types';
 export * from './types';
+export {
+  isNativeToken,
+  isSacToken,
+  isSacTokenAddress,
+  validateSacTokenAddress,
+  isValidTokenIdentifier,
+  tokenToSourceAsset,
+  tokenFromLegacy,
+  formatTokenAmount,
+  parseTokenAmount,
+  getDefaultDecimals,
+} from './token';
 export * as utils from './utils';
 export { PaginationHelper, paginateAll, collectAllPages } from './pagination';
 export {

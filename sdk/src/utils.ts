@@ -53,3 +53,17 @@ export function formatStellarAmount(amount: string): string {
   const fracPart = padded.slice(-7);
   return `${intPart}.${fracPart}`;
 }
+
+// Re-export token formatting utilities for convenience
+export {
+  formatTokenAmount,
+  parseTokenAmount,
+  isSacTokenAddress,
+  validateSacTokenAddress,
+  isValidTokenIdentifier,
+  tokenToSourceAsset,
+  tokenFromLegacy,
+  getDefaultDecimals,
+  isNativeToken,
+  isSacToken,
+} from './token';

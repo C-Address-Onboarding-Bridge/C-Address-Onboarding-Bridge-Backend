@@ -113,8 +113,9 @@ function buildDefaultHandlers(): RegisteredRoute[] {
     { matches: prefix('GET', '/api/v1/status/'),     config: reply(fixtures.transactionStatus()) },
     { matches: exact('GET', '/health'),              config: reply({ status: 'ok' }) },
     { matches: exact('POST', '/api/v1/cex/route'),   config: reply(fixtures.cexWithdrawalResult()) },
-    { matches: exact('POST', '/api/v1/offramp/moonpay'), config: reply(fixtures.moonpayWidgetResult()) },
+       { matches: exact('POST', '/api/v1/offramp/moonpay'), config: reply(fixtures.moonpayWidgetResult()) },
     { matches: exact('POST', '/api/v1/offramp/transak'), config: reply(fixtures.transakWidgetResult()) },
+    { matches: prefix('GET', '/api/v1/token/'), config: reply(fixtures.tokenMetadata()) },
   ];
 }
 
@@ -235,6 +236,16 @@ export class BridgeMockServer {
     return this._builder('POST', '/api/v1/offramp/transak');
   }
 
+    /**
+   * Override the token metadata endpoint: `GET /api/v1/token/:contractId/metadata`.
+   * Pass a specific `contractId` to only match that token; omit to match any token metadata request.
+   */
+  onTokenMetadata(contractId?: string): RouteBuilder<this> {
+    if (contractId !== undefined) {
+      return new RouteBuilder(this, (m, p) => m === 'GET' && p === `/api/v1/token/${contractId}/metadata`);
+    }
+    return new RouteBuilder(this, (m, p) => m === 'GET' && p.startsWith('/api/v1/token/'));
+  }
   /**
    * Override any arbitrary endpoint by method and exact path.
    * Useful for paginated endpoints or future endpoints not covered by named helpers.

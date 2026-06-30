@@ -3,6 +3,30 @@ export type RequestValue = string | number | boolean | undefined;
 export type RequestParams = Record<string, RequestValue>;
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
+// ─── Token Types ──────────────────────────────────────────────────────────────
+
+/** Discriminated union representing a token type for bridge operations. */
+export type Token =
+  | { type: 'native' }
+  | { type: 'sac'; contractId: string };
+
+/** Metadata for a Stellar Asset Converter (SAC) token. */
+export interface TokenMetadata {
+  /** Number of decimal places the token uses (e.g. 6 for USDC, 7 for XLM). */
+  decimals: number;
+  /** Human-readable token name. */
+  name: string;
+  /** Token symbol (e.g. `USDC`, `yUSDC`). */
+  symbol: string;
+  /** Issuer account address (G-address), if applicable. */
+  issuer?: string;
+}
+
+/** Parameters for requesting token metadata. */
+export interface TokenMetadataParams {
+  contractId: string;
+}
+
 export interface RequestOptions {
   timeout?: number;
 }
@@ -15,6 +39,8 @@ export interface QuoteParams {
   amount: string;
   /** Destination C-address or G-address. */
   targetAddress: string;
+  /** Optional token specification. When provided, the SDK will use the token contract for the operation. Defaults to native XLM when omitted. */
+  token?: Token;
 }
 
 /** Fee quote returned by the bridge API. */
@@ -33,10 +59,13 @@ export interface Quote {
 export interface FundParams {
   sourceAddress: string;
   targetAddress: string;
+  /** Token contract address (C-address). Kept for backward compatibility; prefer `token` for type safety. */
   tokenAddress: string;
   /** Amount in stroops as an integer string. */
   amount: string;
   memo?: string;
+  /** Optional typed token specification. When provided alongside `tokenAddress`, `token` takes precedence for fee/metadata logic. Defaults to native XLM when omitted. */
+  token?: Token;
 }
 
 /** Parameters for submitting a pre-signed transaction XDR. */
