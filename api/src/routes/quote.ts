@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { sorobanService } from '../services/soroban';
 import { cacheGet, cacheSet } from '../services/cache';
 import { config } from '../config';
+import { setFeeRateBps } from '../services/metrics';
 
 /** Express router for quote endpoints. Mounted at `/api/v1/quote`. */
 export const quoteRouter = Router();
@@ -35,6 +36,7 @@ quoteRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     );
 
     await cacheSet(cacheKey, JSON.stringify(quote), config.redis.quoteTtlSeconds);
+    setFeeRateBps(quote.feeBps);
     res.setHeader('X-Cache', 'MISS');
     res.json(quote);
   } catch (err) {

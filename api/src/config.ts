@@ -55,9 +55,16 @@ export const config = {
     bodyTruncateLength: parseInt(process.env.LOG_BODY_TRUNCATE_LENGTH || '200', 10),
   },
   rateLimit: {
-    redisEnabled: process.env.REDIS_RATE_LIMIT === 'true',
+    redisEnabled: process.env.REDIS_RATE_LIMIT === 'true' || (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
     burstFactor: parseInt(process.env.RATE_LIMIT_BURST_FACTOR || '2', 10),
+  },
+  observability: {
+    otelEnabled: process.env.OTEL_ENABLED !== 'false',
+    otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318/v1/traces',
+    traceSampleRatio: parseFloat(process.env.OTEL_TRACE_SAMPLE_RATIO || '0.1'),
+    lokiPushUrl: process.env.LOKI_PUSH_URL || '',
+    adminAlertUrl: process.env.ADMIN_ALERT_URL || '',
   },
   compression: {
     threshold: parseInt(process.env.COMPRESSION_THRESHOLD_BYTES || '1024', 10),

@@ -3,7 +3,7 @@ import { Request, Response } from 'express';
 
 process.env.NODE_ENV = 'test';
 
-vi.mock('../index', () => ({
+vi.mock('../logger', () => ({
   logger: {
     info: vi.fn(),
     warn: vi.fn(),

@@ -1,0 +1,115 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Funding Operations / min",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(funding_operations_total[5m])) * 60",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "title": "Total XLM Funded (stroops)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum(funding_volume_xlm_total)" }
+      ]
+    },
+    {
+      "title": "Total Fees Collected (stroops)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        { "expr": "sum(fee_collected_total)" }
+      ]
+    },
+    {
+      "title": "Unique Funders (24h)",
+      "type": "gauge",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "unique_funders_24h" }
+      ]
+    },
+    {
+      "title": "Current Fee Rate (bps)",
+      "type": "gauge",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 8 },
+      "targets": [
+        { "expr": "fee_rate_bps" }
+      ]
+    },
+    {
+      "title": "Funding Amount Distribution",
+      "type": "heatmap",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (le) (rate(funding_amount_stroops_bucket[5m]))",
+          "legendFormat": "{{le}}"
+        }
+      ]
+    },
+    {
+      "title": "Exchange Routing",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        {
+          "expr": "sum by (exchange) (rate(exchange_routing_total[5m])) * 60",
+          "legendFormat": "{{exchange}}"
+        }
+      ]
+    },
+    {
+      "title": "On-ramp Requests",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "targets": [
+        {
+          "expr": "sum by (provider) (rate(onramp_requests_total[5m])) * 60",
+          "legendFormat": "{{provider}}"
+        }
+      ]
+    },
+    {
+      "title": "Transaction Status",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "targets": [
+        {
+          "expr": "sum by (status) (transaction_status_total)",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "title": "HTTP Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))",
+          "legendFormat": "5xx rate"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["bridge-api", "business-kpi"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "title": "Bridge API — Business KPIs",
+  "uid": "bridge-business-kpis",
+  "version": 1
+}

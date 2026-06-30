@@ -1,0 +1,48 @@
+services:
+  mock:
+    image: node:20-slim
+    working_dir: /app
+    volumes:
+      - ./mock-server:/app
+    command: node server.mjs
+    environment:
+      MOCK_PORT: "3099"
+    ports:
+      - "3099:3099"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3099/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  python:
+    build: ./python
+    depends_on:
+      mock:
+        condition: service_healthy
+    environment:
+      BRIDGE_BASE_URL: http://mock:3099
+
+  rust:
+    build: ./rust
+    depends_on:
+      mock:
+        condition: service_healthy
+    environment:
+      BRIDGE_BASE_URL: http://mock:3099
+
+  go:
+    build: ./go
+    depends_on:
+      mock:
+        condition: service_healthy
+    environment:
+      BRIDGE_BASE_URL: http://mock:3099
+
+  java:
+    build: ./java
+    depends_on:
+      mock:
+        condition: service_healthy
+    environment:
+      BRIDGE_BASE_URL: http://mock:3099

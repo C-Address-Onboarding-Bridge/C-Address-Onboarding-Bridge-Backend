@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:05.000
+Install the TypeScript SDK package in your wallet project.
+
+00:00:05.000 --> 00:00:12.000
+Create a BridgeClient with your API base URL and API key.
+
+00:00:12.000 --> 00:00:20.000
+Get a quote and prepare an unsigned funding transaction for the user to sign.
+
+00:00:20.000 --> 00:00:28.000
+Submit the signed XDR and poll transaction status until success.

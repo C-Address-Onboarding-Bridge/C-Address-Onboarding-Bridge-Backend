@@ -1,0 +1,95 @@
+name: Multi-Language Examples
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/**'
+      - '.github/workflows/examples.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'examples/**'
+      - '.github/workflows/examples.yml'
+
+jobs:
+  examples:
+    name: Examples (${{ matrix.lang }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [python, rust, go, java]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start mock server
+        run: |
+          node examples/mock-server/server.mjs &
+          echo "MOCK_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3099/health && break
+            sleep 0.5
+          done
+
+      - name: Python example
+        if: matrix.lang == 'python'
+        env:
+          BRIDGE_BASE_URL: http://localhost:3099
+        run: |
+          cd examples/python
+          python3 main.py
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: matrix.lang == 'rust'
+        with:
+          toolchain: stable
+
+      - name: Rust example
+        if: matrix.lang == 'rust'
+        env:
+          BRIDGE_BASE_URL: http://localhost:3099
+        run: |
+          cd examples/rust
+          cargo run --example bridge
+
+      - uses: actions/setup-go@v5
+        if: matrix.lang == 'go'
+        with:
+          go-version: '1.22'
+
+      - name: Go example
+        if: matrix.lang == 'go'
+        env:
+          BRIDGE_BASE_URL: http://localhost:3099
+        run: |
+          cd examples/go
+          go run .
+
+      - uses: actions/setup-java@v4
+        if: matrix.lang == 'java'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Java example
+        if: matrix.lang == 'java'
+        env:
+          BRIDGE_BASE_URL: http://localhost:3099
+        run: |
+          cd examples/java
+          mvn -q exec:java
+
+      - name: Stop mock server
+        if: always()
+        run: kill "$MOCK_PID" 2>/dev/null || true
+
+  docker-compose:
+    name: Docker Compose Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run all examples
+        working-directory: examples
+        run: docker compose up --build --abort-on-container-exit

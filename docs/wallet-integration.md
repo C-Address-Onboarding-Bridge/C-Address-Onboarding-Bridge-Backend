@@ -2,6 +2,9 @@
 
 This guide shows how wallets and dApps integrate the C-Address Onboarding Bridge SDK to fund Soroban smart accounts (C-addresses) directly — without requiring the end user to have a traditional G-address first.
 
+> **Video walkthrough:** [Integrating the SDK into a wallet](video-walkthroughs.md#2-integrating-the-sdk-into-a-wallet) · [MoonPay on-ramp](video-walkthroughs.md#3-setting-up-moonpay-fiat-on-ramp) · [CEX withdrawals](video-walkthroughs.md#4-configuring-cex-withdrawals)  
+> Play locally: `asciinema play docs/videos/casts/wallet-integration.cast`
+
 ## Table of Contents
 
 - [Address Detection](#address-detection)
