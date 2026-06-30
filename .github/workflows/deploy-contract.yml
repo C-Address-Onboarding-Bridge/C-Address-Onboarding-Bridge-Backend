@@ -1,0 +1,431 @@
+name: Deploy Contract
+
+# ── Triggers ──────────────────────────────────────────────────────────────────
+#
+#  Tag format:
+#    contract/v*.*.*-dev.*  →  testnet  (e.g. contract/v1.2.0-dev.3)
+#    contract/v*.*.*        →  mainnet  (e.g. contract/v1.2.0)
+#
+#  Manual dispatch lets you re-run or target either network on-demand.
+#
+on:
+  push:
+    tags:
+      - 'contract/v[0-9]+.[0-9]+.[0-9]+-dev.*'   # testnet: dev pre-releases
+      - 'contract/v[0-9]+.[0-9]+.[0-9]+'          # mainnet: stable releases
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target network'
+        required: true
+        type: choice
+        options: [testnet, mainnet]
+      skip_build:
+        description: 'Skip WASM build (use cached artefact)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+      skip_init:
+        description: 'Skip initialize() (re-deploy only)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+      reinstall:
+        description: 'Force re-deploy even if a live contract exists'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+      dry_run:
+        description: 'Build & validate only — no on-chain operations'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+# Only one contract deployment per network at a time.
+concurrency:
+  group: deploy-contract-${{ github.event.inputs.network || (contains(github.ref, '-dev') && 'testnet' || 'mainnet') }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write      # to create GitHub Releases and upload assets
+  id-token: write      # for OIDC (future use)
+
+jobs:
+  # ── Determine target network from tag ───────────────────────────────────────
+  resolve-network:
+    name: Resolve Network
+    runs-on: ubuntu-latest
+    outputs:
+      network:    ${{ steps.resolve.outputs.network }}
+      is_mainnet: ${{ steps.resolve.outputs.is_mainnet }}
+      tag:        ${{ steps.resolve.outputs.tag }}
+    steps:
+      - id: resolve
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            NETWORK="${{ github.event.inputs.network }}"
+          elif [[ "${{ github.ref }}" =~ -dev\. ]]; then
+            NETWORK="testnet"
+          else
+            NETWORK="mainnet"
+          fi
+
+          TAG="${GITHUB_REF_NAME:-manual}"
+          IS_MAINNET="false"
+          [[ "$NETWORK" == "mainnet" ]] && IS_MAINNET="true"
+
+          echo "network=$NETWORK"       >> "$GITHUB_OUTPUT"
+          echo "is_mainnet=$IS_MAINNET" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"               >> "$GITHUB_OUTPUT"
+
+          echo "Resolved network: $NETWORK (tag: $TAG, is_mainnet: $IS_MAINNET)"
+
+  # ── CI gate: run tests before any deployment ──────────────────────────────
+  ci:
+    name: CI Gate
+    uses: ./.github/workflows/ci.yml
+
+  # ── Build WASM ────────────────────────────────────────────────────────────
+  build:
+    name: Build WASM
+    runs-on: ubuntu-latest
+    needs: [resolve-network, ci]
+    outputs:
+      wasm_hash: ${{ steps.hash.outputs.wasm_hash }}
+      wasm_size: ${{ steps.hash.outputs.wasm_size }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32v1-none
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: contract-wasm-${{ runner.os }}-${{ hashFiles('contracts/onboarding-bridge/Cargo.lock') }}
+          restore-keys: contract-wasm-${{ runner.os }}-
+
+      - name: Install Stellar CLI
+        run: cargo install stellar-cli --locked
+
+      - name: Build optimized WASM
+        if: ${{ github.event.inputs.skip_build != 'true' }}
+        run: stellar contract build --manifest-path contracts/onboarding-bridge/Cargo.toml
+
+      - name: Compute WASM hash and size
+        id: hash
+        run: |
+          WASM=$(find target -name "onboarding_bridge.wasm" | head -1)
+          if [[ -z "$WASM" ]]; then
+            echo "wasm_hash=unknown" >> "$GITHUB_OUTPUT"
+            echo "wasm_size=0"       >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HASH=$(sha256sum "$WASM" | awk '{print $1}')
+          SIZE=$(wc -c < "$WASM")
+          echo "wasm_hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "wasm_size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "WASM: $WASM"
+          echo "SHA-256: $HASH"
+          echo "Size: $SIZE bytes"
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-bridge-wasm
+          path: |
+            target/**/release/onboarding_bridge.wasm
+          retention-days: 90
+
+  # ── Deploy to Testnet ─────────────────────────────────────────────────────
+  deploy-testnet:
+    name: Deploy → testnet
+    runs-on: ubuntu-latest
+    needs: [resolve-network, build]
+    if: needs.resolve-network.outputs.network == 'testnet'
+    environment:
+      name: testnet
+      url: https://stellar.expert/explorer/testnet/contract/${{ steps.deploy.outputs.contract_id }}
+    outputs:
+      contract_id: ${{ steps.deploy.outputs.contract_id }}
+      wasm_hash:   ${{ steps.deploy.outputs.wasm_hash }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32v1-none
+
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: contract-wasm-${{ runner.os }}-${{ hashFiles('contracts/onboarding-bridge/Cargo.lock') }}
+          restore-keys: contract-wasm-${{ runner.os }}-
+
+      - name: Install Stellar CLI
+        run: cargo install stellar-cli --locked
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: onboarding-bridge-wasm
+          path: target
+
+      - name: Deploy contract
+        id: deploy
+        run: |
+          SKIP_BUILD_FLAG=""
+          SKIP_INIT_FLAG=""
+          REINSTALL_FLAG=""
+          DRY_RUN_FLAG=""
+          [[ "${{ github.event.inputs.skip_build }}"  == "true" ]] && SKIP_BUILD_FLAG="--skip-build"
+          [[ "${{ github.event.inputs.skip_init }}"   == "true" ]] && SKIP_INIT_FLAG="--skip-init"
+          [[ "${{ github.event.inputs.reinstall }}"   == "true" ]] && REINSTALL_FLAG="--reinstall"
+          [[ "${{ github.event.inputs.dry_run }}"     == "true" ]] && DRY_RUN_FLAG="--dry-run"
+          bash scripts/deploy-contract.sh \
+            --network testnet \
+            $SKIP_BUILD_FLAG $SKIP_INIT_FLAG $REINSTALL_FLAG $DRY_RUN_FLAG
+        env:
+          SOURCE_ACCOUNT:       ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
+          ADMIN_ADDRESSES:      ${{ secrets.CONTRACT_ADMIN_ADDRESSES }}
+          THRESHOLD:            ${{ vars.CONTRACT_THRESHOLD || '1' }}
+          BRIDGE_FEE_BPS:       ${{ vars.CONTRACT_FEE_BPS || '30' }}
+          MAX_FEE_BPS:          ${{ vars.CONTRACT_MAX_FEE_BPS || '1000' }}
+          MIN_AMOUNT:           ${{ vars.CONTRACT_MIN_AMOUNT || '100' }}
+          MAX_AMOUNT:           ${{ vars.CONTRACT_MAX_AMOUNT || '1000000000000' }}
+          SOROBAN_RPC_URL:      ${{ vars.SOROBAN_RPC_URL_TESTNET }}
+          SLACK_WEBHOOK_URL:    ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Generate deployment report
+        if: success()
+        run: bash scripts/generate-deployment-report.sh
+        env:
+          NETWORK: testnet
+
+      - name: Upload deployment artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-testnet-${{ needs.resolve-network.outputs.tag }}
+          path: |
+            deployments/deployment-testnet.json
+            reports/deployment-report-testnet-*.md
+          retention-days: 90
+
+  # ── Deploy to Mainnet (requires approval) ──────────────────────────────────
+  deploy-mainnet:
+    name: Deploy → mainnet
+    runs-on: ubuntu-latest
+    needs: [resolve-network, build]
+    if: needs.resolve-network.outputs.network == 'mainnet'
+    # The 'mainnet' GitHub Environment must have required reviewers configured.
+    # See: Settings → Environments → mainnet → Required reviewers
+    environment:
+      name: mainnet
+      url: https://stellar.expert/explorer/public/contract/${{ steps.deploy.outputs.contract_id }}
+    outputs:
+      contract_id: ${{ steps.deploy.outputs.contract_id }}
+      wasm_hash:   ${{ steps.deploy.outputs.wasm_hash }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32v1-none
+
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: contract-wasm-${{ runner.os }}-${{ hashFiles('contracts/onboarding-bridge/Cargo.lock') }}
+          restore-keys: contract-wasm-${{ runner.os }}-
+
+      - name: Install Stellar CLI
+        run: cargo install stellar-cli --locked
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: onboarding-bridge-wasm
+          path: target
+
+      - name: Deploy contract
+        id: deploy
+        run: |
+          SKIP_BUILD_FLAG=""
+          SKIP_INIT_FLAG=""
+          REINSTALL_FLAG=""
+          DRY_RUN_FLAG=""
+          [[ "${{ github.event.inputs.skip_build }}"  == "true" ]] && SKIP_BUILD_FLAG="--skip-build"
+          [[ "${{ github.event.inputs.skip_init }}"   == "true" ]] && SKIP_INIT_FLAG="--skip-init"
+          [[ "${{ github.event.inputs.reinstall }}"   == "true" ]] && REINSTALL_FLAG="--reinstall"
+          [[ "${{ github.event.inputs.dry_run }}"     == "true" ]] && DRY_RUN_FLAG="--dry-run"
+          bash scripts/deploy-contract.sh \
+            --network mainnet \
+            $SKIP_BUILD_FLAG $SKIP_INIT_FLAG $REINSTALL_FLAG $DRY_RUN_FLAG
+        env:
+          SOURCE_ACCOUNT:            ${{ secrets.SOROBAN_SOURCE_ACCOUNT_MAINNET }}
+          ADMIN_ADDRESSES:           ${{ secrets.CONTRACT_ADMIN_ADDRESSES_MAINNET }}
+          THRESHOLD:                 ${{ vars.CONTRACT_THRESHOLD_MAINNET || '2' }}
+          BRIDGE_FEE_BPS:            ${{ vars.CONTRACT_FEE_BPS_MAINNET || '30' }}
+          MAX_FEE_BPS:               ${{ vars.CONTRACT_MAX_FEE_BPS_MAINNET || '1000' }}
+          MIN_AMOUNT:                ${{ vars.CONTRACT_MIN_AMOUNT_MAINNET || '100' }}
+          MAX_AMOUNT:                ${{ vars.CONTRACT_MAX_AMOUNT_MAINNET || '1000000000000' }}
+          SOROBAN_RPC_URL:           ${{ vars.SOROBAN_RPC_URL_MAINNET }}
+          SOROBAN_NETWORK_PASSPHRASE: ${{ secrets.SOROBAN_NETWORK_PASSPHRASE_MAINNET }}
+          SLACK_WEBHOOK_URL:         ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Generate deployment report
+        if: success()
+        run: bash scripts/generate-deployment-report.sh
+        env:
+          NETWORK: mainnet
+
+      - name: Upload deployment artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-mainnet-${{ needs.resolve-network.outputs.tag }}
+          path: |
+            deployments/deployment-mainnet.json
+            reports/deployment-report-mainnet-*.md
+          retention-days: 365
+
+  # ── Publish GitHub Release with deployment report ─────────────────────────
+  publish-release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: [resolve-network, build, deploy-testnet, deploy-mainnet]
+    # Run if either deploy job succeeded (one will be skipped)
+    if: |
+      always() && (
+        needs.deploy-testnet.result == 'success' ||
+        needs.deploy-mainnet.result == 'success'
+      )
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine deployment outputs
+        id: outputs
+        run: |
+          if [[ "${{ needs.resolve-network.outputs.network }}" == "mainnet" ]]; then
+            echo "contract_id=${{ needs.deploy-mainnet.outputs.contract_id }}" >> "$GITHUB_OUTPUT"
+            echo "wasm_hash=${{ needs.deploy-mainnet.outputs.wasm_hash }}"     >> "$GITHUB_OUTPUT"
+          else
+            echo "contract_id=${{ needs.deploy-testnet.outputs.contract_id }}" >> "$GITHUB_OUTPUT"
+            echo "wasm_hash=${{ needs.deploy-testnet.outputs.wasm_hash }}"     >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download deployment artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deployment-${{ needs.resolve-network.outputs.network }}-*
+          path: downloaded-artifacts
+          merge-multiple: true
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: onboarding-bridge-wasm
+          path: wasm-artifact
+
+      - name: Locate WASM file
+        id: locate_wasm
+        run: |
+          WASM=$(find wasm-artifact -name "onboarding_bridge.wasm" | head -1)
+          echo "wasm_path=$WASM" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: |
+            Contract ${{ needs.resolve-network.outputs.tag }} (${{ needs.resolve-network.outputs.network }})
+          body: |
+            ## Onboarding Bridge Contract Deployment
+
+            | Field        | Value |
+            |--------------|-------|
+            | Network      | `${{ needs.resolve-network.outputs.network }}` |
+            | Contract ID  | `${{ steps.outputs.outputs.contract_id }}` |
+            | WASM SHA-256 | `${{ steps.outputs.outputs.wasm_hash }}` |
+            | WASM Build   | `${{ needs.build.outputs.wasm_hash }}` |
+            | Tag          | `${{ needs.resolve-network.outputs.tag }}` |
+            | Commit       | `${{ github.sha }}` |
+
+            ### Explorer
+
+            ${{ needs.resolve-network.outputs.network == 'mainnet'
+              && format('https://stellar.expert/explorer/public/contract/{0}', steps.outputs.outputs.contract_id)
+              || format('https://stellar.expert/explorer/testnet/contract/{0}', steps.outputs.outputs.contract_id) }}
+
+            ### Deployment Report
+
+            See attached `deployment-report-*.md` for full details including initialization parameters and rollback instructions.
+          files: |
+            downloaded-artifacts/deployment-${{ needs.resolve-network.outputs.network }}.json
+            downloaded-artifacts/deployment-report-${{ needs.resolve-network.outputs.network }}-*.md
+            ${{ steps.locate_wasm.outputs.wasm_path }}
+          draft: false
+          prerelease: ${{ contains(github.ref, '-dev') }}
+
+  # ── Rollback on deploy failure ────────────────────────────────────────────
+  rollback-on-failure:
+    name: Auto-Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [resolve-network, deploy-testnet, deploy-mainnet]
+    if: |
+      always() && (
+        needs.deploy-testnet.result  == 'failure' ||
+        needs.deploy-mainnet.result  == 'failure'
+      )
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Attempt rollback to previous deployment
+        run: |
+          NETWORK="${{ needs.resolve-network.outputs.network }}"
+          PREV="${ARTIFACTS_DIR:-deployments}/deployment-${NETWORK}.prev.json"
+
+          if [[ -f "$PREV" ]]; then
+            echo "::warning::Deployment failed. Attempting rollback to previous contract."
+            SOURCE_ACCOUNT="${{ needs.resolve-network.outputs.network == 'mainnet' && secrets.SOROBAN_SOURCE_ACCOUNT_MAINNET || secrets.SOROBAN_SOURCE_ACCOUNT }}" \
+              bash scripts/rollback-contract.sh --network "$NETWORK"
+          else
+            echo "::warning::No previous artifact found. Manual rollback required."
+            echo "Check deployments/ for available rollback targets."
+          fi
+        env:
+          NETWORK: ${{ needs.resolve-network.outputs.network }}
+          SOROBAN_RPC_URL: >-
+            ${{
+              needs.resolve-network.outputs.network == 'mainnet'
+              && vars.SOROBAN_RPC_URL_MAINNET
+              || vars.SOROBAN_RPC_URL_TESTNET
+            }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Annotate failure
+        if: always()
+        run: |
+          echo "::error::Contract deployment to ${{ needs.resolve-network.outputs.network }} failed."
+          echo "::error::See the deploy job logs for details."
+          echo "::error::Rollback procedure: bash scripts/rollback-contract.sh --network ${{ needs.resolve-network.outputs.network }}"
