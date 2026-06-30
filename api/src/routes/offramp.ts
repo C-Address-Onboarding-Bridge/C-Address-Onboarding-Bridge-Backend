@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { moonpayService } from '../services/moonpay';
 import { transakService } from '../services/transak';
 import { onrampRequestCount } from '../services/metrics';
+import { enqueueCounterIncrement } from '../services/asyncPipeline';
 
 /** Express router for off-ramp widget URL generation. Mounted at `/api/v1/offramp`. */
 export const offrampRouter = Router();
@@ -32,10 +33,19 @@ offrampRouter.post('/moonpay', async (req: Request, res: Response, next: NextFun
   try {
     const params = moonpaySchema.parse(req.body);
     const url = moonpayService.generateWidgetUrl(params);
-    onrampRequestCount.inc({ provider: 'moonpay', status: 'success' });
+    // Counter increment is best-effort; falls back to sync if pipeline is disabled.
+    enqueueCounterIncrement(
+      'onramp_request',
+      { provider: 'moonpay', status: 'success' },
+      () => onrampRequestCount.inc({ provider: 'moonpay', status: 'success' }),
+    );
     res.json({ url });
   } catch (err) {
-    onrampRequestCount.inc({ provider: 'moonpay', status: 'failed' });
+    enqueueCounterIncrement(
+      'onramp_request',
+      { provider: 'moonpay', status: 'failed' },
+      () => onrampRequestCount.inc({ provider: 'moonpay', status: 'failed' }),
+    );
     next(err);
   }
 });
@@ -44,10 +54,18 @@ offrampRouter.post('/transak', async (req: Request, res: Response, next: NextFun
   try {
     const params = transakSchema.parse(req.body);
     const url = transakService.generateWidgetUrl(params);
-    onrampRequestCount.inc({ provider: 'transak', status: 'success' });
+    enqueueCounterIncrement(
+      'onramp_request',
+      { provider: 'transak', status: 'success' },
+      () => onrampRequestCount.inc({ provider: 'transak', status: 'success' }),
+    );
     res.json({ url });
   } catch (err) {
-    onrampRequestCount.inc({ provider: 'transak', status: 'failed' });
+    enqueueCounterIncrement(
+      'onramp_request',
+      { provider: 'transak', status: 'failed' },
+      () => onrampRequestCount.inc({ provider: 'transak', status: 'failed' }),
+    );
     next(err);
   }
 });

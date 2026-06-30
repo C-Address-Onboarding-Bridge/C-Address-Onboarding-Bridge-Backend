@@ -6,7 +6,10 @@ export type JobName =
   | 'webhook-retry'
   | 'cache-warmup'
   | 'metrics-compute'
-  | 'cleanup';
+  | 'cleanup'
+  | 'async-audit-log'
+  | 'async-analytics'
+  | 'async-metrics';
 
 export interface TxStatusPollData {
   txHash: string;
@@ -32,12 +35,43 @@ export interface CleanupData {
   olderThanMs: number;
 }
 
+// ─── Async pipeline job payloads ─────────────────────────────────────────────
+
+export interface AuditLogJobData {
+  /** Maps to AuditEventType in auditLog.ts */
+  type: string;
+  payload: Record<string, unknown>;
+  actor: string;
+  /** ISO timestamp of when the event was originally triggered on the request path */
+  triggeredAt: number;
+}
+
+export interface AnalyticsJobData {
+  /**
+   * Batched counter increments flushed from the in-process 100ms buffer.
+   * Key is `${event}:${JSON.stringify(labels)}`, value is the accumulated count.
+   */
+  batch: Array<{
+    event: string;
+    labels: Record<string, string>;
+    value: number;
+  }>;
+}
+
+export interface PipelineMetricsJobData {
+  operation: 'funding' | 'onramp' | 'admin';
+  data: Record<string, unknown>;
+}
+
 export type JobData =
   | TxStatusPollData
   | WebhookRetryData
   | CacheWarmupData
   | MetricsData
-  | CleanupData;
+  | CleanupData
+  | AuditLogJobData
+  | AnalyticsJobData
+  | PipelineMetricsJobData;
 
 function parseRedisUrl(url: string): { host: string; port: number; password?: string; db?: number } {
   const parsed = new URL(url);
@@ -61,24 +95,51 @@ function makeBaseOptions(): QueueOptions {
   };
 }
 
+function makeCriticalOptions(): QueueOptions {
+  return {
+    connection: parseRedisUrl(config.redis.url),
+    defaultJobOptions: {
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 2000 },
+      removeOnComplete: { count: 200 },
+      removeOnFail: { count: 100 },
+      priority: 10,
+    },
+  };
+}
+
 let _queues: {
   txStatus: Queue<TxStatusPollData>;
   webhookRetry: Queue<WebhookRetryData>;
   cacheWarmup: Queue<CacheWarmupData>;
   metrics: Queue<MetricsData>;
   cleanup: Queue<CleanupData>;
+  asyncCritical: Queue<AuditLogJobData>;
+  asyncPipeline: Queue<AnalyticsJobData | PipelineMetricsJobData>;
   all: Queue[];
 } | null = null;
 
 function getQueues() {
   if (!_queues) {
     const opts = makeBaseOptions();
+    const criticalOpts = makeCriticalOptions();
     const txStatus = new Queue<TxStatusPollData>('tx-status-poll', opts);
     const webhookRetry = new Queue<WebhookRetryData>('webhook-retry', opts);
     const cacheWarmup = new Queue<CacheWarmupData>('cache-warmup', opts);
     const metrics = new Queue<MetricsData>('metrics-compute', opts);
     const cleanup = new Queue<CleanupData>('cleanup', opts);
-    _queues = { txStatus, webhookRetry, cacheWarmup, metrics, cleanup, all: [txStatus, webhookRetry, cacheWarmup, metrics, cleanup] };
+    const asyncCritical = new Queue<AuditLogJobData>('async-critical', criticalOpts);
+    const asyncPipeline = new Queue<AnalyticsJobData | PipelineMetricsJobData>('async-pipeline', opts);
+    _queues = {
+      txStatus,
+      webhookRetry,
+      cacheWarmup,
+      metrics,
+      cleanup,
+      asyncCritical,
+      asyncPipeline,
+      all: [txStatus, webhookRetry, cacheWarmup, metrics, cleanup, asyncCritical, asyncPipeline],
+    };
   }
   return _queues;
 }
@@ -111,4 +172,23 @@ export async function enqueueTxStatusPoll(txHash: string): Promise<void> {
 export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void> {
   const delayMs = Math.min(5000 * Math.pow(2, data.attemptNumber - 1), 300_000);
   await getQueues().webhookRetry.add('webhook-retry', data, { delay: delayMs });
+}
+
+export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
+  await getQueues().asyncCritical.add('async-audit-log', data);
+}
+
+export async function enqueueAnalytics(data: AnalyticsJobData): Promise<void> {
+  await getQueues().asyncPipeline.add('async-analytics', data);
+}
+
+export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Promise<void> {
+  await getQueues().asyncPipeline.add('async-metrics', data);
+}
+
+/** Returns the number of waiting (not yet picked up) jobs in a queue. */
+export async function getQueueWaitingCount(queueName: 'async-critical' | 'async-pipeline'): Promise<number> {
+  const q = getQueues();
+  const queue = queueName === 'async-critical' ? q.asyncCritical : q.asyncPipeline;
+  return queue.getWaitingCount();
 }

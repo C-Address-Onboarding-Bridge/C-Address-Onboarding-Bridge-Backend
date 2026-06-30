@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { logger } from '../index';
 import { hashPayload, integrityAuditLog } from './auditLog';
+import { enqueueAudit } from './asyncPipeline';
 
 export interface WebhookRegistration {
   id: string;
@@ -119,7 +120,7 @@ export class WebhookDeliveryService {
       clearTimeout(timeout);
       attempt.statusCode = response.status;
 
-      integrityAuditLog.append('webhook_delivery', {
+      const deliveryAuditPayload = {
         payloadHash: hashPayload(payload),
         destination: registration.url,
         registrationId: registration.id,
@@ -127,7 +128,13 @@ export class WebhookDeliveryService {
         attemptNumber: attemptNumber + 1,
         statusCode: response.status,
         result: response.ok ? 'success' : 'failed',
-      }, registration.apiKey);
+      };
+      enqueueAudit(
+        'webhook_delivery',
+        deliveryAuditPayload,
+        registration.apiKey,
+        () => integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKey),
+      );
 
       if (response.ok) {
         logger.info(
@@ -145,7 +152,7 @@ export class WebhookDeliveryService {
       );
     } catch (err) {
       attempt.error = err instanceof Error ? err.message : 'unknown error';
-      integrityAuditLog.append('webhook_delivery', {
+      const errorAuditPayload = {
         payloadHash: hashPayload(payload),
         destination: registration.url,
         registrationId: registration.id,
@@ -153,7 +160,13 @@ export class WebhookDeliveryService {
         attemptNumber: attemptNumber + 1,
         result: 'error',
         error: attempt.error,
-      }, registration.apiKey);
+      };
+      enqueueAudit(
+        'webhook_delivery',
+        errorAuditPayload,
+        registration.apiKey,
+        () => integrityAuditLog.append('webhook_delivery', errorAuditPayload, registration.apiKey),
+      );
       logger.warn(
         { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
         'webhook delivery error',

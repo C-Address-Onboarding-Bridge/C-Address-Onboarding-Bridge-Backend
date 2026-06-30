@@ -110,6 +110,28 @@ export const config = {
       cacheWarmup: parseInt(process.env.JOB_CONCURRENCY_CACHE_WARMUP || '2', 10),
       metrics: parseInt(process.env.JOB_CONCURRENCY_METRICS || '1', 10),
       cleanup: parseInt(process.env.JOB_CONCURRENCY_CLEANUP || '1', 10),
+      asyncAudit: parseInt(process.env.JOB_CONCURRENCY_ASYNC_AUDIT || '2', 10),
+      asyncPipeline: parseInt(process.env.JOB_CONCURRENCY_ASYNC_PIPELINE || '5', 10),
     },
+  },
+  asyncPipeline: {
+    /**
+     * Master switch. When false every call falls through to the synchronous
+     * path so the pipeline is completely transparent to callers.
+     * Defaults to enabled whenever a REDIS_URL is configured.
+     */
+    enabled: process.env.ASYNC_PIPELINE_ENABLED !== 'false'
+      && (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),
+    /**
+     * Number of waiting jobs in the best-effort queue above which the pipeline
+     * is considered backpressured. Non-critical ops are dropped while over
+     * this threshold.
+     */
+    backpressureThreshold: parseInt(process.env.ASYNC_BACKPRESSURE_THRESHOLD || '1000', 10),
+    /**
+     * How long (ms) the in-process analytics buffer accumulates events before
+     * flushing them as a single batched BullMQ job.
+     */
+    bufferFlushMs: parseInt(process.env.ASYNC_BUFFER_FLUSH_MS || '100', 10),
   },
 };
