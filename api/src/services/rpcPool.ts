@@ -1,6 +1,7 @@
 import { SorobanRpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
 import { logger } from '../index';
+import { applyKeepAliveAgents } from './httpAgent';
 
 interface ProviderState {
   url: string;
@@ -22,6 +23,9 @@ export class RpcPool {
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
+    // Reuse TCP/TLS connections per RPC endpoint via shared keep-alive agents.
+    applyKeepAliveAgents();
+
     const { rpcUrls, rpc } = config.soroban;
     this.strategy = rpc.selectionStrategy;
     this.failureThreshold = rpc.failureThreshold;

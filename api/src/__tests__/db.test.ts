@@ -10,7 +10,7 @@ vi.mock('../config', () => ({
   },
 }));
 
-import { getPool, dbHealthCheck } from '../services/db';
+import { getPool, dbHealthCheck, getPoolMetrics } from '../services/db';
 
 describe('db service (no DATABASE_URL)', () => {
   it('getPool returns null when DATABASE_URL is not set', () => {
@@ -21,5 +21,9 @@ describe('db service (no DATABASE_URL)', () => {
   it('dbHealthCheck returns ok (skip) when database not configured', async () => {
     const result = await dbHealthCheck();
     expect(result.ok).toBe(true);
+  });
+
+  it('getPoolMetrics returns null when database not configured', () => {
+    expect(getPoolMetrics()).toBeNull();
   });
 });
