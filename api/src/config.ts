@@ -90,10 +90,18 @@ export const config = {
   },
   database: {
     url: process.env.DATABASE_URL || '',
-    poolMax: parseInt(process.env.DB_POOL_MAX || '10', 10),
-    idleTimeoutMs: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
+    poolMin: parseInt(process.env.DB_POOL_MIN || '2', 10),
+    poolMax: parseInt(process.env.DB_POOL_MAX || '20', 10),
+    idleTimeoutMs: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '10000', 10),
     connectionTimeoutMs: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '5000', 10),
+    statementTimeoutMs: parseInt(process.env.DB_STATEMENT_TIMEOUT_MS || '30000', 10),
     ssl: process.env.DB_SSL === 'true',
+  },
+  /** Keep-alive connection pooling for outbound HTTP (Soroban RPC). */
+  httpAgent: {
+    maxSockets: parseInt(process.env.HTTP_AGENT_MAX_SOCKETS || '50', 10),
+    maxFreeSockets: parseInt(process.env.HTTP_AGENT_MAX_FREE_SOCKETS || '10', 10),
+    keepAliveMsecs: parseInt(process.env.HTTP_AGENT_KEEP_ALIVE_MS || '15000', 10),
   },
   websocket: {
     authRequired: process.env.WS_AUTH_REQUIRED !== 'false',

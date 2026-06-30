@@ -32,6 +32,7 @@ import { securityMiddleware, contentTypeEnforcement } from './middleware/securit
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
+import { closePool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { updateCircuitBreakerMetrics, activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
@@ -199,6 +200,20 @@ if (process.env.NODE_ENV !== 'test') {
 
   gracefulShutdown.attach(server, logger);
 
+  // Drain all external-service connection pools on shutdown.
+  // Imported lazily so the RPC pool / keep-alive agents aren't constructed
+  // during this module's early initialization.
+  const drainConnectionPools = async () => {
+    const [{ rpcPool }, { destroyAgents }] = await Promise.all([
+      import('./services/rpcPool'),
+      import('./services/httpAgent'),
+    ]);
+    rpcPool.destroy();
+    destroyAgents();
+    await closePool();
+    logger.info('connection pools drained');
+  };
+
   if (config.jobs.enabled) {
     import('./jobs/queue').then(async ({ getAllQueues, scheduleRecurringJobs, closeQueues }) => {
       const { createBullBoard } = await import('@bull-board/api');
@@ -215,17 +230,20 @@ if (process.env.NODE_ENV !== 'test') {
 
       registerSignalHandlers(async () => {
         await closeQueues();
+        await drainConnectionPools();
         await shutdownTracing();
         logger.info('job queues closed');
       });
     }).catch((err: Error) => {
       logger.error({ err }, 'failed to initialize job queues');
       registerSignalHandlers(async () => {
+        await drainConnectionPools();
         await shutdownTracing();
       });
     });
   } else {
     registerSignalHandlers(async () => {
+      await drainConnectionPools();
       await shutdownTracing();
     });
   }
