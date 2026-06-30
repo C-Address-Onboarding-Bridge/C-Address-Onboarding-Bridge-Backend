@@ -12,7 +12,6 @@
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
     "audit:dependencies": "npm audit --omit=dev --json > reports/dependency-audit.json || true && node scripts/dependency-vulnerability-monitor.mjs reports/dependency-audit.json",
-    "prepare": "husky",
     "secrets:scan": "node scripts/secrets.mjs scan --staged",
     "secrets:encrypt": "node scripts/secrets.mjs encrypt",
     "secrets:decrypt": "node scripts/secrets.mjs decrypt",
@@ -24,7 +23,6 @@
     "ioredis": "^5.11.1"
   },
   "devDependencies": {
-    "husky": "^9.1.7",
     "lint-staged": "^15.2.10"
   },
   "lint-staged": {

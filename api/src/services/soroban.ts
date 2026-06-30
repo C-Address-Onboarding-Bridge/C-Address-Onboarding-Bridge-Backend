@@ -12,6 +12,8 @@ import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { config } from '../config';
 import { rpcPool } from './rpcPool';
 import { externalCallDuration } from './metrics';
+import { validateXdr, XdrValidationError } from './xdrValidator';
+import { logger } from '../logger';
 
 const tracer = trace.getTracer('soroban-service');
 
@@ -73,10 +75,15 @@ export class SorobanService {
   }
 
   /**
-   * Submits a signed Soroban transaction XDR to the network.
+   * Validates and submits a signed Soroban transaction XDR to the network.
+   *
+   * Runs the full XDR validation pipeline before touching the RPC. Any
+   * validation failure throws an `XdrValidationError` with a structured
+   * `code` and `detail`; the caller should convert these to 400 responses.
    *
    * @param signedXdr - Base64-encoded signed transaction envelope.
    * @returns Transaction status and hash.
+   * @throws {XdrValidationError} If the XDR fails any validation rule.
    */
   async submitFundingTransaction(
     signedXdr: string,
@@ -84,28 +91,47 @@ export class SorobanService {
     return tracer.startActiveSpan('soroban.submitFundingTransaction', async (span): Promise<SorobanTxResponse> => {
       const start = Date.now();
       try {
+        // ── Validation pipeline ──────────────────────────────────────────────
+        // Throws XdrValidationError on any rule failure — no network call is made.
+        const validation = validateXdr(signedXdr);
+        span.setAttributes({
+          'tx.hash': validation.txHash,
+          'tx.source': validation.sourceAccount,
+          'tx.fee': validation.fee,
+          'tx.op_count': validation.operationCount,
+        });
+
+        // ── Submission ───────────────────────────────────────────────────────
+        // Re-parse from the validated string (Transaction constructor already
+        // ran inside validateXdr; we need the object for sendTransaction).
         const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
         const tx = new Transaction(envelope, this.networkPassphrase);
-        const txHash = tx.hash().toString('hex');
-        span.setAttribute('tx.hash', txHash);
 
         const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
         externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
 
         if (sendResponse.status === 'PENDING') {
-          return { status: 'pending' as const, hash: txHash };
+          return { status: 'pending' as const, hash: validation.txHash };
         }
         if (sendResponse.status === 'ERROR') {
           span.setStatus({ code: SpanStatusCode.ERROR });
           return {
             status: 'failed' as const,
-            hash: txHash,
+            hash: validation.txHash,
             error: sendResponse.errorResult?.result().toString() || 'unknown error',
           };
         }
-        return { status: 'success' as const, hash: txHash };
+        return { status: 'success' as const, hash: validation.txHash };
       } catch (err) {
-        span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+        if (err instanceof XdrValidationError) {
+          logger.warn(
+            { code: err.code, detail: err.detail },
+            'soroban.submitFundingTransaction: XDR validation rejected',
+          );
+          span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+        } else {
+          span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+        }
         throw err;
       } finally {
         span.end();

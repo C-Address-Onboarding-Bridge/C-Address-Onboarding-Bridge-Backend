@@ -508,31 +508,192 @@ Server starts at `http://localhost:3001`. Health check: `GET /health`.
 
 ## Deployment
 
-### Soroban Contract
+### Automated Contract Deployment Pipeline
+
+Smart contract deployments are fully automated through GitHub Actions and version-tagged git pushes. No manual CLI commands are needed.
+
+#### How it works
+
+| Tag format | Network | Approval |
+|------------|---------|----------|
+| `contract/v1.2.0-dev.3` | testnet | None (auto) |
+| `contract/v1.2.0` | mainnet | Required reviewers |
+
+Push a tag to trigger the pipeline:
 
 ```bash
-cd contracts/onboarding-bridge
+# Deploy to testnet (automated)
+git tag contract/v1.2.0-dev.1
+git push origin contract/v1.2.0-dev.1
 
-# Build optimized WASM
-cargo build --target wasm32-unknown-unknown --release
+# Deploy to mainnet (requires approval in GitHub → Environments → mainnet)
+git tag contract/v1.2.0
+git push origin contract/v1.2.0
+```
 
-# Deploy using soroban-cli
-soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/onboarding_bridge.wasm \
-  --source <admin-secret> \
-  --rpc-url https://soroban-rpc.testnet.stellar.org \
-  --network-passphrase "Test SDF Network ; September 2015"
+You can also trigger it manually from [Actions → Deploy Contract](../../actions/workflows/deploy-contract.yml).
 
-# Initialize
-soroban contract invoke \
+#### Pipeline steps
+
+```
+Tag push → CI gate → Build WASM → (approval for mainnet) → Deploy
+                                                                ↓
+                                              Initialize → Verify → Save artifact
+                                                                ↓
+                                              Generate report → Notify Slack
+                                                                ↓
+                                              Publish GitHub Release (tag pushes)
+```
+
+1. **CI gate** — all existing tests must pass before deploy starts.
+2. **Build WASM** — `stellar contract build` with the `release` profile; SHA-256 is computed and stored.
+3. **Mainnet approval** — the `mainnet` GitHub Environment enforces required reviewers. No code runs until approved.
+4. **Deploy** — `stellar contract deploy` uploads the WASM; contract ID is captured.
+5. **Initialize** — `initialize()` is called with admin addresses, threshold, and fee parameters.
+6. **Verify** — `version()` and `fee_bps()` are invoked on-chain to confirm the contract is live and correctly configured.
+7. **Save artifact** — `deployments/deployment-<network>.json` is written with all deployment metadata.
+8. **Report** — a Markdown deployment report is generated at `reports/deployment-report-<network>-<timestamp>.md`.
+9. **GitHub Release** — the WASM binary, artifact JSON, and report are attached to the release.
+10. **Slack notification** — team is notified (if `SLACK_WEBHOOK_URL` is configured).
+
+#### Required GitHub secrets
+
+Configure these under Settings → Secrets and variables → Actions:
+
+| Secret | Description |
+|--------|-------------|
+| `SOROBAN_SOURCE_ACCOUNT` | Testnet deployer secret key (`S...`) |
+| `SOROBAN_SOURCE_ACCOUNT_MAINNET` | Mainnet deployer secret key (`S...`) |
+| `CONTRACT_ADMIN_ADDRESSES` | Comma-separated admin addresses for testnet |
+| `CONTRACT_ADMIN_ADDRESSES_MAINNET` | Comma-separated admin addresses for mainnet |
+| `SOROBAN_NETWORK_PASSPHRASE_MAINNET` | Mainnet network passphrase |
+| `SLACK_WEBHOOK_URL` | Optional — Slack incoming webhook URL |
+
+#### Optional GitHub variables (with defaults)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SOROBAN_RPC_URL_TESTNET` | `https://soroban-rpc.testnet.stellar.org` | Testnet RPC |
+| `SOROBAN_RPC_URL_MAINNET` | `https://mainnet.sorobanrpc.com` | Mainnet RPC |
+| `CONTRACT_THRESHOLD` | `1` | Testnet multi-sig threshold |
+| `CONTRACT_THRESHOLD_MAINNET` | `2` | Mainnet multi-sig threshold |
+| `CONTRACT_FEE_BPS` | `30` | Fee in basis points |
+| `CONTRACT_MAX_FEE_BPS` | `1000` | Fee cap in basis points |
+| `CONTRACT_MIN_AMOUNT` | `100` | Minimum fund amount (stroops) |
+| `CONTRACT_MAX_AMOUNT` | `1000000000000` | Maximum fund amount (stroops) |
+
+#### Deployment artifacts
+
+Every successful run saves a JSON artifact in `deployments/`:
+
+```jsonc
+// deployments/deployment-testnet.json
+{
+  "network": "testnet",
+  "contractId": "C...",
+  "deployTx": "<64-char hex>",
+  "wasmHash": "<sha256>",
+  "wasmSize": 38912,
+  "rpcUrl": "https://soroban-rpc.testnet.stellar.org",
+  "deployedAt": "2026-06-30T01:44:05Z",
+  "gitTag": "contract/v1.2.0-dev.1",
+  "gitSha": "<commit sha>",
+  "deployedBy": "github-actor",
+  "initParams": {
+    "admins": ["G..."],
+    "threshold": 1,
+    "feeBps": 30,
+    "maxFeeBps": 1000,
+    "minAmount": 100,
+    "maxAmount": 1000000000000
+  }
+}
+```
+
+#### Local / manual deployment
+
+For one-off deployments outside of CI:
+
+```bash
+# Build and deploy to testnet
+SOURCE_ACCOUNT="S..." \
+ADMIN_ADDRESSES="G...addr1,G...addr2" \
+THRESHOLD=1 \
+BRIDGE_FEE_BPS=30 \
+  bash scripts/deploy-contract.sh --network testnet
+
+# Dry run (build + validate, no on-chain operations)
+SOURCE_ACCOUNT="S..." ADMIN_ADDRESSES="G..." \
+  bash scripts/deploy-contract.sh --network testnet --dry-run
+
+# Force re-deploy (even if an existing live contract is found)
+SOURCE_ACCOUNT="S..." ADMIN_ADDRESSES="G..." \
+  bash scripts/deploy-contract.sh --network testnet --reinstall
+
+# Skip build (reuse last compiled WASM)
+SOURCE_ACCOUNT="S..." ADMIN_ADDRESSES="G..." \
+  bash scripts/deploy-contract.sh --network testnet --skip-build
+```
+
+### Contract Rollback
+
+Soroban contracts are immutable — rolling back means routing your API server to a previously-deployed contract ID. The pipeline preserves the previous artifact as `deployments/deployment-<network>.prev.json`.
+
+```bash
+# Roll back testnet to the previous deployment
+SOURCE_ACCOUNT="S..." bash scripts/rollback-contract.sh --network testnet
+
+# List all available rollback targets
+bash scripts/rollback-contract.sh --network testnet --list
+
+# Target a specific artifact
+SOURCE_ACCOUNT="S..." bash scripts/rollback-contract.sh \
+  --network testnet \
+  --artifact deployments/deployment-testnet.prev.json
+
+# Dry run — verify the rollback target is live without modifying artifacts
+SOURCE_ACCOUNT="S..." bash scripts/rollback-contract.sh \
+  --network testnet --dry-run
+```
+
+After rollback completes, update `BRIDGE_CONTRACT_ID` in your API server environment and redeploy the API.
+
+The GitHub Actions workflow (`deploy-contract.yml`) automatically attempts rollback if the deploy step fails.
+
+### Contract Verification
+
+The deployment pipeline verifies the contract is correctly deployed after every run. You can also verify manually:
+
+```bash
+# Check the on-chain version
+stellar contract invoke \
   --id <contract-id> \
-  --source <admin-secret> \
   --rpc-url https://soroban-rpc.testnet.stellar.org \
   --network-passphrase "Test SDF Network ; September 2015" \
-  -- \
-  initialize \
-  --admin <admin-address> \
-  --fee_bps 30
+  --source <your-secret> \
+  -- version
+
+# Check the configured fee
+stellar contract invoke \
+  --id <contract-id> \
+  --rpc-url https://soroban-rpc.testnet.stellar.org \
+  --network-passphrase "Test SDF Network ; September 2015" \
+  --source <your-secret> \
+  -- fee_bps
+
+# Verify WASM hash matches artifact
+sha256sum target/wasm32v1-none/release/onboarding_bridge.wasm
+# Compare with deployments/deployment-testnet.json .wasmHash
+```
+
+### Deployment Reports
+
+A Markdown report is generated after every deployment and attached as a GitHub Release asset. Generate one manually from an existing artifact:
+
+```bash
+NETWORK=testnet bash scripts/generate-deployment-report.sh
+# Output: reports/deployment-report-testnet-<timestamp>.md
+#         reports/deployment-report-latest.md
 ```
 
 ### API Server
@@ -569,6 +730,16 @@ npm run deploy:blue-green
 The blue-green flow deploys to the inactive environment, runs smoke tests, switches traffic, keeps the previous environment warm for rollback, drains old connections, and records the active color for the next release.
 
 ---
+
+## Security
+
+Security documentation lives in [`docs/security/`](docs/security/):
+
+- [**Threat Model**](docs/security/threat-model.md) — STRIDE analysis covering all six threat categories, trust boundaries, security assumptions, and known risks
+- [**Incident Response Plan**](docs/security/incident-response.md) — detection, containment, and recovery playbooks for API key compromise, webhook forgery, contract admin key loss, and supply-chain attacks
+- [**SECURITY.md**](SECURITY.md) — responsible disclosure policy, bug reporting instructions, scope, and past audit findings
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Do not open a public issue.
 
 ## Architecture Decision Records
 
