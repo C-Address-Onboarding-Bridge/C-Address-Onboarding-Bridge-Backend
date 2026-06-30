@@ -79,8 +79,14 @@ export const config = {
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
     enabled: process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== '',
-    statusTtlSeconds: parseInt(process.env.REDIS_STATUS_TTL_SECONDS || '30', 10),
-    quoteTtlSeconds: parseInt(process.env.REDIS_QUOTE_TTL_SECONDS || '60', 10),
+    /** Status responses – invalidated by webhook on state change. */
+    statusTtlSeconds: parseInt(process.env.REDIS_STATUS_TTL_SECONDS || '10', 10),
+    /** Quote responses – invalidated on new ledger / block. */
+    quoteTtlSeconds: parseInt(process.env.REDIS_QUOTE_TTL_SECONDS || '30', 10),
+    /** CEX route responses – exchange rates change slowly. */
+    cexTtlSeconds: parseInt(process.env.REDIS_CEX_TTL_SECONDS || '60', 10),
+    /** Transaction-list responses – short TTL, invalidated on new transaction. */
+    transactionsTtlSeconds: parseInt(process.env.REDIS_TRANSACTIONS_TTL_SECONDS || '5', 10),
   },
   database: {
     url: process.env.DATABASE_URL || '',

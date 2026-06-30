@@ -53,6 +53,27 @@ export const cacheMissCounter = new Counter({
   registers: [register],
 });
 
+/** Rolling hit-ratio gauge updated on every cache access. */
+export const cacheHitRatioGauge = new Gauge({
+  name: 'cache_hit_ratio',
+  help: 'Cache hit ratio (0.0 – 1.0)',
+  registers: [register],
+});
+
+/** Number of keys currently in Redis (sampled periodically via DBSIZE). */
+export const cacheEntryCountGauge = new Gauge({
+  name: 'cache_entry_count',
+  help: 'Number of keys currently stored in Redis (DBSIZE)',
+  registers: [register],
+});
+
+/** Memory used by Redis in bytes (sampled periodically via INFO memory). */
+export const cacheMemoryBytesGauge = new Gauge({
+  name: 'cache_memory_bytes',
+  help: 'Bytes of memory used by Redis (used_memory from INFO)',
+  registers: [register],
+});
+
 export const circuitBreakerState = new Gauge({
   name: 'circuit_breaker_state',
   help: 'Circuit breaker state (0=closed, 1=open, 2=half-open)',
