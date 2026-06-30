@@ -1,6 +1,12 @@
 import {
   Transaction,
   xdr,
+  Contract,
+  Address,
+  Keypair,
+  Account,
+  TransactionBuilder,
+  BASE_FEE,
 } from '@stellar/stellar-sdk';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { config } from '../config';
@@ -132,22 +138,80 @@ export class SorobanService {
 
   /**
    * Simulates a contract call to obtain the resource footprint and minimum fee.
-   * Currently a stub — returns placeholder values until Soroban simulation is wired up.
    *
-   * @param _sourceAddress - Signing account address.
-   * @param _functionName - Contract function to simulate.
+   * Builds a `fund_c_address` contract invocation, simulates it against the
+   * Soroban RPC, and returns the real footprint (XDR-encoded) and minResourceFee
+   * so the caller can construct a properly-budgeted transaction.
+   *
+   * @param sourceAddress - Signing account address.
+   * @param functionName - Contract function to simulate (e.g. `fund_c_address`).
+   * @param targetAddress - Destination C-address.
+   * @param tokenAddress - Token contract address.
+   * @param amount - Amount in stroops as an integer string.
+   * @param memo - Optional memo bytes.
    */
   async contractSimulate(
-    _sourceAddress: string,
-    _functionName: string,
+    sourceAddress: string,
+    functionName: string,
+    targetAddress: string,
+    tokenAddress: string,
+    amount: string,
+    memo: string,
   ): Promise<{ footprint: string; minResourceFee: string }> {
-    // TODO: implement Soroban simulation using SorobanRpc.Server.simulateTransaction.
-    // Should build the contract invocation, simulate it, and return the real footprint
-    // and minResourceFee so the caller can construct a properly-budgeted transaction.
     if (!this.contractId) {
       return { footprint: 'not_configured', minResourceFee: '0' };
     }
-    return { footprint: 'pending', minResourceFee: '0' };
+
+    try {
+      const contract = new Contract(this.contractId);
+      const amountBigInt = BigInt(amount);
+
+      const op = contract.call(
+        functionName,
+        Address.fromString(sourceAddress).toScVal(),
+        Address.fromString(targetAddress).toScVal(),
+        Address.fromString(tokenAddress).toScVal(),
+        xdr.ScVal.scvI128(
+          new xdr.Int128Parts({
+            lo: new xdr.Uint64(amountBigInt & BigInt('0xFFFFFFFFFFFFFFFF')),
+            hi: new xdr.Int64(amountBigInt >> BigInt(64)),
+          }),
+        ),
+        xdr.ScVal.scvBytes(Buffer.from(memo || '')),
+      );
+
+      // Build a minimal transaction for simulation purposes.
+      // The source is a throwaway keypair — the RPC simulates without verifying signatures.
+      const dummyKeypair = Keypair.random();
+      const dummyAccount = new Account(dummyKeypair.publicKey(), '0');
+
+      const tx = new TransactionBuilder(dummyAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(op)
+        .setTimeout(30)
+        .build();
+
+      const simulation = await rpcPool.execute((server) =>
+        server.simulateTransaction(tx),
+      );
+
+      if ('error' in simulation && simulation.error) {
+        return { footprint: 'error', minResourceFee: '0' };
+      }
+
+      if ('transactionData' in simulation && simulation.transactionData) {
+        const footprint = simulation.transactionData.build().toXDR('base64');
+        const minResourceFee = simulation.minResourceFee || '0';
+        return { footprint, minResourceFee };
+      }
+
+      return { footprint: 'pending', minResourceFee: '0' };
+    } catch (err) {
+      logger.error({ err: String(err) }, 'contract simulation failed');
+      return { footprint: 'simulation_failed', minResourceFee: '0' };
+    }
   }
 
   getRpcMetrics(): Array<{ url: string; healthy: boolean; consecutiveFailures: number; lastFailureAt: number | null; lastLatencyMs: number | null; totalRequests: number; totalFailures: number }> {

@@ -63,6 +63,10 @@ fundingRouter.post('/prepare', fundEndpointRateLimit, async (req: Request, res: 
     const simulation = await sorobanService.contractSimulate(
       body.sourceAddress,
       'fund_c_address',
+      body.targetAddress,
+      body.tokenAddress,
+      body.amount,
+      body.memo,
     );
     integrityAuditLog.append('transaction_submission', {
       amount: body.amount,
