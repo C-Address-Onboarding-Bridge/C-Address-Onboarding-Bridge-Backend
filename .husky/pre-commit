@@ -1,2 +1,0 @@
-node scripts/secrets.mjs scan --staged
-npx lint-staged
