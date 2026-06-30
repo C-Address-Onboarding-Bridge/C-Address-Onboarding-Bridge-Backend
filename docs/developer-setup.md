@@ -2,6 +2,9 @@
 
 This guide gets you from a fresh clone to a fully running local environment in one command.
 
+> **Video walkthrough:** [Getting started in 5 minutes](video-walkthroughs.md#1-getting-started-in-5-minutes) · [Running the API server locally](video-walkthroughs.md#5-running-the-api-server-locally)  
+> Play locally: `asciinema play docs/videos/casts/getting-started.cast`
+
 ---
 
 ## Quick Start

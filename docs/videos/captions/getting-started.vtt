@@ -1,0 +1,16 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.000
+Clone the C-Address Bridge monorepo from GitHub.
+
+00:00:04.000 --> 00:00:10.000
+Run the setup script to install dependencies and create your local environment file.
+
+00:00:10.000 --> 00:00:16.000
+Start the Docker Compose stack with the API, database, Redis, and Soroban quickstart.
+
+00:00:16.000 --> 00:00:22.000
+Verify the API health endpoint returns status ok.
+
+00:00:22.000 --> 00:00:26.000
+You are ready to integrate. See developer setup and multi-language examples.

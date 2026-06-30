@@ -13,5 +13,5 @@ COPY api/dist/ api/dist/
 COPY api/node_modules/ api/node_modules/
 COPY sdk/ sdk/
 RUN npm ci --production --workspace=api
-EXPOSE 3000
+EXPOSE 3001
 CMD ["node", "api/dist/index.js"]

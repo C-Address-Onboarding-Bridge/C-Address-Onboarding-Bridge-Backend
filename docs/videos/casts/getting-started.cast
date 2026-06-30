@@ -1,0 +1,11 @@
+{"version": 2, "width": 100, "height": 24, "timestamp": 1719590400, "title": "Getting Started in 5 Minutes", "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.0, "o", "\u001b[1;32m$\u001b[0m git clone https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend.git\r\n"]
+[0.8, "o", "Cloning into 'C-Address-Onboarding-Bridge-Backend'...\r\n"]
+[1.6, "o", "\u001b[1;32m$\u001b[0m cd C-Address-Onboarding-Bridge-Backend && ./scripts/setup-dev.sh\r\n"]
+[2.4, "o", "✓ Dependencies installed\r\n✓ .env created from .env.local.example\r\n✓ Packages built\r\n"]
+[3.2, "o", "\u001b[1;32m$\u001b[0m docker compose up -d\r\n"]
+[4.0, "o", " Container bridge-api Started\r\n Container bridge-postgres Started\r\n Container bridge-redis Started\r\n"]
+[4.8, "o", "\u001b[1;32m$\u001b[0m curl -s http://localhost:3001/health | jq .\r\n"]
+[5.4, "o", "{\r\n  \"status\": \"ok\"\r\n}\r\n"]
+[6.0, "o", "\u001b[1;32m$\u001b[0m echo 'Ready — see docs/developer-setup.md and examples/'\r\n"]
+[6.4, "o", "Ready — see docs/developer-setup.md and examples/\r\n"]

@@ -11,12 +11,14 @@ import { migration001 } from '../src/migrations/001_initial_schema';
 import { migration002 } from '../src/migrations/002_api_keys_schema';
 import { migration003 } from '../src/migrations/003_analytics_schema';
 import { migration004 } from '../src/migrations/004_integrity_audit_log';
+import { migration005 } from '../src/migrations/005_query_optimization_indexes';
 
 migrationRunner
   .register(migration001)
   .register(migration002)
   .register(migration003)
-  .register(migration004);
+  .register(migration004)
+  .register(migration005);
 
 const [command = 'migrate', arg] = process.argv.slice(2);
 

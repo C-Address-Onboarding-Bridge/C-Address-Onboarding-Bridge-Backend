@@ -1,0 +1,6 @@
+{"version": 2, "width": 100, "height": 24, "timestamp": 1719590400, "title": "MoonPay Fiat On-Ramp", "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.0, "o", "\u001b[1;32m$\u001b[0m grep MOONPAY .env.local.example\r\n"]
+[0.5, "o", "MOONPAY_API_KEY=pk_test_...\r\nMOONPAY_SECRET_KEY=sk_test_...\r\n"]
+[1.2, "o", "\u001b[1;32m$\u001b[0m curl -s -X POST http://localhost:3001/api/v1/offramp/moonpay \\\r\n"]
+[1.6, "o", "  -H 'X-API-Key: dev-key' -d '{\"walletAddress\":\"C...\",\"baseCurrencyAmount\":100}' | jq .\r\n"]
+[2.4, "o", "{\r\n  \"url\": \"https://buy.moonpay.com?apiKey=...&walletAddress=C...\"\r\n}\r\n"]

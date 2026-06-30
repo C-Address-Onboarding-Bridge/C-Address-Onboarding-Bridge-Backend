@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:06.000
+Start all local services with Docker Compose.
+
+00:00:06.000 --> 00:00:12.000
+Confirm the API, Postgres, and Redis containers are running.
+
+00:00:12.000 --> 00:00:18.000
+Hit the health endpoint to verify the API is responding.
+
+00:00:18.000 --> 00:00:24.000
+Run the smoke test script to validate quote and health flows.

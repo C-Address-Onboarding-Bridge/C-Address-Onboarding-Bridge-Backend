@@ -1,0 +1,173 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
+    { "type": "panel", "id": "timeseries", "name": "Time series", "version": "" },
+    { "type": "panel", "id": "stat", "name": "Stat", "version": "" },
+    { "type": "panel", "id": "table", "name": "Table", "version": "" }
+  ],
+  "annotations": { "list": [] },
+  "description": "C-Address Bridge – DeFi Operations (Soroban / Smart Contract)",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(soroban_contract_calls_total{job=\"c-address-bridge\"}[5m])) by (function)",
+          "legendFormat": "{{function}}"
+        }
+      ],
+      "title": "Smart Contract Interaction Rate by Function",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum(rate(soroban_rpc_duration_seconds_bucket{job=\"c-address-bridge\"}[5m])) by (le, endpoint))",
+          "legendFormat": "p50 {{endpoint}}"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum(rate(soroban_rpc_duration_seconds_bucket{job=\"c-address-bridge\"}[5m])) by (le, endpoint))",
+          "legendFormat": "p95 {{endpoint}}"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum(rate(soroban_rpc_duration_seconds_bucket{job=\"c-address-bridge\"}[5m])) by (le, endpoint))",
+          "legendFormat": "p99 {{endpoint}}"
+        }
+      ],
+      "title": "Soroban RPC Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "red", "value": 0.10 }] } }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(soroban_rpc_errors_total{job=\"c-address-bridge\"}[5m])) / sum(rate(soroban_rpc_calls_total{job=\"c-address-bridge\"}[5m]))",
+          "legendFormat": "RPC Error Rate"
+        }
+      ],
+      "title": "Soroban RPC Error Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(soroban_contract_calls_total{job=\"c-address-bridge\",status=\"success\"}[5m])) by (function)",
+          "legendFormat": "success {{function}}"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(soroban_contract_calls_total{job=\"c-address-bridge\",status=\"error\"}[5m])) by (function)",
+          "legendFormat": "error {{function}}"
+        }
+      ],
+      "title": "Contract Call Success vs Error",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 16 },
+      "id": 5,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "soroban_rpc_pool_size{job=\"c-address-bridge\"}",
+          "legendFormat": "Pool Size"
+        }
+      ],
+      "title": "RPC Pool Size",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 16 },
+      "id": 6,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "soroban_rpc_pool_active{job=\"c-address-bridge\"}",
+          "legendFormat": "Active RPC Connections"
+        }
+      ],
+      "title": "Active RPC Connections",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 16 },
+      "id": 7,
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "increase(bridge_fee_withdrawals_total{job=\"c-address-bridge\"}[24h])",
+          "legendFormat": "Fee Withdrawals (24h)"
+        }
+      ],
+      "title": "Fee Withdrawals (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "avg(soroban_rpc_duration_seconds{job=\"c-address-bridge\",quantile=\"0.99\"}) by (node)",
+          "legendFormat": "p99 {{node}}"
+        }
+      ],
+      "title": "RPC Latency per Node",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["c-address-bridge", "defi", "soroban", "smart-contract"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "C-Address Bridge – DeFi Operations",
+  "uid": "cab-defi-ops",
+  "version": 1
+}

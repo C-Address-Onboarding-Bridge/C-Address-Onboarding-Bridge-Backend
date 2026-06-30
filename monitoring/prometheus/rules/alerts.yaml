@@ -1,0 +1,257 @@
+groups:
+  # ──────────────────────────────────────────────────────────────
+  # API / HTTP health
+  # ──────────────────────────────────────────────────────────────
+  - name: c-address-bridge.api
+    interval: 30s
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="c-address-bridge",status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total{job="c-address-bridge"}[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "High HTTP 5xx error rate ({{ $value | humanizePercentage }})"
+          description: >
+            The 5xx error rate for the C-Address Bridge API has exceeded 5% for more
+            than 5 minutes. Current rate: {{ $value | humanizePercentage }}.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/high-error-rate.md"
+          dashboard_url: "http://grafana:3000/d/cab-system-health"
+
+      - alert: HighP99Latency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket{job="c-address-bridge"}[5m])) by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "p99 API latency above 2s ({{ $value | humanizeDuration }})"
+          description: >
+            The p99 request latency has exceeded 2 seconds for more than 5 minutes.
+            Current p99: {{ $value | humanizeDuration }}.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/high-latency.md"
+          dashboard_url: "http://grafana:3000/d/cab-system-health"
+
+      - alert: HealthEndpointDown
+        expr: |
+          probe_success{job="blackbox",instance=~".*c-address-bridge.*/health"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Health endpoint is down for {{ $labels.instance }}"
+          description: >
+            The /health endpoint for {{ $labels.instance }} has been unreachable
+            for more than 2 minutes.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/health-endpoint-down.md"
+
+      - alert: RateLimitUsageHigh
+        expr: |
+          sum(rate(http_rate_limit_hits_total{job="c-address-bridge"}[5m]))
+          /
+          sum(rate(http_requests_total{job="c-address-bridge"}[5m]))
+          > 0.80
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Rate limit usage above 80% ({{ $value | humanizePercentage }})"
+          description: >
+            More than 80% of requests are being rate-limited.
+            Current rate: {{ $value | humanizePercentage }}.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/rate-limit-high.md"
+
+  # ──────────────────────────────────────────────────────────────
+  # Infrastructure / resource
+  # ──────────────────────────────────────────────────────────────
+  - name: c-address-bridge.infra
+    interval: 60s
+    rules:
+      - alert: HighMemoryUsage
+        expr: |
+          process_resident_memory_bytes{job="c-address-bridge"}
+          /
+          node_memory_MemTotal_bytes
+          > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Memory usage above 85% on {{ $labels.instance }}"
+          description: >
+            Process memory usage has exceeded 85% of total available memory
+            for more than 10 minutes. Current usage: {{ $value | humanizePercentage }}.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/high-memory.md"
+
+      - alert: HighMemoryUsageCritical
+        expr: |
+          process_resident_memory_bytes{job="c-address-bridge"}
+          /
+          node_memory_MemTotal_bytes
+          > 0.95
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Critical memory usage on {{ $labels.instance }} ({{ $value | humanizePercentage }})"
+          description: >
+            Process memory usage exceeded 95% — OOM kill risk.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/high-memory.md"
+
+  # ──────────────────────────────────────────────────────────────
+  # Circuit breakers
+  # ──────────────────────────────────────────────────────────────
+  - name: c-address-bridge.circuit-breaker
+    interval: 30s
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: |
+          bridge_circuit_breaker_state{job="c-address-bridge"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Circuit breaker OPEN for {{ $labels.service }} > 5 min"
+          description: >
+            The circuit breaker for {{ $labels.service }} has been in OPEN state
+            for more than 5 minutes. This means the service is unavailable.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/circuit-breaker-open.md"
+
+      - alert: CircuitBreakerHalfOpen
+        expr: |
+          bridge_circuit_breaker_state{job="c-address-bridge"} == 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Circuit breaker HALF-OPEN for {{ $labels.service }}"
+          description: >
+            The circuit breaker for {{ $labels.service }} has been in HALF-OPEN
+            state for more than 10 minutes — service may be recovering slowly.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/circuit-breaker-open.md"
+
+  # ──────────────────────────────────────────────────────────────
+  # Soroban / DeFi
+  # ──────────────────────────────────────────────────────────────
+  - name: c-address-bridge.soroban
+    interval: 30s
+    rules:
+      - alert: SorobanRPCHighErrorRate
+        expr: |
+          sum(rate(soroban_rpc_errors_total{job="c-address-bridge"}[5m]))
+          /
+          sum(rate(soroban_rpc_calls_total{job="c-address-bridge"}[5m]))
+          > 0.10
+        for: 5m
+        labels:
+          severity: critical
+          team: blockchain
+        annotations:
+          summary: "Soroban RPC error rate above 10% ({{ $value | humanizePercentage }})"
+          description: >
+            More than 10% of Soroban RPC calls are failing.
+            Current rate: {{ $value | humanizePercentage }}.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/soroban-rpc-errors.md"
+
+      - alert: SorobanRPCHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(soroban_rpc_duration_seconds_bucket{job="c-address-bridge"}[5m])) by (le)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+          team: blockchain
+        annotations:
+          summary: "Soroban RPC p95 latency above 5s ({{ $value | humanizeDuration }})"
+          description: >
+            The Soroban RPC p95 latency has exceeded 5 seconds.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/soroban-rpc-errors.md"
+
+  # ──────────────────────────────────────────────────────────────
+  # Cache
+  # ──────────────────────────────────────────────────────────────
+  - name: c-address-bridge.cache
+    interval: 60s
+    rules:
+      - alert: LowCacheHitRatio
+        expr: |
+          bridge_cache_hit_ratio{job="c-address-bridge"} < 0.50
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Cache hit ratio below 50% ({{ $value | humanizePercentage }})"
+          description: >
+            The cache hit ratio has been below 50% for more than 15 minutes.
+            This may indicate cache misconfiguration or a cold-cache state.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/low-cache-hit.md"
+
+  # ──────────────────────────────────────────────────────────────
+  # SLO burn rate (multi-window)
+  # ──────────────────────────────────────────────────────────────
+  - name: c-address-bridge.slo
+    interval: 60s
+    rules:
+      - alert: SLOFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{job="c-address-bridge",status=~"5.."}[1h]))
+            /
+            sum(rate(http_requests_total{job="c-address-bridge"}[1h]))
+          ) > (14.4 * 0.001)
+          and
+          (
+            sum(rate(http_requests_total{job="c-address-bridge",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="c-address-bridge"}[5m]))
+          ) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "SLO fast burn — 99.9% availability at risk"
+          description: >
+            Error burn rate is consuming the monthly error budget at 14.4×
+            the allowed rate (1h + 5m windows both exceeded).
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/slo-burn.md"
+
+      - alert: SLOSlowBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{job="c-address-bridge",status=~"5.."}[6h]))
+            /
+            sum(rate(http_requests_total{job="c-address-bridge"}[6h]))
+          ) > (6 * 0.001)
+          and
+          (
+            sum(rate(http_requests_total{job="c-address-bridge",status=~"5.."}[30m]))
+            /
+            sum(rate(http_requests_total{job="c-address-bridge"}[30m]))
+          ) > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "SLO slow burn — monthly error budget draining"
+          description: >
+            Error burn rate is consuming the monthly budget at 6× rate
+            (6h + 30m windows both exceeded).
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/slo-burn.md"

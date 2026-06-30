@@ -329,6 +329,18 @@ Route a CEX withdrawal to a C-address.
 npm install @c-address-bridge/sdk
 ```
 
+### Multi-language examples
+
+Python, Rust, Go, and Java examples live in [`examples/`](examples/). Each includes a thin HTTP client, Docker support, and CI verification:
+
+```bash
+node examples/mock-server/server.mjs   # terminal 1
+export BRIDGE_BASE_URL=http://localhost:3099
+cd examples/python && python main.py     # or rust / go / java
+```
+
+See [examples/README.md](examples/README.md) and [video walkthroughs](docs/video-walkthroughs.md).
+
 ### Quick Start
 
 ```typescript
@@ -536,6 +548,10 @@ export PORT=3001
 
 # Start
 npm start -w api
+
+# Or using Docker
+docker build -t c-address-bridge-api .
+docker run -p 3001:3001 --env-file .env c-address-bridge-api
 ```
 
 ### Blue-Green Deployment
