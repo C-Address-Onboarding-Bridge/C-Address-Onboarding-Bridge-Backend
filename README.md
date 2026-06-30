@@ -729,6 +729,16 @@ The blue-green flow deploys to the inactive environment, runs smoke tests, switc
 
 ---
 
+## Security
+
+Security documentation lives in [`docs/security/`](docs/security/):
+
+- [**Threat Model**](docs/security/threat-model.md) — STRIDE analysis covering all six threat categories, trust boundaries, security assumptions, and known risks
+- [**Incident Response Plan**](docs/security/incident-response.md) — detection, containment, and recovery playbooks for API key compromise, webhook forgery, contract admin key loss, and supply-chain attacks
+- [**SECURITY.md**](SECURITY.md) — responsible disclosure policy, bug reporting instructions, scope, and past audit findings
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Do not open a public issue.
+
 ## Architecture Decision Records
 
 Architectural decisions are documented in [docs/adr/README.md](docs/adr/README.md). Use the ADR template at [docs/adr/template.md](docs/adr/template.md) for new proposals.
