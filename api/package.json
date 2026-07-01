@@ -21,8 +21,8 @@
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.4",
-    "@bull-board/api": "^8.0.1",
-    "@bull-board/express": "^8.0.1",
+    "@bull-board/api": "^8.0.2",
+    "@bull-board/express": "^8.0.2",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/auto-instrumentations-node": "^0.77.0",
     "@opentelemetry/core": "^2.8.0",
