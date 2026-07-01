@@ -46,7 +46,7 @@
     "prom-client": "^15.1.3",
     "swagger-ui-express": "^5.0.1",
     "ws": "^8.21.0",
-    "zod": "^3.22.4"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/compression": "^1.8.1",
