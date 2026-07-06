@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
+import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
 import { moonpayService } from '../services/moonpay';
 import { transakService } from '../services/transak';
 import { onrampRequestCount } from '../services/metrics';
@@ -8,11 +9,9 @@ import { enqueueCounterIncrement } from '../services/asyncPipeline';
 /** Express router for off-ramp widget URL generation. Mounted at `/api/v1/offramp`. */
 export const offrampRouter = Router();
 
-const stellarAddressRegex = /^[GC][A-Z2-7]{55}$/;
-
 const moonpaySchema = z.object({
   currencyCode: z.string().default('xlm'),
-  walletAddress: z.string().regex(stellarAddressRegex, 'invalid Stellar address'),
+  walletAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
   walletNetwork: z.string().default('stellar'),
   baseCurrencyAmount: z.number().positive().optional(),
   baseCurrencyCode: z.string().optional(),
@@ -20,7 +19,7 @@ const moonpaySchema = z.object({
 });
 
 const transakSchema = z.object({
-  walletAddress: z.string().regex(stellarAddressRegex, 'invalid Stellar address'),
+  walletAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
   network: z.string().default('stellar'),
   fiatCurrency: z.string().optional(),
   cryptoCurrency: z.string().optional(),

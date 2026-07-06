@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
+import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
 import { sorobanService } from '../services/soroban';
 import { buildCacheKey, CACHE_TTL, getOrCompute, cacheDelPattern } from '../services/cache';
 import { setFeeRateBps } from '../services/metrics';
@@ -7,12 +8,10 @@ import { setFeeRateBps } from '../services/metrics';
 /** Express router for quote endpoints. Mounted at `/api/v1/quote`. */
 export const quoteRouter = Router();
 
-const stellarAddressRegex = /^[GC][A-Z2-7]{55}$/;
-
 const getQuoteSchema = z.object({
   sourceAsset: z.string().min(1),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
-  targetAddress: z.string().regex(stellarAddressRegex, 'invalid target Stellar address'),
+  targetAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid target Stellar address'),
 });
 
 quoteRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {

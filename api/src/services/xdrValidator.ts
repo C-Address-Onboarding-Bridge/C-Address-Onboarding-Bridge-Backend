@@ -23,6 +23,7 @@ import { xdr, Transaction, FeeBumpTransaction, StrKey } from '@stellar/stellar-s
 import NodeCache from 'node-cache';
 import { config } from '../config';
 import { logger } from '../logger';
+import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -116,10 +117,8 @@ function checkAndRecordHash(txHash: string): boolean {
 
 // ── Stellar address helper ────────────────────────────────────────────────────
 
-const STELLAR_ADDRESS_RE = /^[GC][A-Z2-7]{55}$/;
-
 function isValidStellarAddress(addr: string): boolean {
-  return STELLAR_ADDRESS_RE.test(addr);
+  return STELLAR_ADDRESS_REGEX.test(addr);
 }
 
 // ── Rule implementations ──────────────────────────────────────────────────────

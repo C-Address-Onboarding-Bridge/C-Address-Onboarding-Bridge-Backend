@@ -4,6 +4,7 @@ import {
   extendZodWithOpenApi,
 } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
+import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
 
 extendZodWithOpenApi(z);
 
@@ -20,7 +21,7 @@ registry.registerComponent('securitySchemes', 'ApiKeyAuth', {
 
 const StellarAddress = z
   .string()
-  .regex(/^[GC][A-Z2-7]{55}$/)
+  .regex(STELLAR_ADDRESS_REGEX)
   .openapi({ example: 'GABCDE...WXYZ', description: 'Stellar/C-Address (56-char base32)' });
 
 const StroopsAmount = z
