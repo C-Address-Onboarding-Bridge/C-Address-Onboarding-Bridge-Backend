@@ -79,7 +79,7 @@ jobs:
           BRIDGE_BASE_URL: http://localhost:3099
         run: |
           cd examples/java
-          mvn -q exec:java
+          mvn -q compile exec:java
 
       - name: Stop mock server
         if: always()
