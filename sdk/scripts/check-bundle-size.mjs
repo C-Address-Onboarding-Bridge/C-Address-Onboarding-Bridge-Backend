@@ -6,7 +6,7 @@
  * Budgets (gzipped):
  *   core        8 KB   — minimum viable SDK (BridgeClient + types)
  *   full index  15 KB  — everything including optional modules
- *   offline      5 KB  — OfflineQueue + OfflineBridgeClient
+ *   offline      6 KB  — OfflineQueue + OfflineBridgeClient (wraps BridgeClient incl. SAC token support)
  *   events       4 KB  — BridgeEventEmitter
  *   telemetry    3 KB  — TelemetryClient
  *   pagination   2 KB  — PaginationHelper helpers
@@ -23,7 +23,7 @@ const outDir = resolve(__dirname, '..', 'dist', 'bundle');
 const BUDGETS_KB = {
   'core.min.js':       8,
   'index.min.js':     15,
-  'offline.min.js':    5,
+  'offline.min.js':    6,
   'events.min.js':     4,
   'telemetry.min.js':  3,
   'pagination.min.js': 2,
