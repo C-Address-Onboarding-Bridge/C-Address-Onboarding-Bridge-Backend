@@ -9,9 +9,8 @@ FROM node:20-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY api/package.json api/
-COPY api/dist/ api/dist/
-COPY api/node_modules/ api/node_modules/
-COPY sdk/ sdk/
+COPY sdk/package.json sdk/
 RUN npm ci --production --workspace=api
+COPY --from=build /app/api/dist/ api/dist/
 EXPOSE 3001
 CMD ["node", "api/dist/index.js"]
