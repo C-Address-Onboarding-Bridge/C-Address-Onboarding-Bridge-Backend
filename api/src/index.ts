@@ -62,7 +62,12 @@ const app = express();
 app.set('logger', logger);
 
 app.use(helmet());
-app.use(cors());
+app.use(
+  cors({
+    origin: config.corsOrigins.length > 0 ? config.corsOrigins : '*',
+    methods: ['GET', 'POST'],
+  })
+);
 
 app.use(compressionMiddleware);
 app.use(versionCompatibility);

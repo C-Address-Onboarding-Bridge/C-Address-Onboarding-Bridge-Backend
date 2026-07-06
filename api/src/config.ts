@@ -46,6 +46,11 @@ export const config = {
   },
   /** Comma-separated list of accepted `X-API-Key` values. Auth is disabled when empty. */
   apiKeys: (process.env.API_KEYS || '').split(',').filter(Boolean),
+  /** Comma-separated list of allowed CORS origins. All origins are allowed when empty. */
+  corsOrigins: (process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean),
   logLevel: process.env.LOG_LEVEL || 'info',
   logging: {
     serviceName: process.env.LOG_SERVICE_NAME || 'bridge-api',

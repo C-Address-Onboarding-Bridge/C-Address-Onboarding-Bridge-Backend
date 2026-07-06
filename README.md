@@ -757,6 +757,7 @@ Architectural decisions are documented in [docs/adr/README.md](docs/adr/README.m
 | `MOONPAY_SECRET_KEY` | For webhooks | — | Moonpay webhook secret |
 | `TRANSAK_API_KEY` | For Transak | — | Transak API key |
 | `TRANSAK_ENVIRONMENT` | No | `STAGING` | `STAGING` or `PRODUCTION` |
+| `CORS_ORIGINS` | No | — (all origins) | Comma-separated list of allowed CORS origins; leave empty to allow all (development only) |
 | `PORT` | No | `3001` | API server port |
 | `HOST` | No | `0.0.0.0` | API server host |
 | `LOG_LEVEL` | No | `info` | Pino log level |
