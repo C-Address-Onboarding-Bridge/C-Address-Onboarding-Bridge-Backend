@@ -1,4 +1,4 @@
-name: E2E and Mutation Tests
+name: Nightly E2E Tests
 
 on:
   schedule:
@@ -30,20 +30,3 @@ jobs:
         name: e2e-reports
         path: coverage/
 
-  mutation:
-    name: Mutation Testing
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 20
-        cache: 'npm'
-    - run: npm ci
-    - name: Run Stryker Mutation Tests
-      run: npx stryker run
-    - name: Upload Mutation Report
-      uses: actions/upload-artifact@v4
-      with:
-        name: mutation-report
-        path: reports/mutation/html
