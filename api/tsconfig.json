@@ -4,5 +4,8 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  // offrampMoonpay.test.ts imports the standalone offramp/ module, which lives
+  // outside rootDir; vitest runs it, but it cannot be part of this compilation.
+  "exclude": ["src/__tests__/offrampMoonpay.test.ts"]
 }

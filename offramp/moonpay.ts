@@ -44,18 +44,16 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
  * @param config - MoonPay credentials (only `secretKey` is used).
  * @param rawBody - Raw request body string received from MoonPay.
  * @param signature - Value of the `x-moonpay-signature` header.
- *
- * @throws {RangeError} If `signature` and the computed HMAC have different byte lengths.
- * Use {@link api/src/services/moonpay.ts MoonpayService.verifyWebhookSignature} which
- * includes a length guard, unless you are certain the signature is always base64.
+ * @returns `true` when the signature matches, `false` otherwise (including
+ * when the signature has a different byte length than the computed HMAC).
  */
 export function verifyMoonpayWebhook(config: MoonpayConfig, rawBody: string, signature: string): boolean {
   const hmac = crypto.createHmac('sha256', config.secretKey);
   hmac.update(rawBody);
-  const expected = hmac.digest('base64');
-  // TODO: add a length check (`expected.length !== signature.length`) before
-  // timingSafeEqual to prevent a RangeError when the signature is malformed.
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  const expectedBuf = Buffer.from(hmac.digest('base64'));
+  const sigBuf = Buffer.from(signature);
+  if (sigBuf.length !== expectedBuf.length) return false;
+  return crypto.timingSafeEqual(sigBuf, expectedBuf);
 }
 
 /**
