@@ -212,7 +212,11 @@ impl OnboardingBridge {
         let contract_address = env.current_contract_address();
         for i in 0..admins.len() {
             let admin = admins.get_unchecked(i);
-            assert!(admin != contract_address, "{}", ERR_ADMIN_CANNOT_BE_CONTRACT);
+            assert!(
+                admin != contract_address,
+                "{}",
+                ERR_ADMIN_CANNOT_BE_CONTRACT
+            );
         }
     }
 
@@ -272,7 +276,9 @@ impl OnboardingBridge {
             .instance()
             .set(&DataKey::MaxFeeBps, &max_fee_bps);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
-        env.storage().instance().set(&DataKey::AccumulatedFees, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::AccumulatedFees, &0i128);
         env.storage().instance().set(&DataKey::Version, &1u32);
         env.storage().instance().set(
             &DataKey::InitializationParams,
@@ -295,7 +301,9 @@ impl OnboardingBridge {
             .set(&DataKey::MaxAmount, &max_amount);
         // #20: analytics counters
         env.storage().instance().set(&DataKey::TotalVolume, &0i128);
-        env.storage().instance().set(&DataKey::UniqueFunderCount, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::UniqueFunderCount, &0u64);
 
         env.events().publish(
             (Symbol::new(&env, "initialize"),),
@@ -426,10 +434,26 @@ impl OnboardingBridge {
     /// #20: Batch analytics view — returns all counters in one call.
     pub fn get_stats(env: Env) -> Stats {
         Stats {
-            total_volume: env.storage().instance().get(&DataKey::TotalVolume).unwrap_or(0),
-            total_fees: env.storage().instance().get(&DataKey::AccumulatedFees).unwrap_or(0),
-            funding_count: env.storage().instance().get(&DataKey::FundingCount).unwrap_or(0),
-            unique_funder_count: env.storage().instance().get(&DataKey::UniqueFunderCount).unwrap_or(0),
+            total_volume: env
+                .storage()
+                .instance()
+                .get(&DataKey::TotalVolume)
+                .unwrap_or(0),
+            total_fees: env
+                .storage()
+                .instance()
+                .get(&DataKey::AccumulatedFees)
+                .unwrap_or(0),
+            funding_count: env
+                .storage()
+                .instance()
+                .get(&DataKey::FundingCount)
+                .unwrap_or(0),
+            unique_funder_count: env
+                .storage()
+                .instance()
+                .get(&DataKey::UniqueFunderCount)
+                .unwrap_or(0),
         }
     }
 
@@ -578,14 +602,26 @@ impl OnboardingBridge {
         env.storage().instance().set(&DataKey::FundingCount, &id);
 
         // #20: increment analytics counters atomically
-        let total_vol: i128 = env.storage().instance().get(&DataKey::TotalVolume).unwrap_or(0);
-        env.storage().instance().set(&DataKey::TotalVolume, &(total_vol + amount));
+        let total_vol: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalVolume)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalVolume, &(total_vol + amount));
 
         let unique_key = DataKey::UniqueFunder(source.clone());
         if !env.storage().persistent().has(&unique_key) {
             env.storage().persistent().set(&unique_key, &true);
-            let uc: u64 = env.storage().instance().get(&DataKey::UniqueFunderCount).unwrap_or(0);
-            env.storage().instance().set(&DataKey::UniqueFunderCount, &(uc + 1));
+            let uc: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::UniqueFunderCount)
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&DataKey::UniqueFunderCount, &(uc + 1));
         }
 
         env.events().publish(
@@ -911,11 +947,11 @@ impl OnboardingBridge {
             ProposalAction::SetFeeTokenRate(token, rate) => {
                 assert!(rate >= 1000, "rate must be >= 1000");
                 assert!(rate <= 20000, "rate must be <= 20000");
-                env.storage().instance().set(&DataKey::FeeTokenRate(token.clone()), &rate);
-                env.events().publish(
-                    (Symbol::new(&env, "set_fee_token_rate"),),
-                    (token, rate),
-                );
+                env.storage()
+                    .instance()
+                    .set(&DataKey::FeeTokenRate(token.clone()), &rate);
+                env.events()
+                    .publish((Symbol::new(&env, "set_fee_token_rate"),), (token, rate));
                 0i128
             }
             ProposalAction::WithdrawFees(to, token, amount) => {

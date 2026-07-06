@@ -45,7 +45,13 @@ impl TestToken {
         env.storage().persistent().set(&TK::Bal(to), &(tb + amount));
     }
 
-    pub fn transfer_from(env: Env, spender: Address, from: Address, to: MuxedAddress, amount: i128) {
+    pub fn transfer_from(
+        env: Env,
+        spender: Address,
+        from: Address,
+        to: MuxedAddress,
+        amount: i128,
+    ) {
         spender.require_auth();
         let allowance = env
             .storage()
@@ -54,37 +60,77 @@ impl TestToken {
             .unwrap_or(0);
         assert!(allowance >= amount, "insufficient allowance");
         let to_addr = to.address();
-        let from_bal = env.storage().persistent().get::<TK, i128>(&TK::Bal(from.clone())).unwrap_or(0);
+        let from_bal = env
+            .storage()
+            .persistent()
+            .get::<TK, i128>(&TK::Bal(from.clone()))
+            .unwrap_or(0);
         assert!(from_bal >= amount, "insufficient balance");
-        let to_bal = env.storage().persistent().get::<TK, i128>(&TK::Bal(to_addr.clone())).unwrap_or(0);
-        env.storage().persistent().set(&TK::Allowance(from.clone(), spender), &(allowance - amount));
-        env.storage().persistent().set(&TK::Bal(from), &(from_bal - amount));
-        env.storage().persistent().set(&TK::Bal(to_addr), &(to_bal + amount));
+        let to_bal = env
+            .storage()
+            .persistent()
+            .get::<TK, i128>(&TK::Bal(to_addr.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&TK::Allowance(from.clone(), spender), &(allowance - amount));
+        env.storage()
+            .persistent()
+            .set(&TK::Bal(from), &(from_bal - amount));
+        env.storage()
+            .persistent()
+            .set(&TK::Bal(to_addr), &(to_bal + amount));
     }
 
-    pub fn approve(env: Env, from: Address, spender: Address, amount: i128, _expiration_ledger: u32) {
+    pub fn approve(
+        env: Env,
+        from: Address,
+        spender: Address,
+        amount: i128,
+        _expiration_ledger: u32,
+    ) {
         from.require_auth();
-        env.storage().persistent().set(&TK::Allowance(from, spender), &amount);
+        env.storage()
+            .persistent()
+            .set(&TK::Allowance(from, spender), &amount);
     }
 
     pub fn allowance(env: Env, from: Address, spender: Address) -> i128 {
-        env.storage().persistent().get::<TK, i128>(&TK::Allowance(from, spender)).unwrap_or(0)
+        env.storage()
+            .persistent()
+            .get::<TK, i128>(&TK::Allowance(from, spender))
+            .unwrap_or(0)
     }
 
     pub fn balance(env: Env, id: Address) -> i128 {
-        env.storage().persistent().get::<TK, i128>(&TK::Bal(id)).unwrap_or(0)
+        env.storage()
+            .persistent()
+            .get::<TK, i128>(&TK::Bal(id))
+            .unwrap_or(0)
     }
 
     pub fn mint(env: Env, to: Address, amount: i128) {
-        let bal = env.storage().persistent().get::<TK, i128>(&TK::Bal(to.clone())).unwrap_or(0);
-        env.storage().persistent().set(&TK::Bal(to), &(bal + amount));
+        let bal = env
+            .storage()
+            .persistent()
+            .get::<TK, i128>(&TK::Bal(to.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&TK::Bal(to), &(bal + amount));
     }
 
-    pub fn decimals(_env: Env) -> u32 { 7 }
+    pub fn decimals(_env: Env) -> u32 {
+        7
+    }
 
-    pub fn name(env: Env) -> String { String::from_str(&env, "TestToken") }
+    pub fn name(env: Env) -> String {
+        String::from_str(&env, "TestToken")
+    }
 
-    pub fn symbol(env: Env) -> String { String::from_str(&env, "TEST") }
+    pub fn symbol(env: Env) -> String {
+        String::from_str(&env, "TEST")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -130,11 +176,14 @@ fn token_transfer(env: &Env, token: &Address, from: &Address, to: &Address, amou
     let _: () = env.invoke_contract(
         token,
         &Symbol::new(env, "transfer"),
-        Vec::from_array(env, [
-            from.into_val(env),
-            MuxedAddress::from(to).into_val(env),
-            amount.into_val(env),
-        ]),
+        Vec::from_array(
+            env,
+            [
+                from.into_val(env),
+                MuxedAddress::from(to).into_val(env),
+                amount.into_val(env),
+            ],
+        ),
     );
 }
 
@@ -142,28 +191,38 @@ fn token_approve(env: &Env, token: &Address, from: &Address, spender: &Address, 
     let _: () = env.invoke_contract(
         token,
         &Symbol::new(env, "approve"),
-        Vec::from_array(env, [
-            from.into_val(env),
-            spender.into_val(env),
-            amount.into_val(env),
-            100u32.into_val(env),
-        ]),
+        Vec::from_array(
+            env,
+            [
+                from.into_val(env),
+                spender.into_val(env),
+                amount.into_val(env),
+                100u32.into_val(env),
+            ],
+        ),
     );
 }
 
 fn token_transfer_from(
-    env: &Env, token: &Address, spender: &Address,
-    from: &Address, to: &Address, amount: i128,
+    env: &Env,
+    token: &Address,
+    spender: &Address,
+    from: &Address,
+    to: &Address,
+    amount: i128,
 ) {
     let _: () = env.invoke_contract(
         token,
         &Symbol::new(env, "transfer_from"),
-        Vec::from_array(env, [
-            spender.into_val(env),
-            from.into_val(env),
-            MuxedAddress::from(to).into_val(env),
-            amount.into_val(env),
-        ]),
+        Vec::from_array(
+            env,
+            [
+                spender.into_val(env),
+                from.into_val(env),
+                MuxedAddress::from(to).into_val(env),
+                amount.into_val(env),
+            ],
+        ),
     );
 }
 
@@ -347,12 +406,16 @@ fn test_sac_approve_and_transfer_from() {
     let allowance: i128 = env.invoke_contract(
         &token,
         &Symbol::new(&env, "allowance"),
-        Vec::from_array(&env, [alice.into_val(&env), bridge_addr.clone().into_val(&env)]),
+        Vec::from_array(
+            &env,
+            [alice.into_val(&env), bridge_addr.clone().into_val(&env)],
+        ),
     );
     assert_eq!(allowance, 500);
 }
 
-/// Full end-to-end: source approves bridge, bridge uses transfer_from, bridge records fees.
+/// Full end-to-end: fund_c_address moves the tokens itself — net to target,
+/// fee retained by the bridge — and records the accumulated fee.
 #[test]
 fn test_end_to_end_fund_with_real_token_transfer() {
     let env = Env::default();
@@ -377,9 +440,6 @@ fn test_end_to_end_fund_with_real_token_transfer() {
     assert_eq!(fee, 10);
 
     let net = amount - fee;
-    token_transfer_from(&env, &token, &bridge_id, &source, &target, net);
-    token_transfer_from(&env, &token, &bridge_id, &source, &bridge_id, fee);
-
     assert_eq!(token_balance(&env, &token, &source), 0);
     assert_eq!(token_balance(&env, &token, &target), net);
     assert_eq!(token_balance(&env, &token, &bridge_id), fee);
@@ -414,11 +474,7 @@ fn test_token_decimals_fee_math() {
     env.mock_all_auths_allowing_non_root_auth();
     let token = env.register_contract(None, TestToken);
 
-    let decimals: u32 = env.invoke_contract(
-        &token,
-        &Symbol::new(&env, "decimals"),
-        Vec::new(&env),
-    );
+    let decimals: u32 = env.invoke_contract(&token, &Symbol::new(&env, "decimals"), Vec::new(&env));
     assert_eq!(decimals, 7);
 
     let bridge_id = env.register_contract(None, OnboardingBridge);
@@ -615,17 +671,19 @@ fn test_withdraw_fees_works_when_paused() {
     bridge.approve(&admins.get_unchecked(1), &pid);
     bridge.execute(&pid);
 
+    // Withdraw in the token that accrued the fees — the bridge holds no
+    // balance of any other token, so a real transfer would fail.
     let to = Address::generate(&env);
-    let token_addr2 = register_test_token(&env);
     let wpid = bridge.propose(
         &admins.get_unchecked(0),
-        &ProposalAction::WithdrawFees(to.clone(), token_addr2.clone(), 0i128),
+        &ProposalAction::WithdrawFees(to.clone(), token_addr.clone(), 0i128),
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &wpid);
     let withdrawn = bridge.execute(&wpid);
     assert_eq!(withdrawn, 10);
     assert_eq!(bridge.accumulated_fees(), 0);
+    assert_eq!(token_balance(&env, &token_addr, &to), 10);
 }
 
 #[test]
@@ -1035,7 +1093,10 @@ fn test_multiple_fund_accumulates_fees() {
 fn test_is_valid_c_address_true() {
     let (env, _bridge) = setup_env();
     let contract_addr = Address::generate(&env);
-    assert!(OnboardingBridge::is_valid_c_address(env.clone(), contract_addr));
+    assert!(OnboardingBridge::is_valid_c_address(
+        env.clone(),
+        contract_addr
+    ));
 }
 
 #[test]
@@ -1205,10 +1266,22 @@ fn test_funding_count_increments() {
 
     assert_eq!(bridge.funding_count(), 0);
 
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "count1"));
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &1000,
+        &String::from_str(&env, "count1"),
+    );
     assert_eq!(bridge.funding_count(), 1);
 
-    bridge.fund_c_address(&source, &target, &token_addr, &2000, &String::from_str(&env, "count2"));
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &2000,
+        &String::from_str(&env, "count2"),
+    );
     assert_eq!(bridge.funding_count(), 2);
 }
 
@@ -1220,7 +1293,13 @@ fn test_funding_record_stored() {
     let token_addr = register_test_token(&env);
     TestTokenClient::new(&env, &token_addr).mint(&source, &2000);
 
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "record test"));
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &1000,
+        &String::from_str(&env, "record test"),
+    );
 
     let record = bridge.funding_record(&1);
     assert!(record.is_some());
@@ -1247,7 +1326,13 @@ fn test_storage_usage() {
     assert_eq!(acc_fees, 0);
     assert_eq!(hot, 5);
 
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "usage test"));
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &1000,
+        &String::from_str(&env, "usage test"),
+    );
 
     let (fund_count, _, acc_fees, _) = bridge.storage_usage();
     assert_eq!(fund_count, 1);
@@ -1262,8 +1347,20 @@ fn test_archive_old_entries() {
     let token_addr = register_test_token(&env);
     TestTokenClient::new(&env, &token_addr).mint(&source, &5000);
 
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "archive1"));
-    bridge.fund_c_address(&source, &target, &token_addr, &2000, &String::from_str(&env, "archive2"));
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &1000,
+        &String::from_str(&env, "archive1"),
+    );
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &2000,
+        &String::from_str(&env, "archive2"),
+    );
 
     assert_eq!(bridge.funding_count(), 2);
 
@@ -1385,7 +1482,13 @@ fn test_reentrancy_guard_on_fund_c_address() {
     let token_addr = register_test_token(&env);
     TestTokenClient::new(&env, &token_addr).mint(&source, &2000);
 
-    let fee = bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "normal"));
+    let fee = bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &1000,
+        &String::from_str(&env, "normal"),
+    );
     assert_eq!(fee, 10);
 }
 
@@ -1429,7 +1532,13 @@ fn test_set_rebate_tier_basic() {
     let target = Address::generate(&env);
     let token_addr = register_test_token(&env);
     TestTokenClient::new(&env, &token_addr).mint(&user, &5000);
-    bridge.fund_c_address(&user, &target, &token_addr, &2000, &String::from_str(&env, "tier"));
+    bridge.fund_c_address(
+        &user,
+        &target,
+        &token_addr,
+        &2000,
+        &String::from_str(&env, "tier"),
+    );
     assert_eq!(bridge.rebate_for(&user), 100);
 }
 
@@ -1442,9 +1551,21 @@ fn test_user_volume_tracks_funding() {
     TestTokenClient::new(&env, &token_addr).mint(&source, &10_000);
 
     assert_eq!(bridge.user_volume(&source), 0);
-    bridge.fund_c_address(&source, &target, &token_addr, &1000, &String::from_str(&env, "vol test"));
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &1000,
+        &String::from_str(&env, "vol test"),
+    );
     assert_eq!(bridge.user_volume(&source), 1000);
-    bridge.fund_c_address(&source, &target, &token_addr, &2000, &String::from_str(&env, "vol test2"));
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &2000,
+        &String::from_str(&env, "vol test2"),
+    );
     assert_eq!(bridge.user_volume(&source), 3000);
 }
 
