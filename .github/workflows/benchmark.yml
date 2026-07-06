@@ -7,6 +7,9 @@ on:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
     - uses: actions/checkout@v4
 
@@ -69,6 +72,8 @@ jobs:
 
     - name: Comment PR
       if: success()
+      # Fork PRs get a read-only token; a failed comment must not fail the benchmark.
+      continue-on-error: true
       uses: actions/github-script@v7
       with:
         script: |
