@@ -69,38 +69,46 @@ jobs:
     environment:
       name: dev
       url: ${{ vars.APP_URL }}
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
     steps:
+      - name: Skip when no dev environment is configured
+        if: env.DEPLOY_HOST == ''
+        run: echo "DEPLOY_HOST secret not set; skipping dev deploy."
+
       - uses: actions/checkout@v4
+        if: env.DEPLOY_HOST != ''
 
       - name: Run migrations
+        if: env.DEPLOY_HOST != ''
         run: npm run migrate -w api
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: development
 
       - name: Deploy
+        if: env.DEPLOY_HOST != ''
         run: bash scripts/deploy.sh
         env:
           ENVIRONMENT: dev
           IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
           SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
           SOROBAN_RPC_URL: ${{ vars.SOROBAN_RPC_URL }}
 
       - name: Smoke tests
+        if: env.DEPLOY_HOST != ''
         run: bash scripts/smoke-test.sh
         env:
           APP_URL: ${{ vars.APP_URL }}
           SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
 
       - name: Rollback on failure
-        if: failure()
+        if: failure() && env.DEPLOY_HOST != ''
         run: bash scripts/deploy.sh --rollback
         env:
           ENVIRONMENT: dev
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
 
