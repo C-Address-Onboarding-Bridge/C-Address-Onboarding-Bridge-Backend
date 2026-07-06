@@ -54,12 +54,12 @@ jobs:
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
 
+    # No base/head: on pushes to main BASE == HEAD and the action errors.
+    # Without them the action derives the commit range from the event.
     - name: TruffleHog Secrets Scan
       uses: trufflesecurity/trufflehog@main
       with:
         path: ./
-        base: ${{ github.event.repository.default_branch }}
-        head: HEAD
 
     - name: Run OWASP Dependency-Check
       uses: dependency-check/Dependency-Check_Action@main
