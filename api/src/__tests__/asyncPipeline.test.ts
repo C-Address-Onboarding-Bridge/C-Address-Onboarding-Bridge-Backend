@@ -10,10 +10,27 @@ process.env.NODE_ENV = 'test';
 
 // ─── Mock dependencies ────────────────────────────────────────────────────────
 
-const mockEnqueueAuditLog = vi.fn().mockResolvedValue(undefined);
-const mockEnqueueAnalytics = vi.fn().mockResolvedValue(undefined);
-const mockEnqueuePipelineMetrics = vi.fn().mockResolvedValue(undefined);
-const mockGetQueueWaitingCount = vi.fn().mockResolvedValue(0);
+const {
+  mockEnqueueAuditLog,
+  mockEnqueueAnalytics,
+  mockEnqueuePipelineMetrics,
+  mockGetQueueWaitingCount,
+  mockAuditLogAppend,
+  mockMetricsInc,
+} = vi.hoisted(() => ({
+  mockEnqueueAuditLog: vi.fn().mockResolvedValue(undefined),
+  mockEnqueueAnalytics: vi.fn().mockResolvedValue(undefined),
+  mockEnqueuePipelineMetrics: vi.fn().mockResolvedValue(undefined),
+  mockGetQueueWaitingCount: vi.fn().mockResolvedValue(0),
+  mockAuditLogAppend: vi.fn(),
+  mockMetricsInc: {
+    asyncPipelineQueueDepth: { set: vi.fn() },
+    asyncPipelineEnqueueCounter: { inc: vi.fn() },
+    asyncPipelineDroppedCounter: { inc: vi.fn() },
+    asyncPipelineJobDuration: { startTimer: vi.fn(() => vi.fn()) },
+    asyncPipelineFailureCounter: { inc: vi.fn() },
+  },
+}));
 
 vi.mock('../jobs/queue', () => ({
   enqueueAuditLog: mockEnqueueAuditLog,
@@ -22,18 +39,9 @@ vi.mock('../jobs/queue', () => ({
   getQueueWaitingCount: mockGetQueueWaitingCount,
 }));
 
-const mockAuditLogAppend = vi.fn();
 vi.mock('../services/auditLog', () => ({
   integrityAuditLog: { append: mockAuditLogAppend },
 }));
-
-const mockMetricsInc = {
-  asyncPipelineQueueDepth: { set: vi.fn() },
-  asyncPipelineEnqueueCounter: { inc: vi.fn() },
-  asyncPipelineDroppedCounter: { inc: vi.fn() },
-  asyncPipelineJobDuration: { startTimer: vi.fn(() => vi.fn()) },
-  asyncPipelineFailureCounter: { inc: vi.fn() },
-};
 
 vi.mock('../services/metrics', () => mockMetricsInc);
 
