@@ -173,7 +173,7 @@ jobs:
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release with SBOM
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.create-tag.outputs.tag_name }}
           name: SBOM Release ${{ steps.create-tag.outputs.tag_name }}

@@ -47,12 +47,12 @@ jobs:
         retention-days: 30
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v2
+      uses: github/codeql-action/init@v3
       with:
         languages: typescript
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v2
+      uses: github/codeql-action/analyze@v3
 
     - name: TruffleHog Secrets Scan
       uses: trufflesecurity/trufflehog@main
@@ -76,10 +76,10 @@ jobs:
     needs: analyze
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
       - name: Notify Slack for critical findings
-        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: env.SLACK_WEBHOOK_URL != ''
         run: |
           curl -X POST -H 'Content-type: application/json' --data '{"text":"Dependency vulnerability scan completed for C-Address Onboarding Bridge."}' "$SLACK_WEBHOOK_URL"

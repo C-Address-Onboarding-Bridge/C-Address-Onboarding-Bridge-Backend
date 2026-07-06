@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
@@ -169,25 +170,35 @@ jobs:
     name: Deploy to Testnet
     runs-on: ubuntu-latest
     needs: [soroban-contract, api-server, sdk, e2e, webhook-sim]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.SOROBAN_SOURCE_ACCOUNT != ''
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
     steps:
+      - name: Skip when deploy credentials are not configured
+        if: env.SOURCE_ACCOUNT == ''
+        run: echo "SOROBAN_SOURCE_ACCOUNT secret not set; skipping testnet deploy."
+
       - uses: actions/checkout@v4
+        if: env.SOURCE_ACCOUNT != ''
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: env.SOURCE_ACCOUNT != ''
         with:
           toolchain: stable
           target: wasm32v1-none
 
       - name: Install Stellar CLI
+        if: env.SOURCE_ACCOUNT != ''
         run: cargo install stellar-cli --locked
 
       - name: Deploy contract to testnet
+        if: env.SOURCE_ACCOUNT != ''
         run: bash scripts/deploy.sh --network testnet
         env:
-          SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
           BRIDGE_FEE_BPS: '30'
 
       - name: Upload deployment artifacts
+        if: env.SOURCE_ACCOUNT != ''
         uses: actions/upload-artifact@v4
         with:
           name: deployment-testnet
