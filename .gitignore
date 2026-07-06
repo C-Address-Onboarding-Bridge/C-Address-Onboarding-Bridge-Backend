@@ -19,3 +19,7 @@ deployments/*.json
 .secrets.local.json
 .secrets.local.enc
 logs/secrets-audit.jsonl
+
+# Python bytecode
+__pycache__/
+*.pyc
