@@ -757,6 +757,9 @@ Architectural decisions are documented in [docs/adr/README.md](docs/adr/README.m
 | `MOONPAY_SECRET_KEY` | For webhooks | — | Moonpay webhook secret |
 | `TRANSAK_API_KEY` | For Transak | — | Transak API key |
 | `TRANSAK_ENVIRONMENT` | No | `STAGING` | `STAGING` or `PRODUCTION` |
+| `BINANCE_API_KEY` / `BINANCE_API_SECRET` | For Binance withdrawals | — | Binance API credentials |
+| `COINBASE_API_KEY` / `COINBASE_API_SECRET` | For Coinbase withdrawals | — | Coinbase API credentials |
+| `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` | For Kraken withdrawals | — | Kraken API credentials |
 | `CORS_ORIGINS` | No | — (all origins) | Comma-separated list of allowed CORS origins; leave empty to allow all (development only) |
 | `PORT` | No | `3001` | API server port |
 | `HOST` | No | `0.0.0.0` | API server host |

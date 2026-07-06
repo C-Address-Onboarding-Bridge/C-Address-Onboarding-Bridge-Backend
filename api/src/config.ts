@@ -44,6 +44,21 @@ export const config = {
     environment: process.env.TRANSAK_ENVIRONMENT || 'STAGING',
     webhookSecret: process.env.TRANSAK_WEBHOOK_SECRET || '',
   },
+  /** Exchange API credentials for CEX withdrawal routing. Unauthenticated when empty. */
+  cex: {
+    binance: {
+      apiKey: process.env.BINANCE_API_KEY || '',
+      apiSecret: process.env.BINANCE_API_SECRET || '',
+    },
+    coinbase: {
+      apiKey: process.env.COINBASE_API_KEY || '',
+      apiSecret: process.env.COINBASE_API_SECRET || '',
+    },
+    kraken: {
+      apiKey: process.env.KRAKEN_API_KEY || '',
+      apiSecret: process.env.KRAKEN_API_SECRET || '',
+    },
+  },
   /** Comma-separated list of accepted `X-API-Key` values. Auth is disabled when empty. */
   apiKeys: (process.env.API_KEYS || '').split(',').filter(Boolean),
   /** Comma-separated list of allowed CORS origins. All origins are allowed when empty. */

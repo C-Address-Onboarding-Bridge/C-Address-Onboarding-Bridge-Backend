@@ -1,3 +1,5 @@
+import { config } from '../config';
+
 /** Request parameters for routing a CEX withdrawal to a C-address. */
 export interface CexWithdrawalRequest {
   exchange: string;
@@ -101,9 +103,6 @@ export class CexRoutingService {
   }
 
   private async handleBinance(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    // TODO: inject BINANCE_API_KEY and BINANCE_API_SECRET from env and pass to
-    // postToExchange so requests are authenticated. Without credentials the
-    // Binance API returns 401 and falls through to the fallback response below.
     const memo = req.memo || `bridge:binance:${req.targetCAddress.slice(-8)}`;
 
     try {
@@ -116,6 +115,8 @@ export class CexRoutingService {
           network: req.targetNetwork,
           memo,
         },
+        config.cex.binance.apiKey,
+        config.cex.binance.apiSecret,
       );
 
       if (!res.ok) {
@@ -139,8 +140,6 @@ export class CexRoutingService {
   }
 
   private async handleCoinbase(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    // TODO: inject COINBASE_API_KEY and COINBASE_API_SECRET from env and pass to
-    // postToExchange. Without credentials Coinbase returns 401.
     const memo = req.memo || `bridge:coinbase:${req.targetCAddress.slice(-8)}`;
 
     try {
@@ -153,6 +152,8 @@ export class CexRoutingService {
           currency: req.sourceAsset,
           description: memo,
         },
+        config.cex.coinbase.apiKey,
+        config.cex.coinbase.apiSecret,
       );
 
       if (!res.ok) {
@@ -175,8 +176,6 @@ export class CexRoutingService {
   }
 
   private async handleKraken(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    // TODO: inject KRAKEN_API_KEY and KRAKEN_API_SECRET from env and pass to
-    // postToExchange. Without credentials Kraken returns an auth error.
     const memo = req.memo || `bridge:kraken:${req.targetCAddress.slice(-8)}`;
 
     try {
@@ -188,6 +187,8 @@ export class CexRoutingService {
           amount: req.amount,
           network: req.targetNetwork,
         },
+        config.cex.kraken.apiKey,
+        config.cex.kraken.apiSecret,
       );
 
       if (!res.ok) {
@@ -209,15 +210,12 @@ export class CexRoutingService {
     }
   }
 
-  // TODO: fallbackResponse returns `status: 'pending'` even when the exchange
-  // API call definitively failed. Consider introducing a distinct `status: 'failed'`
-  // path so callers can detect submission errors rather than polling indefinitely.
-  private fallbackResponse(prefix: string, req: CexWithdrawalRequest): CexWithdrawalResponse {
+  /** Returned when the exchange API call definitively failed, so callers can
+   *  detect submission errors instead of polling a withdrawal that never happened. */
+  private fallbackResponse(prefix: string, _req: CexWithdrawalRequest): CexWithdrawalResponse {
     return {
-      status: 'pending',
+      status: 'failed',
       withdrawalId: `${prefix}-${Date.now()}`,
-      estimatedArrival: '5-30 minutes',
-      fee: 'variable',
     };
   }
 
