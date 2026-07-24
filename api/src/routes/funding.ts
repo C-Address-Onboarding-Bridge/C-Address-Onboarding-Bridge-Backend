@@ -8,8 +8,10 @@ import { hashPayload, integrityAuditLog } from '../services/auditLog';
 import { config } from '../config';
 import { fundEndpointRateLimit, fundAbuseDetectionMiddleware } from '../middleware/rateLimit';
 import { recordFundingMetrics } from '../services/metrics';
-import { XdrValidationError, MAX_XDR_BYTE_LENGTH } from '../services/xdrValidator';
+import { XdrValidationError, MAX_XDR_BYTE_LENGTH, validateXdr } from '../services/xdrValidator';
 import { enqueueAudit, enqueueFundingMetrics } from '../services/asyncPipeline';
+import { eventBroker } from '../services/eventBroker';
+import { parseXdrDetails } from '../services/transactionMonitor';
 
 /** Express router for funding endpoints. Mounted at `/api/v1/fund`. */
 export const fundingRouter = Router();
@@ -33,40 +35,49 @@ const fundDirectSchema = z.object({
 
 fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    req.log?.info({ path: req.path }, 'fund transaction submission started');
+    req.log?.info({ path: req.path }, 'fund transaction submission request received');
     const body = fundSchema.parse(req.body);
-    const result = await sorobanService.submitFundingTransaction(body.signedXdr);
-
+    
+    // Validate and parse the signed XDR envelope
+    const validation = validateXdr(body.signedXdr);
+    const details = parseXdrDetails(body.signedXdr);
     const actor = req.apiKeyRecord?.id ?? 'api-key';
 
-    // Audit log: critical — enqueued async but falls back to sync if Redis is down.
-    enqueueAudit(
-      'transaction_submission_result',
-      {
-        txHash: result.hash,
-        status: result.status,
-        signedXdrHash: hashPayload(body.signedXdr),
-        error: result.error,
+    // Publish FundingRequested event to broker
+    await eventBroker.publish({
+      type: 'FundingRequested',
+      data: {
+        txHash: validation.txHash,
+        sourceAddress: details.sourceAddress,
+        targetAddress: details.targetAddress,
+        tokenAddress: details.tokenAddress,
+        amount: details.amount,
+        feeBps: config.soroban.feeBps,
+        memo: details.memo,
+        signedXdr: body.signedXdr,
       },
+    });
+
+    // Audit log: critical — enqueued async but falls back to sync if Redis is down.
+    const auditPayload = {
+      txHash: validation.txHash,
+      status: 'pending',
+      signedXdrHash: hashPayload(body.signedXdr),
+    };
+    enqueueAudit(
+      'transaction_submission',
+      auditPayload,
       actor,
-      // Sync fallback: run inline when pipeline unavailable.
-      () => integrityAuditLog.append(
-        'transaction_submission_result',
-        { txHash: result.hash, status: result.status, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
-        actor,
-      ),
+      () => integrityAuditLog.append('transaction_submission', auditPayload, actor),
     );
 
-    req.log?.info({ txHash: result.hash, status: result.status }, 'fund transaction submitted');
-
-    // Funding metrics: best-effort async, falls back to sync.
-    const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
-    enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
+    req.log?.info({ txHash: validation.txHash, status: 'pending' }, 'fund transaction queued');
 
     res.status(201).json({
-      ...result,
-      explorerUrl: explorerService.txUrl(result.hash),
-      explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
+      status: 'pending',
+      hash: validation.txHash,
+      explorerUrl: explorerService.txUrl(validation.txHash),
+      explorerUrls: explorerService.txUrlWithFallbacks(validation.txHash),
     });
   } catch (err) {
     if (err instanceof XdrValidationError) {

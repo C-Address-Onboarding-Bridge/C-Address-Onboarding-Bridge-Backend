@@ -11,6 +11,7 @@ import {
 } from '../services/transactions';
 import { AuditEventType, integrityAuditLog } from '../services/auditLog';
 import { enqueueAudit } from '../services/asyncPipeline';
+import { eventBroker } from '../services/eventBroker';
 
 export const adminRouter = Router();
 
@@ -48,11 +49,21 @@ adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Respo
   res.json(result);
 });
 
-adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), (req: Request, res: Response) => {
+adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), async (req: Request, res: Response) => {
   const result = withdrawAccumulatedFees();
   const actor = req.apiKeyRecord?.id ?? 'admin';
 
   recordAdminAction('withdraw_fees', { ...result }, actor);
+
+  // Publish FeeWithdrawn event to eventBroker
+  await eventBroker.publish({
+    type: 'FeeWithdrawn',
+    data: {
+      amount: result.withdrawn,
+      to: actor,
+      withdrawnAt: Date.now(),
+    },
+  });
 
   const auditPayload = { amount: result.withdrawn, recipient: actor, status: result.status };
   enqueueAudit(
@@ -63,6 +74,23 @@ adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), (req: Request, r
   );
 
   res.json(result);
+});
+
+adminRouter.post('/audit/replay', requireScopes('admin:keys'), async (req: Request, res: Response) => {
+  const sequenceStart = Number.parseInt(String(req.body?.sequenceStart ?? '1'), 10);
+  const sequenceEnd = req.body?.sequenceEnd ? Number.parseInt(String(req.body.sequenceEnd), 10) : undefined;
+
+  if (Number.isNaN(sequenceStart)) {
+    res.status(400).json({ error: 'bad_request', message: 'invalid sequenceStart' });
+    return;
+  }
+
+  try {
+    await eventBroker.replay(sequenceStart, sequenceEnd);
+    res.json({ status: 'success', message: 'Replayed events successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'internal_error', message: err.message });
+  }
 });
 
 adminRouter.get('/health', requireScopes('admin:keys'), (_req: Request, res: Response) => {

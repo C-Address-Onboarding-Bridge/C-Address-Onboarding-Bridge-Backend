@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { verifyMoonpayWebhook, verifyTransakWebhook } from '../middleware/webhookVerification';
 import { logger } from '../index';
-import { invalidateStatusCache } from './status';
+import { eventBroker } from '../services/eventBroker';
 
 export const moonpayWebhookRouter = Router();
 export const transakWebhookRouter = Router();
@@ -10,9 +10,16 @@ moonpayWebhookRouter.post('/', verifyMoonpayWebhook, async (req: Request, res: R
   try {
     logger.info({ path: req.path }, 'moonpay webhook received and verified');
     const body = req.body ? JSON.parse(req.body as string) : {};
-    if (body?.data?.id) {
-      await invalidateStatusCache(body.data.id);
-    }
+    
+    await eventBroker.publish({
+      type: 'WebhookReceived',
+      data: {
+        provider: 'moonpay',
+        payload: body,
+        receivedAt: Date.now(),
+      },
+    });
+
     res.json({ status: 'ok' });
   } catch (err) {
     logger.error({ err }, 'moonpay webhook processing error');
@@ -24,9 +31,16 @@ transakWebhookRouter.post('/', verifyTransakWebhook, async (req: Request, res: R
   try {
     logger.info({ path: req.path }, 'transak webhook received and verified');
     const body = req.body ? JSON.parse(req.body as string) : {};
-    if (body?.data?.id) {
-      await invalidateStatusCache(body.data.id);
-    }
+
+    await eventBroker.publish({
+      type: 'WebhookReceived',
+      data: {
+        provider: 'transak',
+        payload: body,
+        receivedAt: Date.now(),
+      },
+    });
+
     res.json({ status: 'ok' });
   } catch (err) {
     logger.error({ err }, 'transak webhook processing error');

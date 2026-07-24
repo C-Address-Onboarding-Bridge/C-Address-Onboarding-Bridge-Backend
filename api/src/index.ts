@@ -189,6 +189,22 @@ app.use(errorHandler);
 if (process.env.NODE_ENV !== 'test') {
   const wss = createWebSocketServer();
 
+  // Initialize and start EventBroker + consumers
+  import('./services/eventBroker').then(async ({ eventBroker }) => {
+    const { transactionMonitor } = await import('./services/transactionMonitor');
+    const { analyticsConsumer } = await import('./services/analyticsConsumer');
+    const { webhookDispatcher } = await import('./services/webhookDispatcher');
+
+    transactionMonitor.start();
+    analyticsConsumer.start();
+    webhookDispatcher.start();
+
+    await eventBroker.startConsuming();
+    logger.info('EventBroker consumers registered and started consuming');
+  }).catch((err) => {
+    logger.error({ err }, 'failed to initialize EventBroker');
+  });
+
   const server = app.listen(config.port, config.host, () => {
     logger.info({ port: config.port, rpcUrls: config.soroban.rpcUrls.length }, 'bridge api server started');
   });
@@ -234,20 +250,26 @@ if (process.env.NODE_ENV !== 'test') {
       logger.info('background job queues ready');
 
       registerSignalHandlers(async () => {
+        const { eventBroker } = await import('./services/eventBroker');
+        await eventBroker.stopConsuming();
         await closeQueues();
         await drainConnectionPools();
         await shutdownTracing();
-        logger.info('job queues closed');
+        logger.info('job queues and event broker closed');
       });
     }).catch((err: Error) => {
       logger.error({ err }, 'failed to initialize job queues');
       registerSignalHandlers(async () => {
+        const { eventBroker } = await import('./services/eventBroker');
+        await eventBroker.stopConsuming();
         await drainConnectionPools();
         await shutdownTracing();
       });
     });
   } else {
     registerSignalHandlers(async () => {
+      const { eventBroker } = await import('./services/eventBroker');
+      await eventBroker.stopConsuming();
       await drainConnectionPools();
       await shutdownTracing();
     });
