@@ -20,7 +20,7 @@
     "api-reference:check": "vitest run src/__tests__/apiReference.test.ts"
   },
   "dependencies": {
-    "@asteasolutions/zod-to-openapi": "^7.3.4",
+    "@asteasolutions/zod-to-openapi": "^9.1.0",
     "@bull-board/api": "^8.0.1",
     "@bull-board/express": "^8.0.1",
     "@opentelemetry/api": "^1.9.1",
