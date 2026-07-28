@@ -1,5 +1,26 @@
 import fs from 'fs';
 import path from 'path';
+import { getPool } from '../services/db';
+
+/** Executes raw SQL against the configured Postgres pool inside a single transaction. */
+export async function runDDL(sql: string): Promise<void> {
+  const pool = getPool();
+  if (!pool) {
+    throw new Error('cannot run migration: DATABASE_URL is not configured');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(sql);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 export interface Migration {
   version: string;

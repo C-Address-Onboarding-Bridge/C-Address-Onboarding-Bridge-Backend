@@ -1,4 +1,4 @@
-import { Migration } from './runner';
+import { Migration, runDDL } from './runner';
 
 export const migration002: Migration = {
   version: '002',
@@ -35,8 +35,7 @@ export const migration002: Migration = {
 
       CREATE INDEX IF NOT EXISTS idx_audit_key_id ON api_key_audit_log (key_id);
     `;
-    console.log('[migration 002] api_keys schema ready (no DB client attached; DDL logged for reference)');
-    console.log(schema);
+    await runDDL(schema);
   },
 
   async down() {
@@ -47,7 +46,6 @@ export const migration002: Migration = {
       DROP INDEX IF EXISTS idx_api_keys_hash;
       DROP TABLE IF EXISTS api_keys;
     `;
-    console.log('[migration 002] rollback DDL (no DB client attached; DDL logged for reference)');
-    console.log(rollback);
+    await runDDL(rollback);
   },
 };

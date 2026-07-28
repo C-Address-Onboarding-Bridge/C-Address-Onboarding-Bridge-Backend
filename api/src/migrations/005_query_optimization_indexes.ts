@@ -1,4 +1,4 @@
-import { Migration } from './runner';
+import { Migration, runDDL } from './runner';
 
 /**
  * Migration 005 — Query optimization & indexing strategy
@@ -110,16 +110,16 @@ export const migration005: Migration = {
         ON webhook_delivery_log (registration_id, delivered_at DESC);
 
       -- ─────────────────────────────────────────────────────────
-      -- audit_log table (from migration 004)
+      -- audit_log_entries table (from migration 004)
       -- ─────────────────────────────────────────────────────────
 
-      -- Pattern: audit log lookup by entity + time range
+      -- Pattern: audit log lookup by event type + time range
       CREATE INDEX IF NOT EXISTS idx_audit_entity_time
-        ON audit_log (entity_type, entity_id, created_at DESC);
+        ON audit_log_entries (event_type, created_at DESC);
 
       -- Pattern: audit log lookup by actor (who did what)
       CREATE INDEX IF NOT EXISTS idx_audit_actor_time
-        ON audit_log (actor_id, created_at DESC);
+        ON audit_log_entries (actor, created_at DESC);
 
       -- ─────────────────────────────────────────────────────────
       -- Maintenance: update planner statistics
@@ -130,8 +130,7 @@ export const migration005: Migration = {
       ANALYZE webhook_delivery_log;
     `;
 
-    console.log('[migration 005] query optimization indexes ready (no DB client attached; DDL logged for reference)');
-    console.log(schema);
+    await runDDL(schema);
   },
 
   async down() {
@@ -151,7 +150,6 @@ export const migration005: Migration = {
       DROP INDEX IF EXISTS idx_tx_hash_covering;
     `;
 
-    console.log('[migration 005] rollback DDL (no DB client attached; DDL logged for reference)');
-    console.log(rollback);
+    await runDDL(rollback);
   },
 };

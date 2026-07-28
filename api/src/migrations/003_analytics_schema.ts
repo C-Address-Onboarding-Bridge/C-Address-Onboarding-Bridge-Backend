@@ -1,4 +1,4 @@
-import { Migration } from './runner';
+import { Migration, runDDL } from './runner';
 
 export const migration003: Migration = {
   version: '003',
@@ -28,8 +28,7 @@ export const migration003: Migration = {
 
       CREATE INDEX IF NOT EXISTS idx_analytics_period_metric ON analytics_metrics (period, metric);
     `;
-    console.log('[migration 003] analytics schema ready (no DB client attached; DDL logged for reference)');
-    console.log(schema);
+    await runDDL(schema);
   },
 
   async down() {
@@ -40,7 +39,6 @@ export const migration003: Migration = {
       DROP INDEX IF EXISTS idx_webhook_events_source;
       DROP TABLE IF EXISTS webhook_events;
     `;
-    console.log('[migration 003] rollback DDL (no DB client attached; DDL logged for reference)');
-    console.log(rollback);
+    await runDDL(rollback);
   },
 };
