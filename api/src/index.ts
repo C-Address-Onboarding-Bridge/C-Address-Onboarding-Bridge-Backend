@@ -28,7 +28,7 @@ import { versionCompatibility } from './middleware/versioning';
 import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
 import { setFeeRateBps } from './services/metrics';
-import { securityMiddleware, contentTypeEnforcement } from './middleware/security';
+import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
@@ -137,6 +137,7 @@ app.use(loggingMiddleware);
 app.use('/api/webhook', express.text({ type: '*/*' }));
 app.use('/api', express.json({ limit: '32kb' }));
 
+app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
 app.use('/api', tierRateLimitMiddleware);
@@ -184,6 +185,7 @@ app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
 // Prometheus metrics — internal only, protected by RBAC
 app.use('/metrics', rbacAuth, metricsRouter);
 
+app.use(xssErrorSanitizer);
 app.use(errorHandler);
 
 if (process.env.NODE_ENV !== 'test') {
