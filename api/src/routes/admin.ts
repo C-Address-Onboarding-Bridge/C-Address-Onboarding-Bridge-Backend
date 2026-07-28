@@ -25,7 +25,7 @@ adminRouter.get('/fees', requireScopes('admin:keys'), (_req: Request, res: Respo
 adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Response) => {
   const feeBps = Number.parseInt(String(req.body?.feeBps ?? ''), 10);
   const timelockMs = Number.parseInt(String(req.body?.timelockMs ?? '60000'), 10);
-  if (Number.isNaN(feeBps)) {
+  if (Number.isNaN(feeBps) || feeBps < 0 || feeBps > 10000) {
     res.status(400).json({ error: 'bad_request' });
     return;
   }

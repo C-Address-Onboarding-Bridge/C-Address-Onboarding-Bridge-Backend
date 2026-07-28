@@ -1,5 +1,4 @@
 import { Router, Request, Response } from 'express';
-import { rbacAuth } from '../middleware/rbacAuth';
 import {
   listTransactions,
   serializeTransactionsCsv,
@@ -12,7 +11,7 @@ export const transactionsRouter = Router();
 
 export const TRANSACTIONS_CACHE_NAMESPACE = 'transactions';
 
-transactionsRouter.get('/', rbacAuth, async (req: Request, res: Response) => {
+transactionsRouter.get('/', async (req: Request, res: Response) => {
   const status = typeof req.query.status === 'string' ? (req.query.status as TransactionStatus) : undefined;
   const fromDate = typeof req.query.fromDate === 'string' ? req.query.fromDate : undefined;
   const toDate = typeof req.query.toDate === 'string' ? req.query.toDate : undefined;

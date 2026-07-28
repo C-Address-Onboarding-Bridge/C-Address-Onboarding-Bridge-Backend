@@ -70,6 +70,12 @@ export const secretSchema: SecretDefinition[] = [
   { env: 'JOB_CONCURRENCY_CLEANUP', path: 'jobs/concurrency-cleanup', service: 'worker', sensitive: false, description: 'Cleanup job concurrency' },
   { env: 'STELLAR_EXPLORER', path: 'integrations/stellar-explorer', service: 'shared', sensitive: false, description: 'Explorer provider name' },
   { env: 'CEX_API_ENDPOINT', path: 'providers/cex/api-endpoint', service: 'api', sensitive: false, description: 'CEX API endpoint override' },
+  { env: 'BINANCE_API_KEY', path: 'providers/cex/binance/api-key', service: 'api', sensitive: true, critical: true, rotationDays: 90, description: 'Binance API key' },
+  { env: 'BINANCE_API_SECRET', path: 'providers/cex/binance/api-secret', service: 'api', sensitive: true, critical: true, rotationDays: 90, description: 'Binance API secret' },
+  { env: 'COINBASE_API_KEY', path: 'providers/cex/coinbase/api-key', service: 'api', sensitive: true, critical: true, rotationDays: 90, description: 'Coinbase API key' },
+  { env: 'COINBASE_API_SECRET', path: 'providers/cex/coinbase/api-secret', service: 'api', sensitive: true, critical: true, rotationDays: 90, description: 'Coinbase API secret' },
+  { env: 'KRAKEN_API_KEY', path: 'providers/cex/kraken/api-key', service: 'api', sensitive: true, critical: true, rotationDays: 90, description: 'Kraken API key' },
+  { env: 'KRAKEN_API_SECRET', path: 'providers/cex/kraken/api-secret', service: 'api', sensitive: true, critical: true, rotationDays: 90, description: 'Kraken API secret' },
   { env: 'WEBHOOK_SIGNING_SECRET', path: 'webhooks/signing-secret', service: 'api', sensitive: true, critical: true, rotationDays: 30, description: 'Outbound webhook signing secret' },
 ];
 
