@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../index';
+import { maskHeaders } from './logging';
 
 export interface WebhookVerifier {
   headerName: string;
@@ -80,7 +81,10 @@ function buildWebhookVerifier(provider: string) {
     const ip = req.ip ?? 'unknown';
 
     if (!signature) {
-      logger.warn({ ip, provider, path: req.path, headers: req.headers }, 'webhook missing signature header');
+      logger.warn(
+        { ip, provider, path: req.path, headers: maskHeaders(req.headers as Record<string, string | string[] | undefined>) },
+        'webhook missing signature header',
+      );
       res.status(401).json({ error: 'unauthorized', message: 'missing webhook signature' });
       return;
     }

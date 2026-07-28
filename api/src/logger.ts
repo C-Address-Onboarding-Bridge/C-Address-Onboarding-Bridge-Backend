@@ -158,9 +158,7 @@ const sensitivePaths = [
   'secretKey',
   ...config.logging.sensitiveFields
     .map((f) => f.trim())
-    .filter(Boolean)
-    .filter((f) => !f.includes('-'))
-    .map((f) => (f.includes('.') ? f : f)),
+    .filter(Boolean),
 ];
 
 const stream = new AggregationStream(
