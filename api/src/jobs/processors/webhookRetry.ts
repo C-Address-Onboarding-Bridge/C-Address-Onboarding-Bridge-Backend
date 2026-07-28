@@ -1,5 +1,6 @@
 import { Job } from 'bullmq';
 import { WebhookRetryData } from '../queue';
+import { webhookDeliveryService } from '../../services/webhookDelivery';
 import pino from 'pino';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -9,11 +10,17 @@ export async function processWebhookRetry(job: Job<WebhookRetryData>): Promise<v
   const { registrationId, payload, event, attemptNumber } = job.data;
   logger.info({ registrationId, event, attemptNumber }, 'retrying webhook delivery');
 
+  const registration = webhookDeliveryService.getRegistration(registrationId);
+  if (!registration) {
+    logger.warn({ registrationId, event }, 'webhook retry skipped: registration no longer exists');
+    return;
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
 
   try {
-    const response = await fetch(registrationId, {
+    const response = await fetch(registration.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ event, payload }),

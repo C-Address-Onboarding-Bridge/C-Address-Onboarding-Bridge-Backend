@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { z } from 'zod';
 import {
   createApiKey,
   revokeApiKey,
@@ -11,6 +12,19 @@ import {
 } from '../middleware/rbacAuth';
 
 export const apiKeysRouter = Router();
+
+const updateApiKeySchema = z
+  .object({
+    name: z.string().min(1),
+    scopes: z.array(
+      z.enum(['quote:read', 'fund:write', 'status:read', 'offramp:write', 'cex:read', 'admin:keys']),
+    ),
+    ipWhitelist: z.array(z.string()),
+    expiresAt: z.number().nullable(),
+    rateLimit: z.enum(['low', 'standard', 'high']),
+  })
+  .partial()
+  .strict();
 
 apiKeysRouter.post('/', requireScopes('admin:keys'), (req: Request, res: Response) => {
   const { name, scopes, ipWhitelist, expiresAt, rateLimit } = req.body as {
@@ -50,7 +64,13 @@ apiKeysRouter.get('/:id', requireScopes('admin:keys'), (req: Request, res: Respo
 });
 
 apiKeysRouter.patch('/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
-  const updated = updateApiKey(req.params.id, req.body as Parameters<typeof updateApiKey>[1]);
+  const parsed = updateApiKeySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'bad_request', message: 'invalid patch body', issues: parsed.error.issues });
+    return;
+  }
+
+  const updated = updateApiKey(req.params.id, parsed.data);
   if (!updated) {
     res.status(404).json({ error: 'not_found' });
     return;
