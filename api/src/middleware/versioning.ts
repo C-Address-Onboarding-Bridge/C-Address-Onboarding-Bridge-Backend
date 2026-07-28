@@ -8,7 +8,6 @@ function normalizeVersion(value: string | undefined): ApiVersion | undefined {
   if (version === 'v2') return 'v2';
   if (version === 'v1' || version === '1') return 'v1';
   if (version === '2') return 'v2';
-  if (version === '1' || version === 'v1') return 'v1';
   return undefined;
 }
 
