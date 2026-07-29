@@ -1577,3 +1577,45 @@ fn test_initialize_with_custom_amounts() {
     assert_eq!(bridge.min_amount(), 50);
     assert_eq!(bridge.max_amount(), 1_000_000);
 }
+
+#[test]
+#[should_panic(expected = "amount below minimum")]
+fn test_fund_c_address_below_min_amount_panics() {
+    let (env, bridge) = setup_env();
+    let admins = create_admins(&env, 1);
+    bridge.initialize(&admins, &1, &100, &1000, &500, &10_000);
+
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let token_addr = register_test_token(&env);
+    TestTokenClient::new(&env, &token_addr).mint(&source, &10_000);
+
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &100, // below min_amount of 500
+        &String::from_str(&env, "below min"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "amount above maximum")]
+fn test_fund_c_address_above_max_amount_panics() {
+    let (env, bridge) = setup_env();
+    let admins = create_admins(&env, 1);
+    bridge.initialize(&admins, &1, &100, &1000, &500, &10_000);
+
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let token_addr = register_test_token(&env);
+    TestTokenClient::new(&env, &token_addr).mint(&source, &1_000_000);
+
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &20_000, // above max_amount of 10_000
+        &String::from_str(&env, "above max"),
+    );
+}
