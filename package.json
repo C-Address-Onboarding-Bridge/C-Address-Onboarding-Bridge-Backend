@@ -8,6 +8,7 @@
     "sdk"
   ],
   "scripts": {
+    "prepare": "husky",
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "test:e2e": "npm run test:e2e --workspace api",
@@ -25,6 +26,7 @@
     "ioredis": "^5.11.1"
   },
   "devDependencies": {
+    "husky": "^9.1.7",
     "lint-staged": "^15.2.10"
   },
   "lint-staged": {
