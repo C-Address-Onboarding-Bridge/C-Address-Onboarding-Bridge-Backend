@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import { config } from '../config';
 
 interface MoonpayWidgetParams {
@@ -11,7 +10,7 @@ interface MoonpayWidgetParams {
   email?: string;
 }
 
-/** Handles MoonPay widget URL generation and webhook signature verification. */
+/** Handles MoonPay widget URL generation. */
 export class MoonpayService {
   private apiKey: string;
   private secretKey: string;
@@ -47,25 +46,6 @@ export class MoonpayService {
 
     const baseUrl = 'https://buy.moonpay.com';
     return `${baseUrl}?${queryParams.toString()}`;
-  }
-
-  /**
-   * Verifies a MoonPay webhook signature using HMAC-SHA256.
-   * Returns `false` if the secret key is not configured.
-   *
-   * @param payload - Raw request body string.
-   * @param signature - Value of the `x-moonpay-signature` header.
-   */
-  verifyWebhookSignature(payload: string, signature: string): boolean {
-    if (!this.secretKey || !signature) return false;
-    const expected = crypto
-      .createHmac('sha256', this.secretKey)
-      .update(payload, 'utf8')
-      .digest('base64');
-
-    if (expected.length !== signature.length) return false;
-
-    return crypto.timingSafeEqual(Buffer.from(expected, 'ascii'), Buffer.from(signature, 'ascii'));
   }
 }
 

@@ -8,7 +8,6 @@ import { explorerService } from './explorer';
 
 const TX_HASH_RE = /^[a-f0-9]{64}$/;
 const HEARTBEAT_INTERVAL_MS = 30_000;
-const MAX_SUBSCRIPTIONS_PER_CONNECTION = 10;
 const POLL_INTERVAL_MS = 5_000;
 
 interface Subscription {
@@ -69,8 +68,8 @@ function subscribe(client: ClientState, txHash: string, lastKnownStatus: string 
     return;
   }
 
-  if (client.subscriptions.size >= MAX_SUBSCRIPTIONS_PER_CONNECTION) {
-    send(client.ws, { type: 'error', code: 'subscription_limit', max: MAX_SUBSCRIPTIONS_PER_CONNECTION });
+  if (client.subscriptions.size >= config.websocket.maxSubscriptionsPerConnection) {
+    send(client.ws, { type: 'error', code: 'subscription_limit', max: config.websocket.maxSubscriptionsPerConnection });
     return;
   }
 

@@ -2,26 +2,12 @@ import { Queue, QueueOptions } from 'bullmq';
 import { config } from '../config';
 
 export type JobName =
-  | 'tx-status-poll'
-  | 'webhook-retry'
   | 'cache-warmup'
   | 'metrics-compute'
   | 'cleanup'
   | 'async-audit-log'
   | 'async-analytics'
   | 'async-metrics';
-
-export interface TxStatusPollData {
-  txHash: string;
-  registrationId?: string;
-}
-
-export interface WebhookRetryData {
-  registrationId: string;
-  payload: unknown;
-  event: string;
-  attemptNumber: number;
-}
 
 export interface CacheWarmupData {
   assets: string[];
@@ -64,8 +50,6 @@ export interface PipelineMetricsJobData {
 }
 
 export type JobData =
-  | TxStatusPollData
-  | WebhookRetryData
   | CacheWarmupData
   | MetricsData
   | CleanupData
@@ -109,8 +93,6 @@ function makeCriticalOptions(): QueueOptions {
 }
 
 let _queues: {
-  txStatus: Queue<TxStatusPollData>;
-  webhookRetry: Queue<WebhookRetryData>;
   cacheWarmup: Queue<CacheWarmupData>;
   metrics: Queue<MetricsData>;
   cleanup: Queue<CleanupData>;
@@ -123,22 +105,18 @@ function getQueues() {
   if (!_queues) {
     const opts = makeBaseOptions();
     const criticalOpts = makeCriticalOptions();
-    const txStatus = new Queue<TxStatusPollData>('tx-status-poll', opts);
-    const webhookRetry = new Queue<WebhookRetryData>('webhook-retry', opts);
     const cacheWarmup = new Queue<CacheWarmupData>('cache-warmup', opts);
     const metrics = new Queue<MetricsData>('metrics-compute', opts);
     const cleanup = new Queue<CleanupData>('cleanup', opts);
     const asyncCritical = new Queue<AuditLogJobData>('async-critical', criticalOpts);
     const asyncPipeline = new Queue<AnalyticsJobData | PipelineMetricsJobData>('async-pipeline', opts);
     _queues = {
-      txStatus,
-      webhookRetry,
       cacheWarmup,
       metrics,
       cleanup,
       asyncCritical,
       asyncPipeline,
-      all: [txStatus, webhookRetry, cacheWarmup, metrics, cleanup, asyncCritical, asyncPipeline],
+      all: [cacheWarmup, metrics, cleanup, asyncCritical, asyncPipeline],
     };
   }
   return _queues;
@@ -160,18 +138,6 @@ export async function scheduleRecurringJobs(): Promise<void> {
   await q.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { every: config.jobs.metricsIntervalMs } });
   await q.cleanup.add('cleanup', { olderThanMs: 7 * 24 * 60 * 60 * 1000 }, { repeat: { every: config.jobs.cleanupIntervalMs } });
   await q.cacheWarmup.add('cache-warmup', { assets: ['XLM', 'USDC'] }, { repeat: { every: 5 * 60 * 1000 } });
-}
-
-export async function enqueueTxStatusPoll(txHash: string): Promise<void> {
-  await getQueues().txStatus.add('tx-status-poll', { txHash }, {
-    delay: config.jobs.txPollIntervalMs,
-    jobId: `tx-${txHash}`,
-  });
-}
-
-export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void> {
-  const delayMs = Math.min(5000 * Math.pow(2, data.attemptNumber - 1), 300_000);
-  await getQueues().webhookRetry.add('webhook-retry', data, { delay: delayMs });
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {

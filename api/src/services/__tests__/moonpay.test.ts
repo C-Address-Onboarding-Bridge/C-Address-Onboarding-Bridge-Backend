@@ -35,11 +35,4 @@ describe('MoonpayService', () => {
     expect(url).toContain('baseCurrencyCode=USD');
     expect(url).toContain('email=test%40example.com');
   });
-
-  it('verifyWebhookSignature validates correctly', async () => {
-    const { MoonpayService } = await import('../moonpay');
-    const service = new MoonpayService();
-    const result = service.verifyWebhookSignature('{"test":true}', 'invalid-sig');
-    expect(result).toBe(false);
-  });
 });
