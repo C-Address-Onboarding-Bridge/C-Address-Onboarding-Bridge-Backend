@@ -1,6 +1,7 @@
 import { QueueEntry, OfflineQueueOptions, StorageAdapter, RequestOptions, HttpMethod } from './types';
 import { BridgeClient, BridgeClientConfig } from './bridge';
 import { OfflineError, QueueFullError, TimeoutError } from './errors';
+import type { SupportedLocale } from './i18n/types';
 
 const QUEUE_STORAGE_KEY = 'bridge_sdk_offline_queue';
 
@@ -14,6 +15,7 @@ export class OfflineQueue {
   private serverOnline = true;
   private replaying = false;
   private readonly drainHandlers: DrainHandler[] = [];
+  private readonly locale?: SupportedLocale;
 
   constructor(
     private readonly executeEntry: (entry: QueueEntry) => Promise<unknown>,
@@ -22,6 +24,7 @@ export class OfflineQueue {
   ) {
     this.maxSize = options?.maxSize ?? 50;
     this.storage = options?.storageAdapter;
+    this.locale = options?.locale;
     const intervalMs = options?.healthCheckIntervalMs ?? 5_000;
 
     void this.loadFromStorage();
@@ -43,7 +46,7 @@ export class OfflineQueue {
 
   async enqueue(entry: Omit<QueueEntry, 'id' | 'timestamp' | 'retryCount'>): Promise<string> {
     if (this.queue.length >= this.maxSize) {
-      throw new QueueFullError(this.maxSize);
+      throw new QueueFullError(this.maxSize, { locale: this.locale });
     }
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const item: QueueEntry = { ...entry, id, timestamp: new Date().toISOString(), retryCount: 0 };
@@ -129,11 +132,13 @@ export class OfflineQueue {
 export class OfflineBridgeClient extends BridgeClient {
   readonly offlineQueue: OfflineQueue;
   private readonly autoQueue: boolean;
+  private readonly locale?: SupportedLocale;
 
   constructor(config: BridgeClientConfig & { offlineOptions?: OfflineQueueOptions }) {
     super(config);
 
     this.autoQueue = config.offlineOptions?.autoQueue ?? true;
+    this.locale = config.locale;
     const healthPath = config.offlineOptions?.healthCheckPath ?? '/api/v1/health';
     const base = config.baseUrl.replace(/\/+$/, '');
 
@@ -143,7 +148,7 @@ export class OfflineBridgeClient extends BridgeClient {
         fetch(`${base}${healthPath}`, { method: 'GET' })
           .then((r) => r.ok)
           .catch(() => false),
-      config.offlineOptions,
+      { ...config.offlineOptions, locale: config.offlineOptions?.locale ?? config.locale },
     );
   }
 
@@ -159,7 +164,7 @@ export class OfflineBridgeClient extends BridgeClient {
     } catch (err) {
       if (this.autoQueue && this.isNetworkError(err)) {
         await this.offlineQueue.enqueue({ method, path, body, params });
-        throw new OfflineError(true);
+        throw new OfflineError(true, { locale: this.locale });
       }
       throw err;
     }

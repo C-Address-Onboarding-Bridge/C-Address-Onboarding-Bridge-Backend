@@ -1,3 +1,5 @@
+import type { SupportedLocale } from './i18n/types';
+
 export type BridgeStatus = 'pending' | 'success' | 'failed';
 export type RequestValue = string | number | boolean | undefined;
 export type RequestParams = Record<string, RequestValue>;
@@ -152,6 +154,11 @@ export interface BridgeClientConfig {
   baseUrl: string;
   /** Optional API key sent as `X-API-Key` on every request. */
   apiKey?: string;
+  /**
+   * Locale used to localize SDK-thrown error messages (see `sdk/src/i18n`).
+   * Defaults to `'en'` when omitted or unsupported.
+   */
+  locale?: SupportedLocale;
   signing?: RequestSigningConfig;
   retry?: {
     maxRetries?: number;
@@ -228,6 +235,8 @@ export interface OfflineQueueOptions {
   healthCheckIntervalMs?: number;
   autoQueue?: boolean;
   healthCheckPath?: string;
+  /** Locale used to localize queue-related error messages. Defaults to `'en'`. */
+  locale?: SupportedLocale;
 }
 
 // Event emitter
