@@ -17,12 +17,12 @@ Users cannot complete funding transactions or receive quotes. Revenue impact beg
 1. **Check recent deployments**
    ```bash
    git log --oneline -10
-   kubectl rollout history deployment/c-address-bridge
+   ssh "$DEPLOY_USER@$DEPLOY_HOST" "cat deployments/current-release"
    ```
 
 2. **Inspect error logs**
    ```bash
-   kubectl logs -l app=c-address-bridge --tail=200 | grep '"level":"error"'
+   ssh "$DEPLOY_USER@$DEPLOY_HOST" "journalctl -u c-address-bridge --since '-1h'" | grep '"level":"error"'
    ```
 
 3. **Check downstream services** — Soroban RPC, Moonpay, Transak, database
@@ -31,12 +31,12 @@ Users cannot complete funding transactions or receive quotes. Revenue impact beg
 
 4. **Check database connectivity**
    ```bash
-   kubectl exec -it <api-pod> -- node -e "require('./dist/services/db').db.raw('SELECT 1')"
+   ssh "$DEPLOY_USER@$DEPLOY_HOST" "node -e \"require('./dist/services/db').db.raw('SELECT 1')\""
    ```
 
 ## Remediation
 
-- If a bad deploy: `kubectl rollout undo deployment/c-address-bridge`
+- If a bad deploy: `bash scripts/deploy.sh --rollback` (see [rollback.yml](../../.github/workflows/rollback.yml))
 - If a downstream outage: circuit breakers should open automatically; verify in dashboard
 - If DB connectivity: check pgbouncer pool exhaustion, restart if needed
 

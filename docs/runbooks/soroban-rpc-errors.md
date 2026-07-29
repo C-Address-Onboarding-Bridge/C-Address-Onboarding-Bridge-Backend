@@ -16,7 +16,7 @@ More than 10% of Soroban RPC calls are failing. Contract interactions may be fai
 2. **Check RPC pool status** in DeFi Operations dashboard
 3. **Check error types** in logs:
    ```bash
-   kubectl logs -l app=c-address-bridge | grep "soroban" | grep "error"
+   ssh "$DEPLOY_USER@$DEPLOY_HOST" "journalctl -u c-address-bridge --no-pager" | grep "soroban" | grep "error"
    ```
 4. **Check Stellar network status**: https://status.stellar.org
 

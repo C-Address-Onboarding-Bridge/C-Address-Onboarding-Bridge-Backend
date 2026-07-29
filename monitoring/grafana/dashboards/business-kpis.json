@@ -31,7 +31,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "increase(bridge_funding_transactions_total{job=\"c-address-bridge\"}[24h])",
+          "expr": "increase(funding_operations_total{job=\"c-address-bridge\"}[24h])",
           "legendFormat": "24h Volume"
         }
       ],
@@ -47,7 +47,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "increase(bridge_funding_transactions_total{job=\"c-address-bridge\"}[7d])",
+          "expr": "increase(funding_operations_total{job=\"c-address-bridge\"}[7d])",
           "legendFormat": "7d Volume"
         }
       ],
@@ -63,7 +63,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "increase(bridge_funding_transactions_total{job=\"c-address-bridge\"}[30d])",
+          "expr": "increase(funding_operations_total{job=\"c-address-bridge\"}[30d])",
           "legendFormat": "30d Volume"
         }
       ],
@@ -79,7 +79,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "bridge_accumulated_fees_total{job=\"c-address-bridge\"}",
+          "expr": "fee_collected_total{job=\"c-address-bridge\"}",
           "legendFormat": "Fees Collected"
         }
       ],
@@ -94,7 +94,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(bridge_funding_transactions_total{job=\"c-address-bridge\"}[5m])) by (status)",
+          "expr": "sum(rate(funding_operations_total{job=\"c-address-bridge\"}[5m])) by (status)",
           "legendFormat": "{{status}}"
         }
       ],
@@ -110,7 +110,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(increase(bridge_funding_transactions_total{job=\"c-address-bridge\"}[24h])) by (source)",
+          "expr": "sum(increase(funding_operations_total{job=\"c-address-bridge\"}[24h])) by (source)",
           "legendFormat": "{{source}}"
         }
       ],
@@ -125,7 +125,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "bridge_active_funders{job=\"c-address-bridge\"}",
+          "expr": "unique_funders_24h{job=\"c-address-bridge\"}",
           "legendFormat": "Active Funders"
         }
       ],
@@ -141,7 +141,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(increase(bridge_cex_withdrawals_total{job=\"c-address-bridge\"}[24h])) by (exchange)",
+          "expr": "sum(increase(exchange_routing_total{job=\"c-address-bridge\"}[24h])) by (exchange)",
           "legendFormat": "{{exchange}}"
         }
       ],
@@ -157,7 +157,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(increase(bridge_onramp_transactions_total{job=\"c-address-bridge\"}[24h])) by (provider)",
+          "expr": "sum(increase(onramp_requests_total{job=\"c-address-bridge\"}[24h])) by (provider)",
           "legendFormat": "{{provider}}"
         }
       ],
@@ -172,7 +172,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(bridge_funding_volume_usd_total{job=\"c-address-bridge\"}[1h])) * 3600",
+          "expr": "sum(rate(funding_volume_xlm_total{job=\"c-address-bridge\"}[1h])) * 3600",
           "legendFormat": "Volume/hour USD"
         }
       ],

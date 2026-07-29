@@ -24,12 +24,12 @@ export const pt: MessageCatalog = {
   'error.timeout':                     'A operação "{{operation}}" expirou após {{ms}} ms.',
 
   'error.offline.queued':              'Você está offline. A solicitação foi enfileirada e será repetida quando a conectividade for restaurada.',
-  'error.offline.not_queued':          'Você está offline. A solicitação não pôde ser enfileirada.',
+  'error.offline.not_queued':          'Você está offline. Não foi possível enfileirar a solicitação.',
   'error.queue_full':                  'A fila offline está cheia (máximo de {{max}} entradas). A solicitação foi descartada.',
 
   'error.invalid_stellar_address':     '"{{address}}" não é um endereço Stellar válido.',
-  'error.invalid_c_address':           '"{{address}}" não é uma C-address válida (conta inteligente Soroban).',
-  'error.invalid_g_address':           '"{{address}}" não é uma G-address válida (conta Stellar clássica).',
+  'error.invalid_c_address':           '"{{address}}" não é um C-address válido (conta inteligente Soroban).',
+  'error.invalid_g_address':           '"{{address}}" não é um G-address válido (conta Stellar clássica).',
 
   'error.fee_too_high':                'A taxa de {{feeBps}} bps excede o máximo de {{maxBps}} bps.',
   'error.amount_too_small':            'O valor {{amount}} está abaixo do mínimo de {{min}} stroops.',

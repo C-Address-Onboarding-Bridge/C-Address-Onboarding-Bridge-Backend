@@ -42,7 +42,8 @@ export class SimpleCache {
   }
 
   set<T>(key: string, value: T, ttlMs: number, staleWhileRevalidate = false): void {
-    if (this.entries.size >= this.maxEntries) {
+    const isNewKey = !this.entries.has(key);
+    if (isNewKey && this.entries.size >= this.maxEntries) {
       const oldestKey = this.entries.keys().next().value;
       if (oldestKey) {
         this.entries.delete(oldestKey);
