@@ -42,7 +42,9 @@ export class SimpleCache {
   }
 
   set<T>(key: string, value: T, ttlMs: number, staleWhileRevalidate = false): void {
-    if (this.entries.size >= this.maxEntries) {
+    // Only evict when the key is genuinely new (i.e. the map would actually grow).
+    // Updating an existing key never changes the map size, so no eviction is needed.
+    if (!this.entries.has(key) && this.entries.size >= this.maxEntries) {
       const oldestKey = this.entries.keys().next().value;
       if (oldestKey) {
         this.entries.delete(oldestKey);

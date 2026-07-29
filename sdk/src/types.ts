@@ -224,6 +224,8 @@ export interface QueueEntry {
 
 export interface OfflineQueueOptions {
   maxSize?: number;
+  /** Maximum number of replay attempts before an entry is dropped. Default: 3. */
+  maxRetryCount?: number;
   storageAdapter?: StorageAdapter;
   healthCheckIntervalMs?: number;
   autoQueue?: boolean;

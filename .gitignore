@@ -23,3 +23,30 @@ logs/secrets-audit.jsonl
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Vitest / Jest snapshots and cache
+**/__snapshots__/
+**/.vitest-cache/
+**/.jest-cache/
+.vitest/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# npm / yarn / pnpm lockfile artifacts (keep package-lock.json but ignore temp files)
+.npmrc.local
+.yarnrc.local
+
+# OS-generated files
+ehthumbs.db
+desktop.ini
+
+# Editor swap / backup files
+*.swp
+*.swo
+*~
+
+# Test output artifacts
+junit.xml
+test-results/
+

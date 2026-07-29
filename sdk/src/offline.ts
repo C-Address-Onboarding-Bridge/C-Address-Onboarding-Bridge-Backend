@@ -1,14 +1,36 @@
 import { QueueEntry, OfflineQueueOptions, StorageAdapter, RequestOptions, HttpMethod } from './types';
 import { BridgeClient, BridgeClientConfig } from './bridge';
-import { OfflineError, QueueFullError, TimeoutError } from './errors';
+import { BridgeError, OfflineError, QueueFullError, TimeoutError } from './errors';
 
 const QUEUE_STORAGE_KEY = 'bridge_sdk_offline_queue';
 
+/** Default maximum number of replay attempts before an entry is dropped. */
+const DEFAULT_MAX_RETRY_COUNT = 3;
+
 type DrainHandler = (count: number, at: string) => void;
+
+/** Classifies whether a caught error should be retried on the next health-check. */
+function isRetryableQueueError(err: unknown): boolean {
+  // BridgeErrors carry an explicit retryable flag — honour it.
+  if (err instanceof BridgeError) return err.retryable;
+  // Generic network-level errors (TypeError from fetch) are retryable.
+  if (err instanceof TypeError) return true;
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes('failed to fetch') ||
+      msg.includes('network') ||
+      msg.includes('econnrefused') ||
+      msg.includes('enotfound')
+    );
+  }
+  return false;
+}
 
 export class OfflineQueue {
   private queue: QueueEntry[] = [];
   private readonly maxSize: number;
+  private readonly maxRetryCount: number;
   private readonly storage?: StorageAdapter;
   private healthTimer?: ReturnType<typeof setInterval>;
   private serverOnline = true;
@@ -21,6 +43,7 @@ export class OfflineQueue {
     options?: OfflineQueueOptions,
   ) {
     this.maxSize = options?.maxSize ?? 50;
+    this.maxRetryCount = options?.maxRetryCount ?? DEFAULT_MAX_RETRY_COUNT;
     this.storage = options?.storageAdapter;
     const intervalMs = options?.healthCheckIntervalMs ?? 5_000;
 
@@ -90,8 +113,21 @@ export class OfflineQueue {
       try {
         await this.executeEntry(entry);
         processedCount++;
-      } catch {
+      } catch (err) {
+        // Non-retryable errors (e.g. 400 Validation, 401 Auth) are dropped
+        // immediately — retrying them will never succeed.
+        if (!isRetryableQueueError(err)) {
+          continue;
+        }
+
         entry.retryCount++;
+
+        // Drop entries that have exceeded the maximum retry count so they
+        // don't pile up and retry forever on every health-check cycle.
+        if (entry.retryCount > this.maxRetryCount) {
+          continue;
+        }
+
         remaining.push(entry);
       }
     }
