@@ -6,5 +6,11 @@ export default defineConfig({
     include: ['**/*.e2e.test.ts'],
     environment: 'node',
     setupFiles: [],
+    coverage: {
+      enabled: true,
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      reportsDirectory: 'coverage',
+    },
   },
 });

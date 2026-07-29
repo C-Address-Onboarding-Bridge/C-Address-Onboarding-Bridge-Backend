@@ -13,6 +13,7 @@ This directory captures the key architectural decisions for the C-Address Onboar
 - [ADR-007: Use Stellar and soroban-sdk v26](adr-007-use-stellar-and-soroban-sdk-v26.md)
 - [ADR-008: Event-driven architecture for status updates](adr-008-event-driven-architecture-for-status-updates.md)
 - [ADR-009: Security architecture — defense-in-depth](adr-009-security-architecture.md)
+- [ADR-010: Transition to persistent PostgreSQL database](adr-010-transition-to-persistent-postgres-database.md)
 
 ## ADR Template
 

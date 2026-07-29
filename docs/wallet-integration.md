@@ -189,10 +189,18 @@ After the user completes the purchase, the provider sends a webhook to the bridg
 
 ## Error Handling
 
-All `BridgeClient` methods throw a native `Error` on failure. The message comes from the API response body when available.
+`BridgeClient` methods throw typed subclasses of `BridgeError` (from `errors.ts`), not a native `Error`. Every error carries a `statusCode`, an optional `code`, and a `retryable` flag, and the SDK exports type guards (`isAuthError`, `isValidationError`, etc.) so you can branch on error type instead of parsing `err.message`.
 
 ```typescript
-import { BridgeClient } from '@c-address-bridge/sdk';
+import {
+  BridgeClient,
+  isAuthError,
+  isValidationError,
+  isRateLimitError,
+  isServerError,
+  isNetworkError,
+  isNotFoundError,
+} from '@c-address-bridge/sdk';
 
 const client = new BridgeClient({ baseUrl: '...', apiKey: '...' });
 
@@ -203,31 +211,42 @@ try {
     targetAddress: 'C...',
   });
 } catch (err) {
-  if (err instanceof Error) {
-    switch (true) {
-      case err.message === 'unauthorized':
-        // Prompt user to re-authenticate or contact support
-        break;
-      case err.message.startsWith('validation_error'):
-        // Show inline field error
-        break;
-      default:
-        // Generic fallback
-        console.error('Bridge error:', err.message);
-    }
+  if (isAuthError(err)) {
+    // Prompt user to re-authenticate or contact support
+  } else if (isValidationError(err)) {
+    // err.fields holds a map of field name -> validation message, when provided
+    console.error('Invalid fields:', err.fields);
+  } else if (isRateLimitError(err)) {
+    // err.retryAfterMs suggests how long to wait before retrying
+    console.error(`Rate limited, retry after ${err.retryAfterMs}ms`);
+  } else if (isNotFoundError(err)) {
+    // Requested resource does not exist
+  } else if (isServerError(err) || isNetworkError(err)) {
+    // err.retryable is true for both — safe to retry with backoff
+    console.error('Transient error, safe to retry:', err.message);
+  } else {
+    console.error('Bridge error:', err);
   }
 }
 ```
 
-Common error messages:
+`BridgeError.isRetryable(err)` is a static helper equivalent to checking `err instanceof BridgeError && err.retryable` — useful in generic retry wrappers that don't need to distinguish error types.
 
-| Message | Cause |
-|---------|-------|
-| `unauthorized` | Missing or invalid `X-API-Key` header |
-| `validation_error` | Invalid query parameter (bad address, missing field, etc.) |
-| `request failed: ...` | HTTP-level failure or network error |
+Typed error classes and their default messages:
 
-Requests time out after **30 seconds**. Implement retry logic with exponential backoff in your application as needed.
+| Class | Default message | statusCode | retryable | Guard |
+|-------|------------------|------------|-----------|-------|
+| `AuthError` | `Unauthorized` | 401 or 403 | `false` | `isAuthError` |
+| `ValidationError` | *(required)* | 400 or 422 | `false` | `isValidationError` |
+| `NotFoundError` | `Not found` | 404 | `false` | `isNotFoundError` |
+| `RateLimitError` | `Too many requests` | 429 | `true` | `isRateLimitError` |
+| `ServerError` | *(required)* | 500+ | `true` | `isServerError` |
+| `NetworkError` | `Network error` | — | `true` | `isNetworkError` |
+| `TimeoutError` | `Operation "{op}" timed out after {ms}ms` | — | `true` | `isTimeoutError` |
+
+All of the above extend `BridgeError`, which itself extends `Error` — `isBridgeError(err)` narrows any thrown value to the base type, and `err instanceof Error` still works for a coarse check.
+
+Requests time out after **30 seconds**, surfaced as a `TimeoutError`. Use the `retryable` flag (or the corresponding type guard) to decide whether to retry with exponential backoff in your application.
 
 ---
 

@@ -3,6 +3,8 @@ dist/
 build/
 target/
 .env
+.env.local
+.env.*.local
 *.log
 .DS_Store
 Thumbs.db
@@ -10,18 +12,24 @@ coverage/
 *.wasm
 .claude/
 .idea/
-# Track .vscode/settings.json and extensions.json; ignore personal overrides
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+__snapshots__/
+*.snap
 test_snapshots/
 __snapshots__/
 *.snap
-.tmp/
+.vitest-cache/
+*.tsbuildinfo
 deployments/*.json
 .secrets.local.json
 .secrets.local.enc
 logs/secrets-audit.jsonl
+
+# Test snapshots
+**/__snapshots__/
+**/*.snap
 
 # Python bytecode
 __pycache__/

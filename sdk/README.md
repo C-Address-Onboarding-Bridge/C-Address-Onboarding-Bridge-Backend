@@ -14,6 +14,39 @@ The payload includes only non-PII metadata such as SDK version, Node.js version,
 
 The SDK ships with an ESM build for bundlers and a UMD bundle for browser script tags. Browser usage requires a global `fetch` implementation in the target environment.
 
+## Quickstart
+
+```ts
+import { BridgeClient } from '@c-address-bridge/sdk';
+
+const client = new BridgeClient({
+  baseUrl: 'https://api.bridge.example.com',
+  apiKey: 'your-api-key',
+});
+
+// 1. Get a fee quote for funding a C-address
+const quote = await client.getQuote({
+  sourceAsset: 'XLM',
+  amount: '10000000',        // 1 XLM in stroops
+  targetAddress: 'C...',
+});
+
+// 2. Prepare an unsigned funding transaction
+const prepared = await client.prepareFundingTransaction({
+  sourceAddress: 'G...',
+  targetAddress: 'C...',
+  tokenAddress: 'CC...',     // SEP-41 token contract address
+  amount: '10000000',
+});
+
+// 3. Sign prepared.instruction with the user's wallet, then submit it
+const result = await client.submitSignedXdr({ signedXdr: '...' });
+
+console.log(result.status); // 'pending' | 'success' | 'failed'
+```
+
+See the [Wallet Integration Guide](../docs/wallet-integration.md) for the full funding flows (G-address, CEX withdrawal, credit card on-ramp) and typed error handling.
+
 ## Testing
 
 The SDK ships with a dedicated testing package at `@c-address-bridge/sdk/testing`. It provides an in-memory mock server that intercepts `fetch` — no real API server or network required.
@@ -108,5 +141,7 @@ expect(req.headers['x-api-key']).toBe('my-api-key');
 | `fixtures.moonpayWidgetResult(overrides?)` | `MoonpayWidgetResult` |
 | `fixtures.transakWidgetResult(overrides?)` | `TransakWidgetResult` |
 | `fixtures.apiError(message, code?)` | `{ message, code? }` |
+| `fixtures.token(overrides?)` | `Token` |
+| `fixtures.tokenMetadata(overrides?)` | `TokenMetadata` |
 
-Pre-built address constants: `MOCK_C_ADDRESS`, `MOCK_G_ADDRESS`, `MOCK_TOKEN_ADDRESS`, `MOCK_TX_HASH`, `MOCK_QUOTE_PARAMS`, `MOCK_FUND_PARAMS`.
+Pre-built constants: `MOCK_C_ADDRESS`, `MOCK_G_ADDRESS`, `MOCK_TOKEN_ADDRESS`, `MOCK_TX_HASH`, `MOCK_QUOTE_PARAMS`, `MOCK_FUND_PARAMS`, `MOCK_NATIVE_TOKEN`, `MOCK_SAC_TOKEN`, `MOCK_TOKEN_METADATA`.

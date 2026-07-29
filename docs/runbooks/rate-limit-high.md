@@ -11,7 +11,7 @@ More than 80% of incoming requests are being rate-limited, indicating potential 
 
 1. Check which client IPs or API keys are being rate-limited:
    ```bash
-   kubectl logs -l app=c-address-bridge | grep "rate_limit" | awk '{print $NF}' | sort | uniq -c | sort -rn | head -20
+   ssh "$DEPLOY_USER@$DEPLOY_HOST" "journalctl -u c-address-bridge --no-pager" | grep "rate_limit" | awk '{print $NF}' | sort | uniq -c | sort -rn | head -20
    ```
 2. Determine if this is legitimate load or abuse
 

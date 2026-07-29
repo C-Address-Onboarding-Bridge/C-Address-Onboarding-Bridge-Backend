@@ -33,13 +33,15 @@ export class TelemetryClient {
   private readonly transport: TelemetryTransport;
   private readonly enabled: boolean;
   private readonly flushIntervalMs: number;
+  private readonly maxQueueSize: number;
   private readonly queue: TelemetryEvent[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(options: { endpoint?: string; enabled?: boolean; intervalMs?: number; transport?: TelemetryTransport } = {}) {
+  constructor(options: { endpoint?: string; enabled?: boolean; intervalMs?: number; transport?: TelemetryTransport; maxQueueSize?: number } = {}) {
     const runtimeProcess = typeof process !== 'undefined' ? process : undefined;
     this.enabled = options.enabled ?? (runtimeProcess?.env?.SDK_TELEMETRY_ENABLED !== 'false');
     this.flushIntervalMs = options.intervalMs ?? 60_000;
+    this.maxQueueSize = options.maxQueueSize ?? 1000;
     this.transport = options.transport ?? (options.endpoint ? new FetchTelemetryTransport(options.endpoint) : new NoopTelemetryTransport());
 
     if (this.enabled && options.endpoint) {
@@ -59,6 +61,10 @@ export class TelemetryClient {
       platform: runtimeProcess?.platform || 'unknown',
       ...event,
     });
+
+    if (this.queue.length > this.maxQueueSize) {
+      this.queue.splice(0, this.queue.length - this.maxQueueSize);
+    }
   }
 
   private start(): void {

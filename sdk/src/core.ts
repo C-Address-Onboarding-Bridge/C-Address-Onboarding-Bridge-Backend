@@ -23,6 +23,27 @@ export type {
   TokenMetadataParams,
 } from './types';
 export * as utils from './utils';
+export {
+  BridgeError,
+  AuthError,
+  ValidationError,
+  RateLimitError,
+  ServerError,
+  NotFoundError,
+  NetworkError,
+  TimeoutError,
+  OfflineError,
+  QueueFullError,
+  parseHttpError,
+  isAuthError,
+  isValidationError,
+  isRateLimitError,
+  isServerError,
+  isNetworkError,
+  isTimeoutError,
+  isNotFoundError,
+  isBridgeError,
+} from './errors';
 export { TimeoutError } from './errors';
 export {
   isNativeToken,
