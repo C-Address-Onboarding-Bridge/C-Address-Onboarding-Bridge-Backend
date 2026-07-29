@@ -53,6 +53,7 @@ export const config = {
     coinbase: {
       apiKey: process.env.COINBASE_API_KEY || '',
       apiSecret: process.env.COINBASE_API_SECRET || '',
+      passphrase: process.env.COINBASE_API_PASSPHRASE || '',
     },
     kraken: {
       apiKey: process.env.KRAKEN_API_KEY || '',

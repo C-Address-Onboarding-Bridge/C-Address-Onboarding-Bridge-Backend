@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
-import { logger } from '../index';
+import { logger } from '../logger';
 
 export type PermissionScope =
   | 'quote:read'
@@ -156,7 +156,7 @@ export function updateApiKey(
   return true;
 }
 
-function resolveRecord(rawKey: string): ApiKeyRecord | undefined {
+export function resolveRecord(rawKey: string): ApiKeyRecord | undefined {
   const hash = hashKey(rawKey);
   for (const record of keyStore.values()) {
     if (record.keyHash === hash) return record;

@@ -5,6 +5,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { sorobanService } from './soroban';
 import { explorerService } from './explorer';
+import { resolveRecord } from '../middleware/rbacAuth';
 
 const TX_HASH_RE = /^[a-f0-9]{64}$/;
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -32,8 +33,10 @@ function send(ws: WebSocket, payload: unknown): void {
 function validateToken(token: string | null): boolean {
   if (!config.websocket.authRequired) return true;
   if (!token) return false;
-  const validKeys = config.apiKeys;
-  return validKeys.includes(token);
+  const record = resolveRecord(token);
+  if (!record || record.revoked) return false;
+  if (record.expiresAt !== null && Date.now() > record.expiresAt) return false;
+  return true;
 }
 
 async function pollStatus(client: ClientState, sub: Subscription): Promise<void> {

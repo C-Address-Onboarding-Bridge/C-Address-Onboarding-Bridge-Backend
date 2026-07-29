@@ -1,4 +1,4 @@
-import { Migration } from './runner';
+import { Migration, runDDL } from './runner';
 
 export const migration004: Migration = {
   version: '004',
@@ -41,8 +41,7 @@ export const migration004: Migration = {
       CREATE INDEX IF NOT EXISTS idx_audit_log_checkpoints_hash
         ON audit_log_checkpoints (hash);
     `;
-    console.log('[migration 004] integrity audit log schema ready (no DB client attached; DDL logged for reference)');
-    console.log(schema);
+    await runDDL(schema);
   },
 
   async down() {
@@ -53,7 +52,6 @@ export const migration004: Migration = {
       DROP INDEX IF EXISTS idx_audit_log_event_type_created;
       DROP TABLE IF EXISTS audit_log_entries;
     `;
-    console.log('[migration 004] rollback DDL (no DB client attached; DDL logged for reference)');
-    console.log(rollback);
+    await runDDL(rollback);
   },
 };

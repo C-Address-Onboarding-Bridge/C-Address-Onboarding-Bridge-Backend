@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { config } from '../config';
 
 /** Request parameters for routing a CEX withdrawal to a C-address. */
@@ -76,16 +77,9 @@ export class CexRoutingService {
 
   private async postToExchange(
     url: string,
-    body: Record<string, unknown>,
-    apiKey?: string,
-    apiSecret?: string,
+    headers: Record<string, string>,
+    body: string,
   ): Promise<Response> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (apiKey) headers['X-API-Key'] = apiKey;
-    if (apiSecret) headers['X-API-Secret'] = apiSecret;
-
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
@@ -93,7 +87,7 @@ export class CexRoutingService {
       const res = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body,
         signal: controller.signal,
       });
       return res;
@@ -102,21 +96,80 @@ export class CexRoutingService {
     }
   }
 
+  /** Binance: query-string params signed with HMAC-SHA256, key sent via `X-MBX-APIKEY`. */
+  private signBinance(
+    params: Record<string, string>,
+    apiSecret: string,
+  ): { query: string; headers: Record<string, string> } {
+    const query = new URLSearchParams({ ...params, timestamp: String(Date.now()), recvWindow: '5000' }).toString();
+    const signature = crypto.createHmac('sha256', apiSecret).update(query).digest('hex');
+    return {
+      query: `${query}&signature=${signature}`,
+      headers: { 'X-MBX-APIKEY': config.cex.binance.apiKey, 'Content-Type': 'application/x-www-form-urlencoded' },
+    };
+  }
+
+  /** Coinbase: `CB-ACCESS-*` headers, HMAC-SHA256 of timestamp+method+path+body, base64. */
+  private signCoinbase(
+    requestPath: string,
+    body: string,
+  ): Record<string, string> {
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const prehash = `${timestamp}POST${requestPath}${body}`;
+    const signature = crypto
+      .createHmac('sha256', Buffer.from(config.cex.coinbase.apiSecret, 'base64'))
+      .update(prehash)
+      .digest('base64');
+    return {
+      'Content-Type': 'application/json',
+      'CB-ACCESS-KEY': config.cex.coinbase.apiKey,
+      'CB-ACCESS-SIGN': signature,
+      'CB-ACCESS-TIMESTAMP': timestamp,
+      'CB-ACCESS-PASSPHRASE': config.cex.coinbase.passphrase,
+    };
+  }
+
+  /** Kraken: form-encoded body with nonce, `API-Sign` = HMAC-SHA512(path + SHA256(nonce + postData)). */
+  private signKraken(
+    path: string,
+    params: Record<string, string>,
+  ): { body: string; headers: Record<string, string> } {
+    const nonce = String(Date.now());
+    const body = new URLSearchParams({ ...params, nonce }).toString();
+    const sha256Hash = crypto.createHash('sha256').update(nonce + body).digest();
+    const message = Buffer.concat([Buffer.from(path), sha256Hash]);
+    const signature = crypto
+      .createHmac('sha512', Buffer.from(config.cex.kraken.apiSecret, 'base64'))
+      .update(message)
+      .digest('base64');
+    return {
+      body,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'API-Key': config.cex.kraken.apiKey,
+        'API-Sign': signature,
+      },
+    };
+  }
+
   private async handleBinance(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
     const memo = req.memo || `bridge:binance:${req.targetCAddress.slice(-8)}`;
 
     try {
-      const res = await this.postToExchange(
-        'https://api.binance.com/sapi/v1/capital/withdraw/apply',
+      const { query, headers } = this.signBinance(
         {
           coin: req.sourceAsset,
           amount: req.amount,
           address: req.targetCAddress,
           network: req.targetNetwork,
-          memo,
+          addressTag: memo,
         },
-        config.cex.binance.apiKey,
         config.cex.binance.apiSecret,
+      );
+      const res = await this.postToExchange(
+        `https://api.binance.com/sapi/v1/capital/withdraw/apply?${query}`,
+        headers,
+        '',
       );
 
       if (!res.ok) {
@@ -141,20 +194,18 @@ export class CexRoutingService {
 
   private async handleCoinbase(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
     const memo = req.memo || `bridge:coinbase:${req.targetCAddress.slice(-8)}`;
+    const requestPath = '/v2/accounts/withdrawals';
 
     try {
-      const res = await this.postToExchange(
-        'https://api.coinbase.com/v2/accounts/withdrawals',
-        {
-          type: 'send',
-          to: req.targetCAddress,
-          amount: req.amount,
-          currency: req.sourceAsset,
-          description: memo,
-        },
-        config.cex.coinbase.apiKey,
-        config.cex.coinbase.apiSecret,
-      );
+      const body = JSON.stringify({
+        type: 'send',
+        to: req.targetCAddress,
+        amount: req.amount,
+        currency: req.sourceAsset,
+        description: memo,
+      });
+      const headers = this.signCoinbase(requestPath, body);
+      const res = await this.postToExchange(`https://api.coinbase.com${requestPath}`, headers, body);
 
       if (!res.ok) {
         const errBody = await res.text();
@@ -176,20 +227,16 @@ export class CexRoutingService {
   }
 
   private async handleKraken(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    const memo = req.memo || `bridge:kraken:${req.targetCAddress.slice(-8)}`;
+    const path = '/0/private/Withdraw';
 
     try {
-      const res = await this.postToExchange(
-        'https://api.kraken.com/0/private/Withdraw',
-        {
-          asset: req.sourceAsset,
-          key: req.targetCAddress,
-          amount: req.amount,
-          network: req.targetNetwork,
-        },
-        config.cex.kraken.apiKey,
-        config.cex.kraken.apiSecret,
-      );
+      const { body, headers } = this.signKraken(path, {
+        asset: req.sourceAsset,
+        key: req.targetCAddress,
+        amount: req.amount,
+        network: req.targetNetwork,
+      });
+      const res = await this.postToExchange(`https://api.kraken.com${path}`, headers, body);
 
       if (!res.ok) {
         const errBody = await res.text();
@@ -225,13 +272,14 @@ export class CexRoutingService {
     const endpoint = process.env.CEX_API_ENDPOINT;
     if (endpoint) {
       try {
-        const res = await this.postToExchange(endpoint, {
+        const body = JSON.stringify({
           address: req.targetCAddress,
           asset: req.sourceAsset,
           amount: req.amount,
           network: req.targetNetwork,
           memo,
         });
+        const res = await this.postToExchange(endpoint, { 'Content-Type': 'application/json' }, body);
 
         if (res.ok) {
           const data = await res.json() as { id?: string };
