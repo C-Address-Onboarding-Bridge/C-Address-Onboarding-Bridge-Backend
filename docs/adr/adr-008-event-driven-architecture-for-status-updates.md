@@ -5,14 +5,14 @@
 - Date: 2026-06-29
 
 ## Context
-The bridge needs to surface progress and lifecycle updates for deposits, transfers, and off-ramp events. A simple request-response model is insufficient for long-running workflows and future real-time experiences.
+The bridge needs to surface progress and lifecycle updates for deposits, transfers, and off-ramp events. A simple request-response model is insufficient for long-running workflows and real-time experiences.
 
 ## Decision
-Adopt an event-driven architecture for status updates, with a clear path to WebSocket delivery once the platform needs live push notifications.
+Adopt an event-driven architecture for status updates, with WebSocket delivery for live push notifications. WebSocket support is implemented and live: `api/src/services/websocket.ts` mounts a `/ws` upgrade endpoint backed by the `ws` production dependency, with a dedicated test suite in `api/src/__tests__/websocket.test.ts`.
 
 ## Consequences
 - Supports asynchronous workflows and better observability.
-- Makes it easier to add future real-time clients.
+- Real-time clients are supported today via the WebSocket endpoint.
 - Adds some complexity around event schema versioning and delivery guarantees.
 
 ## Alternatives considered
