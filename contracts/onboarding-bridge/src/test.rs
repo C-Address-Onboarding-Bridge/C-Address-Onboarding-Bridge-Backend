@@ -1690,6 +1690,13 @@ fn test_set_rebate_tier_basic() {
 }
 
 #[test]
+#[should_panic(expected = "discount capped at 50%")]
+fn test_set_rebate_tier_rejects_discount_above_cap() {
+    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    bridge.set_rebate_tier(&0, &1000i128, &5001); // > 5000 bps (50%)
+}
+
+#[test]
 fn test_user_volume_tracks_funding() {
     let (env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
     let source = Address::generate(&env);
