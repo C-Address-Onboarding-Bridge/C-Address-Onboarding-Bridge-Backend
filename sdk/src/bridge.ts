@@ -92,7 +92,7 @@ export class BridgeClient {
     };
   }
 
-  private shouldRetry(err: unknown): boolean {
+  protected shouldRetry(err: unknown): boolean {
     if (err instanceof DOMException && err.name === "AbortError") return false;
     if (err instanceof Error && err.name === "AbortError") return false;
     if (err instanceof BridgeError) return err.retryable;
