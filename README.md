@@ -450,6 +450,13 @@ router.registerExchange('my-exchange', {
 
 Memo format for tracking: `bridge:{exchange_name}:{c_address_suffix}`
 
+> **`defaultCexHandlers` are non-functional placeholders.** The `binance`, `coinbase`, and
+> `kraken` handlers exported from `cex/withdrawal-router.ts` never call an exchange API — they
+> immediately return a fake `success: true` / `status: 'pending'` result. They exist only to
+> illustrate the handler shape used in the snippet above. Registering them directly instead of
+> supplying your own handler will silently "succeed" without ever calling the exchange or moving
+> funds.
+
 ---
 
 ## Development
