@@ -223,12 +223,14 @@ export interface QueueEntry {
 }
 
 export interface OfflineQueueOptions {
-  maxSize?: number;
-  storageAdapter?: StorageAdapter;
-  healthCheckIntervalMs?: number;
-  autoQueue?: boolean;
-  healthCheckPath?: string;
-}
+   maxSize?: number;
+   storageAdapter?: StorageAdapter;
+   healthCheckIntervalMs?: number;
+   autoQueue?: boolean;
+   healthCheckPath?: string;
+   maxRetries?: number;
+   shouldRetry?: (err: unknown) => boolean;
+ }
 
 // Event emitter
 

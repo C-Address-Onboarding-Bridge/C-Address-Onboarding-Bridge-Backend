@@ -9,11 +9,14 @@ type DrainHandler = (count: number, at: string) => void;
 export class OfflineQueue {
   private queue: QueueEntry[] = [];
   private readonly maxSize: number;
+  private readonly maxRetries: number;
+  private readonly shouldRetry: (err: unknown) => boolean;
   private readonly storage?: StorageAdapter;
   private healthTimer?: ReturnType<typeof setInterval>;
   private serverOnline = true;
   private replaying = false;
   private readonly drainHandlers: DrainHandler[] = [];
+  private readonly deadLetters: QueueEntry[] = [];
 
   constructor(
     private readonly executeEntry: (entry: QueueEntry) => Promise<unknown>,
@@ -21,6 +24,8 @@ export class OfflineQueue {
     options?: OfflineQueueOptions,
   ) {
     this.maxSize = options?.maxSize ?? 50;
+    this.maxRetries = options?.maxRetries ?? 3;
+    this.shouldRetry = options?.shouldRetry ?? (() => true);
     this.storage = options?.storageAdapter;
     const intervalMs = options?.healthCheckIntervalMs ?? 5_000;
 
@@ -57,6 +62,11 @@ export class OfflineQueue {
     return [...this.queue];
   }
 
+  /** Inspect all entries that exceeded max retries or were non-retryable. */
+  getDeadLetters(): QueueEntry[] {
+    return [...this.deadLetters];
+  }
+
   /** Removes all pending entries and clears persisted storage. */
   async clearQueue(): Promise<void> {
     this.queue = [];
@@ -90,8 +100,16 @@ export class OfflineQueue {
       try {
         await this.executeEntry(entry);
         processedCount++;
-      } catch {
+      } catch (err) {
+        if (!this.shouldRetry(err)) {
+          this.deadLetters.push(entry);
+          continue;
+        }
         entry.retryCount++;
+        if (entry.retryCount >= this.maxRetries) {
+          this.deadLetters.push(entry);
+          continue;
+        }
         remaining.push(entry);
       }
     }
@@ -143,7 +161,10 @@ export class OfflineBridgeClient extends BridgeClient {
         fetch(`${base}${healthPath}`, { method: 'GET' })
           .then((r) => r.ok)
           .catch(() => false),
-      config.offlineOptions,
+      {
+        ...config.offlineOptions,
+        shouldRetry: (err) => this.shouldRetry(err),
+      },
     );
   }
 
