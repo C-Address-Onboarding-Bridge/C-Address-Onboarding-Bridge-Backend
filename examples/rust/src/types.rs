@@ -46,3 +46,13 @@ pub struct FundPrepareResult {
     pub instruction: String,
     pub simulation: HashMap<String, String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct CexResult {
+    pub status: String,
+    #[serde(rename = "withdrawalId")]
+    pub withdrawal_id: String,
+    #[serde(rename = "estimatedArrival")]
+    pub estimated_arrival: String,
+    pub fee: String,
+}

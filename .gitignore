@@ -34,3 +34,32 @@ logs/secrets-audit.jsonl
 # Python bytecode
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Rust build artifacts
+examples/rust/target/
+contracts/onboarding-bridge/target/
+contracts/onboarding-bridge/fuzz/target/
+*.lock.bak
+
+# Java / Maven build artifacts
+examples/java/target/
+
+# Test output / snapshots
+*.snap
+**/__snapshots__/
+vitest-results/
+junit-*.xml
+test-results/
+
+# OS / editor artefacts
+*.swp
+*.swo
+*~
+.editorconfig.bak
+
+# Temporary files
+*.tmp
+*.bak
+.nyc_output/
