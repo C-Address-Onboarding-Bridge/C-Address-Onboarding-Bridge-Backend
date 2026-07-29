@@ -9,6 +9,10 @@ interface TransakWidgetParams {
   fiatAmount?: number;
   email?: string;
   redirectURL?: string;
+  /** Optional partner fee percentage to display in the widget. */
+  partnerFee?: number;
+  /** Widget branding color (hex). Defaults to the standard bridge brand color. */
+  themeColor?: string;
 }
 
 /** Handles Transak widget URL generation for fiat on-ramp flows. */
@@ -44,6 +48,8 @@ export class TransakService {
     if (params.fiatAmount) queryParams.set('fiatAmount', params.fiatAmount.toString());
     if (params.email) queryParams.set('email', params.email);
     if (params.redirectURL) queryParams.set('redirectURL', params.redirectURL);
+    if (params.partnerFee) queryParams.set('partnerFee', params.partnerFee.toString());
+    queryParams.set('themeColor', params.themeColor ?? '#7C3AED');
 
     return `${baseUrl}?${queryParams.toString()}`;
   }

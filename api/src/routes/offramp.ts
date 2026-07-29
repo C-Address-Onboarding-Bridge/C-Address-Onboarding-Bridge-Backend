@@ -32,6 +32,8 @@ const transakSchema = z.object({
   fiatAmount: z.number().positive().optional(),
   email: z.string().email().optional(),
   redirectURL: z.string().optional(),
+  partnerFee: z.number().positive().optional(),
+  themeColor: z.string().optional(),
 });
 
 offrampRouter.post('/moonpay', async (req: Request, res: Response, next: NextFunction) => {
