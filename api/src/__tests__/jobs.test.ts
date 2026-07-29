@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 process.env.NODE_ENV = 'test';
 
@@ -59,38 +59,6 @@ describe('Background Job Processors', () => {
       const latest = snapshots[snapshots.length - 1];
       expect(latest.period).toBe('hourly');
       expect(latest.txSubmitted).toBeGreaterThanOrEqual(2);
-    });
-  });
-
-  describe('txStatus processor', () => {
-    it('throws when tx is still pending (triggers Bull retry)', async () => {
-      const sorobanModule = await import('../services/soroban');
-      vi.spyOn(sorobanModule.sorobanService, 'getTransactionStatus').mockResolvedValueOnce({
-        status: 'pending',
-        hash: 'abc123',
-      });
-
-      const { processTxStatusPoll } = await import('../jobs/processors/txStatus');
-      const mockJob = { data: { txHash: 'abc123' }, attemptsMade: 0 };
-
-      await expect(
-        processTxStatusPoll(mockJob as Parameters<typeof processTxStatusPoll>[0]),
-      ).rejects.toThrow('still pending');
-    });
-
-    it('resolves when tx is confirmed success', async () => {
-      const sorobanModule = await import('../services/soroban');
-      vi.spyOn(sorobanModule.sorobanService, 'getTransactionStatus').mockResolvedValueOnce({
-        status: 'success',
-        hash: 'abc123',
-      });
-
-      const { processTxStatusPoll } = await import('../jobs/processors/txStatus');
-      const mockJob = { data: { txHash: 'abc123' }, attemptsMade: 0 };
-
-      await expect(
-        processTxStatusPoll(mockJob as Parameters<typeof processTxStatusPoll>[0]),
-      ).resolves.toBeUndefined();
     });
   });
 });

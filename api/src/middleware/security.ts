@@ -135,6 +135,11 @@ const SUSPICIOUS_WINDOW_MS = 60_000;
 const SUSPICIOUS_THRESHOLD = 10;
 
 export function suspiciousRateLimiting(req: Request, res: Response, next: NextFunction): void {
+  const ip = req.ip ?? 'unknown';
+  if (flagSuspiciousRequest(ip)) {
+    res.status(429).json({ error: 'rate_limited', message: 'too many suspicious requests from this client' });
+    return;
+  }
   next();
 }
 
@@ -156,8 +161,9 @@ export function flagSuspiciousRequest(ip: string): boolean {
   return false;
 }
 
-export function xssErrorSanitizer(_err: Error, _req: Request, res: Response, next: NextFunction): void {
-  next(_err);
+export function xssErrorSanitizer(err: Error, _req: Request, _res: Response, next: NextFunction): void {
+  err.message = sanitizeErrorMessage(err.message);
+  next(err);
 }
 
 export { sanitizeErrorMessage };
