@@ -34,7 +34,11 @@ async fn main() -> Result<(), BridgeError> {
     let funded = client
         .submit_signed_xdr("AAAAAgAAAABexampleSignedTransactionXdr")
         .await?;
-    println!("Fund submitted: {} hash={}...", funded.status, &funded.hash[..16]);
+    println!(
+        "Fund submitted: {} hash={}...",
+        funded.status,
+        &funded.hash[..funded.hash.len().min(16)]
+    );
 
     let status = client.get_status(&funded.hash).await?;
     println!("Transaction status: {}", status.status);

@@ -2,6 +2,9 @@ package com.caddressbridge.example;
 
 import com.caddressbridge.BridgeClient;
 import com.caddressbridge.BridgeException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 public final class Example {
     private static final String MOCK_C_ADDRESS =
@@ -11,6 +14,8 @@ public final class Example {
     private static final String MOCK_TOKEN_ADDRESS =
             "CATOKEN7ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMN";
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     public static void main(String[] args) {
         BridgeClient client = BridgeClient.fromEnv();
         System.out.println("Bridge client ready");
@@ -19,9 +24,13 @@ public final class Example {
             System.out.println("Quote: " + client.getQuote("XLM", "10000000", MOCK_C_ADDRESS));
             System.out.println("Prepared: " + client.prepareFunding(
                     MOCK_G_ADDRESS, MOCK_C_ADDRESS, MOCK_TOKEN_ADDRESS, "10000000", "onboarding"));
-            String funded = client.submitSignedXdr("AAAAAgAAAABexampleSignedTransactionXdr");
+            JsonNode funded = client.submitSignedXdr("AAAAAgAAAABexampleSignedTransactionXdr");
             System.out.println("Funded: " + funded);
-            String hash = funded.replaceAll(".*\"hash\"\\s*:\\s*\"([^\"]+)\".*", "$1");
+            JsonNode hashNode = funded.get("hash");
+            if (hashNode == null || hashNode.isNull()) {
+                throw new BridgeException(0, "submitSignedXdr response did not contain a \"hash\" field");
+            }
+            String hash = hashNode.asText();
             System.out.println("Status: " + client.getStatus(hash));
             System.out.println("MoonPay: " + client.createMoonpayUrl(String.format(
                     "{\"walletAddress\":\"%s\",\"currencyCode\":\"xlm\",\"walletNetwork\":\"stellar\","
