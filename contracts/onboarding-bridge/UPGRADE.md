@@ -29,13 +29,13 @@ call and requires admin auth.
    ```
 2. Build and test:
    ```bash
-   cargo build --target wasm32-unknown-unknown --release
+   cargo build --target wasm32v1-none --release
    cargo test
    ```
 3. Deploy the new WASM and note the hash:
    ```bash
-   soroban contract install \
-     --wasm target/wasm32-unknown-unknown/release/onboarding_bridge.wasm \
+   stellar contract install \
+     --wasm target/wasm32v1-none/release/onboarding_bridge.wasm \
      --source <admin-secret> \
      --rpc-url <rpc-url> \
      --network-passphrase "<passphrase>"
@@ -43,7 +43,7 @@ call and requires admin auth.
    ```
 4. Call `upgrade` on the live contract (admin only):
    ```bash
-   soroban contract invoke \
+   stellar contract invoke \
      --id <contract-id> \
      --source <admin-secret> \
      --rpc-url <rpc-url> \
@@ -52,8 +52,8 @@ call and requires admin auth.
    ```
 5. Verify the contract still works:
    ```bash
-   soroban contract invoke --id <contract-id> ... -- version
-   soroban contract invoke --id <contract-id> ... -- schema_version
+   stellar contract invoke --id <contract-id> ... -- version
+   stellar contract invoke --id <contract-id> ... -- schema_version
    ```
 
 No `migrate` call is needed when the schema has not changed.
@@ -77,7 +77,7 @@ Follow all steps in §1, then additionally:
    ```
 3. After calling `upgrade`, call `migrate` (admin only):
    ```bash
-   soroban contract invoke \
+   stellar contract invoke \
      --id <contract-id> \
      --source <admin-secret> \
      --rpc-url <rpc-url> \
@@ -86,7 +86,7 @@ Follow all steps in §1, then additionally:
    ```
 4. Confirm `schema_version` returns the new value:
    ```bash
-   soroban contract invoke --id <contract-id> ... -- schema_version
+   stellar contract invoke --id <contract-id> ... -- schema_version
    # expect: 2
    ```
 

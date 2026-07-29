@@ -19,5 +19,5 @@ A circuit breaker for an external service has been in OPEN state for >5 minutes,
 ## Remediation
 
 - If external service is back: the half-open probe will reset automatically (default 30s)
-- To force reset: `kubectl exec -it <pod> -- curl -X POST localhost:3001/internal/circuit-breaker/reset`
+- To force reset: `ssh "$DEPLOY_USER@$DEPLOY_HOST" "curl -X POST localhost:3001/internal/circuit-breaker/reset"`
 - If service is experiencing an extended outage: create a maintenance window silence in Alertmanager
