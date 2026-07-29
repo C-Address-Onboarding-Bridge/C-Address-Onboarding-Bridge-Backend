@@ -322,11 +322,13 @@ export class BridgeClient {
       };
     }
 
+    validateSacTokenAddress(params.contractId);
+
     const startedAt = Date.now();
     try {
       const result = await this.request<TokenMetadata>(
         "GET",
-        `/api/v1/token/${params.contractId}/metadata`,
+        `/api/v1/token/${encodeURIComponent(params.contractId)}/metadata`,
       );
       this.telemetry.record({
         method: "getTokenMetadata",
@@ -373,6 +375,10 @@ export class BridgeClient {
   }
 
   async getStatus(txHash: string): Promise<TransactionStatus> {
+    if (!txHash || typeof txHash !== 'string' || txHash.trim().length === 0) {
+      throw new ValidationError('txHash must be a non-empty string');
+    }
+
     const cacheKey = `status:${txHash}`;
     const cached = this.cache.get<TransactionStatus>(cacheKey);
     if (cached) {
@@ -383,7 +389,7 @@ export class BridgeClient {
     try {
       const result = await this.request<TransactionStatus>(
         "GET",
-        `/api/v1/status/${txHash}`,
+        `/api/v1/status/${encodeURIComponent(txHash)}`,
       );
       this.cache.set(
         cacheKey,

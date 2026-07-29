@@ -20,6 +20,10 @@ deployments/*.json
 .secrets.local.enc
 logs/secrets-audit.jsonl
 
+# Test snapshots
+**/__snapshots__/
+**/*.snap
+
 # Python bytecode
 __pycache__/
 *.pyc
