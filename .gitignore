@@ -15,6 +15,10 @@ coverage/
 !.vscode/settings.json
 !.vscode/extensions.json
 test_snapshots/
+__snapshots__/
+*.snap
+.vitest-cache/
+*.tsbuildinfo
 deployments/*.json
 .secrets.local.json
 .secrets.local.enc
