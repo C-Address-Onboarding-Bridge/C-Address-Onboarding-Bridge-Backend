@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
+import { STELLAR_ADDRESS_REGEX, C_ADDRESS_REGEX } from '../utils/constants';
 import { sorobanService } from '../services/soroban';
 import { explorerService } from '../services/explorer';
 import { idempotencyMiddleware } from '../middleware/idempotency';
@@ -25,8 +25,8 @@ const fundSchema = z.object({
 
 const fundDirectSchema = z.object({
   sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid source Stellar address'),
-  targetAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid target C-address'),
-  tokenAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid token contract address'),
+  targetAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
+  tokenAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid token contract address'),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
   memo: z.string().max(64).default(''),
 });

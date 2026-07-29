@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
+import { C_ADDRESS_REGEX } from '../utils/constants';
 import { cexService } from '../services/cex';
 import { exchangeRoutingCount } from '../services/metrics';
 import { buildCacheKey, CACHE_TTL, getOrCompute } from '../services/cache';
@@ -12,7 +12,7 @@ const routeSchema = z.object({
   exchange: z.enum(['binance', 'coinbase', 'kraken', 'generic']),
   sourceAsset: z.string().min(1),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
-  targetCAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid target C-address'),
+  targetCAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
   targetNetwork: z.string().default('stellar'),
   memo: z.string().max(64).optional(),
 });

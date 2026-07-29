@@ -47,11 +47,11 @@ function banIP(ip: string, pattern: string): void {
 }
 
 function resolveTier(req: Request): 'low' | 'standard' | 'high' {
-  const tier = req.apiKeyRecord?.rateLimit ?? req.headers['x-rate-limit-tier'];
+  const tier = req.apiKeyRecord?.rateLimit;
   if (tier === 'low' || tier === 'standard' || tier === 'high') {
     return tier;
   }
-  return 'standard';
+  return 'low';
 }
 
 function createLimiter(max: number, keyPrefix: string) {
