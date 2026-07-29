@@ -242,6 +242,28 @@ const WidgetUrlResponse = registry.register(
   z.object({ url: z.string().url() }).openapi({ title: 'WidgetUrlResponse' }),
 );
 
+const MoonpayQuoteQuery = registry.register(
+  'MoonpayQuoteQuery',
+  z
+    .object({
+      baseCurrency: z.string().openapi({ example: 'USD' }),
+      baseCurrencyAmount: z.coerce.number().positive().openapi({ example: 100 }),
+      quoteCurrency: z.string().default('xlm').openapi({ example: 'xlm' }),
+    })
+    .openapi({ title: 'MoonpayQuoteQuery' }),
+);
+
+const MoonpayQuoteResponse = registry.register(
+  'MoonpayQuoteResponse',
+  z
+    .object({
+      quoteCurrencyAmount: z.number(),
+      feeAmount: z.number(),
+      totalAmount: z.number(),
+    })
+    .openapi({ title: 'MoonpayQuoteResponse' }),
+);
+
 registry.registerPath({
   method: 'post',
   path: '/api/v2/offramp/moonpay',
@@ -253,6 +275,22 @@ registry.registerPath({
   request: { body: { content: { 'application/json': { schema: MoonpayOfframpRequest } } } },
   responses: {
     200: { description: 'Widget URL', content: { 'application/json': { schema: WidgetUrlResponse } } },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Missing or invalid API key', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v2/offramp/moonpay/quote',
+  operationId: 'moonpayBuyQuote',
+  summary: 'Fetch a real-time MoonPay buy quote',
+  description: 'Returns quote, fee, and total amounts for converting a fiat base currency to a crypto quote currency via MoonPay.',
+  tags: ['Offramp'],
+  security: [{ ApiKeyAuth: ['offramp:write'] }],
+  request: { query: MoonpayQuoteQuery },
+  responses: {
+    200: { description: 'Buy quote', content: { 'application/json': { schema: MoonpayQuoteResponse } } },
     400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Missing or invalid API key', content: { 'application/json': { schema: ErrorResponse } } },
   },
