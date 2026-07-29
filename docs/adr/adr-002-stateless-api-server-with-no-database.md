@@ -22,3 +22,12 @@ Run the API server as a stateless service without a persistent database in the i
 ## Related ADRs
 - [ADR-001: Use Soroban for smart contract execution](adr-001-use-soroban-for-smart-contract-execution.md)
 - [ADR-008: Event-driven architecture for status updates](adr-008-event-driven-architecture-for-status-updates.md)
+- [ADR-010: Transition to persistent PostgreSQL database](adr-010-transition-to-persistent-postgres-database.md)
+
+---
+
+## Addendum — decision superseded
+
+> Status: **Superseded by ADR-010**
+
+This decision no longer reflects the current architecture. The codebase has since introduced a full PostgreSQL-backed persistence layer: `api/src/services/db.ts`, a migration runner (`api/src/migrations/`), and a `DATABASE_URL` config block consumed by the deploy pipeline for every environment. See [ADR-010](adr-010-transition-to-persistent-postgres-database.md) for the rationale and transition details.
