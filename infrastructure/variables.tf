@@ -4,6 +4,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "environment" {
+  description = "Deployment environment (e.g. dev, staging, production). Used to namespace resource identifiers and prevent state collisions across environments."
+  type        = string
+  default     = "production"
+}
+
 variable "db_username" {
   description = "Database administrator username"
   type        = string
@@ -16,23 +22,14 @@ variable "db_password" {
   sensitive   = true
 }
 
-variable "cdn_api_origin_domain" {
-  description = "Domain name of the API origin (ALB DNS name or ECS service) fronted by the CDN"
+variable "db_instance_class" {
+  description = "RDS instance class (e.g. db.t3.micro for dev, db.t3.medium for staging/production)"
   type        = string
+  default     = "db.t3.micro"
 }
 
-variable "cdn_origin_verify_secret" {
-  description = "Secret value added as X-Origin-Verify header to block direct origin access"
+variable "redis_node_type" {
+  description = "ElastiCache node type (e.g. cache.t3.micro for dev, cache.t3.small for staging/production)"
   type        = string
-  sensitive   = true
-}
-
-variable "db_security_group_id" {
-  description = "Security group ID for the RDS instance (must not use the default VPC security group)"
-  type        = string
-}
-
-variable "db_subnet_group_name" {
-  description = "DB subnet group name for the RDS instance"
-  type        = string
+  default     = "cache.t3.micro"
 }

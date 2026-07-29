@@ -6,7 +6,7 @@ rule_files:
   - /etc/prometheus/alerts.yml
 
 scrape_configs:
-  - job_name: bridge-api
+  - job_name: c-address-bridge
     static_configs:
       - targets: ['api:3001']
     metrics_path: /metrics

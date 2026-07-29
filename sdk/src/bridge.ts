@@ -92,7 +92,7 @@ export class BridgeClient {
     };
   }
 
-  private shouldRetry(err: unknown): boolean {
+  protected shouldRetry(err: unknown): boolean {
     if (err instanceof DOMException && err.name === "AbortError") return false;
     if (err instanceof Error && err.name === "AbortError") return false;
     if (err instanceof BridgeError) return err.retryable;
@@ -179,6 +179,8 @@ export class BridgeClient {
               fields?: Record<string, string>;
               retryAfter?: number;
             },
+            undefined,
+            this.config.locale,
           );
           if (
             bridgeErr.retryable &&
@@ -202,7 +204,7 @@ export class BridgeClient {
           (error instanceof DOMException || error instanceof Error) &&
           error.name === "AbortError"
         ) {
-          throw new TimeoutError(`${method} ${path}`, timeoutMs);
+          throw new TimeoutError(`${method} ${path}`, timeoutMs, { locale: this.config.locale });
         }
         // Re-wrap network failures
         if (
@@ -322,11 +324,13 @@ export class BridgeClient {
       };
     }
 
+    validateSacTokenAddress(params.contractId);
+
     const startedAt = Date.now();
     try {
       const result = await this.request<TokenMetadata>(
         "GET",
-        `/api/v1/token/${params.contractId}/metadata`,
+        `/api/v1/token/${encodeURIComponent(params.contractId)}/metadata`,
       );
       this.telemetry.record({
         method: "getTokenMetadata",
@@ -373,6 +377,10 @@ export class BridgeClient {
   }
 
   async getStatus(txHash: string): Promise<TransactionStatus> {
+    if (!txHash || typeof txHash !== 'string' || txHash.trim().length === 0) {
+      throw new ValidationError('txHash must be a non-empty string');
+    }
+
     const cacheKey = `status:${txHash}`;
     const cached = this.cache.get<TransactionStatus>(cacheKey);
     if (cached) {
@@ -383,7 +391,7 @@ export class BridgeClient {
     try {
       const result = await this.request<TransactionStatus>(
         "GET",
-        `/api/v1/status/${txHash}`,
+        `/api/v1/status/${encodeURIComponent(txHash)}`,
       );
       this.cache.set(
         cacheKey,

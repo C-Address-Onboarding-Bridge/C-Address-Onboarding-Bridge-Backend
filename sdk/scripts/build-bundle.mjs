@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Builds SDK bundles with esbuild for browser consumers.
- * Generates minified ESM bundles and a metafile for size analysis.
+ * Generates minified ESM bundles, a single-file UMD/IIFE bundle
+ * (dist/bridge.umd.js, exposed as window.BridgeSDK) for <script> tag
+ * consumers, and a metafile for size analysis.
  *
  * Usage:
  *   node scripts/build-bundle.mjs           # build only
@@ -64,6 +66,33 @@ for (const [entry, outFile, label] of bundles) {
   const bytes = readFileSync(resolve(outDir, outFile));
   const gz = gzipSync(bytes, { level: 9 });
   results.push({ label, raw: bytes.length, gz: gz.length });
+}
+
+// Single-file UMD/IIFE bundle for <script> tag consumers, exposing a
+// `window.BridgeSDK` global — see sdk/examples/browser.html.
+const umdResult = await esbuild.build({
+  bundle: true,
+  minify: true,
+  format: 'iife',
+  globalName: 'BridgeSDK',
+  platform: 'browser',
+  target: 'es2020',
+  treeShaking: true,
+  legalComments: 'none',
+  entryPoints: [resolve(root, 'src/index.ts')],
+  outfile: resolve(root, 'dist', 'bridge.umd.js'),
+});
+
+if (umdResult.errors.length > 0) {
+  console.error('esbuild errors in umd:');
+  umdResult.errors.forEach((e) => console.error(' ', e.text));
+  process.exit(1);
+}
+
+{
+  const bytes = readFileSync(resolve(root, 'dist', 'bridge.umd.js'));
+  const gz = gzipSync(bytes, { level: 9 });
+  results.push({ label: 'umd (bridge.umd.js)', raw: bytes.length, gz: gz.length });
 }
 
 if (fullMetafile) {

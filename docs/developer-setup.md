@@ -123,17 +123,17 @@ npm run dev -w api
 cd contracts/onboarding-bridge
 
 # Build WASM
-cargo build --target wasm32-unknown-unknown --release
+cargo build --target wasm32v1-none --release
 
 # Deploy to local sandbox
-soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/onboarding_bridge.wasm \
+stellar contract deploy \
+  --wasm target/wasm32v1-none/release/onboarding_bridge.wasm \
   --source <admin-secret> \
   --rpc-url http://localhost:8000/soroban/rpc \
   --network-passphrase "Standalone Network ; February 2017"
 
 # Initialize (paste the contract ID returned above)
-soroban contract invoke \
+stellar contract invoke \
   --id <contract-id> \
   --source <admin-secret> \
   --rpc-url http://localhost:8000/soroban/rpc \
@@ -334,7 +334,7 @@ chmod +x .husky/pre-commit
 ### `cargo build` fails — wasm target missing
 
 ```bash
-rustup target add wasm32-unknown-unknown
+rustup target add wasm32v1-none
 ```
 
 ---

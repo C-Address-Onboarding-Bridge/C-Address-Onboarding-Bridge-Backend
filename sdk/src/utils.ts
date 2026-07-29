@@ -1,3 +1,5 @@
+import { ValidationError } from './errors';
+
 /**
  * Returns `true` if the string is a valid Stellar address (G-address or C-address).
  * Note: this accepts both account addresses (G…) and contract addresses (C…).
@@ -18,13 +20,34 @@ export function isGAddress(address: string): boolean {
 }
 
 /**
+ * Validates that `feeBps` is an integer in the `[0, 10000]` range (0%–100%).
+ *
+ * @throws {ValidationError} If `feeBps` is not an integer, or is outside `[0, 10000]`.
+ */
+function validateFeeBps(feeBps: number): void {
+  if (!Number.isInteger(feeBps)) {
+    throw new ValidationError(`Invalid feeBps: ${feeBps}. Must be an integer.`, {
+      fields: { feeBps: 'must be an integer' },
+    });
+  }
+  if (feeBps < 0 || feeBps > 10000) {
+    throw new ValidationError(
+      `Invalid feeBps: ${feeBps}. Must be between 0 and 10000 (inclusive).`,
+      { fields: { feeBps: 'must be between 0 and 10000' } },
+    );
+  }
+}
+
+/**
  * Calculates the protocol fee for a given amount and fee rate.
  *
  * @param amount - Transfer amount in stroops.
- * @param feeBps - Fee rate in basis points (e.g. `30` = 0.3%).
+ * @param feeBps - Fee rate in basis points (e.g. `30` = 0.3%). Must be an integer in `[0, 10000]`.
  * @returns Fee in stroops (truncated, not rounded).
+ * @throws {ValidationError} If `feeBps` is not an integer, or is outside `[0, 10000]`.
  */
 export function calculateFee(amount: bigint, feeBps: number): bigint {
+  validateFeeBps(feeBps);
   return (amount * BigInt(feeBps)) / BigInt(10000);
 }
 
@@ -32,8 +55,9 @@ export function calculateFee(amount: bigint, feeBps: number): bigint {
  * Calculates the amount a recipient receives after the protocol fee is deducted.
  *
  * @param amount - Transfer amount in stroops.
- * @param feeBps - Fee rate in basis points.
+ * @param feeBps - Fee rate in basis points. Must be an integer in `[0, 10000]`.
  * @returns Net receive amount in stroops.
+ * @throws {ValidationError} If `feeBps` is not an integer, or is outside `[0, 10000]`.
  */
 export function calculateReceiveAmount(amount: bigint, feeBps: number): bigint {
   return amount - calculateFee(amount, feeBps);
