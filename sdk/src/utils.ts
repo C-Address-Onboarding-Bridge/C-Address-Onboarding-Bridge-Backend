@@ -1,3 +1,4 @@
+import { ValidationError } from './errors';
 /**
  * Returns `true` if the string is a valid Stellar address (G-address or C-address).
  * Note: this accepts both account addresses (G…) and contract addresses (C…).
@@ -25,6 +26,12 @@ export function isGAddress(address: string): boolean {
  * @returns Fee in stroops (truncated, not rounded).
  */
 export function calculateFee(amount: bigint, feeBps: number): bigint {
+  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > 10000) {
+    throw new ValidationError(
+      `Invalid feeBps: ${feeBps}. Must be a non-negative integer between 0 and 10000.`,
+      { code: 'INVALID_FEE_BPS' },
+    );
+  }
   return (amount * BigInt(feeBps)) / BigInt(10000);
 }
 
