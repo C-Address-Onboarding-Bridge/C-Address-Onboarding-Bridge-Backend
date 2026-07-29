@@ -2,8 +2,6 @@ import { Worker, WorkerOptions } from 'bullmq';
 import pino from 'pino';
 import { config } from '../config';
 import { getAllQueues, closeQueues } from './queue';
-import { processTxStatusPoll } from './processors/txStatus';
-import { processWebhookRetry } from './processors/webhookRetry';
 import { processCacheWarmup } from './processors/cacheWarmup';
 import { processMetrics } from './processors/metrics';
 import { processCleanup } from './processors/cleanup';
@@ -28,8 +26,6 @@ function makeWorkerOptions(concurrency: number): WorkerOptions {
 
 export function startWorkers(): Worker[] {
   const workers: Worker[] = [
-    new Worker('tx-status-poll', processTxStatusPoll, makeWorkerOptions(config.jobs.concurrency.txStatus)),
-    new Worker('webhook-retry', processWebhookRetry, makeWorkerOptions(config.jobs.concurrency.webhookRetry)),
     new Worker('cache-warmup', processCacheWarmup, makeWorkerOptions(config.jobs.concurrency.cacheWarmup)),
     new Worker('metrics-compute', processMetrics, makeWorkerOptions(config.jobs.concurrency.metrics)),
     new Worker('cleanup', processCleanup, makeWorkerOptions(config.jobs.concurrency.cleanup)),

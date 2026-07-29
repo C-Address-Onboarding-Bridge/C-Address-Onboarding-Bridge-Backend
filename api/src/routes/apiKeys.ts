@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import {
   createApiKey,
@@ -13,18 +13,24 @@ import {
 
 export const apiKeysRouter = Router();
 
-const updateApiKeySchema = z
+const PERMISSION_SCOPES: PermissionScope[] = [
+  'quote:read',
+  'fund:write',
+  'status:read',
+  'offramp:write',
+  'cex:read',
+  'admin:keys',
+];
+
+const patchApiKeySchema = z
   .object({
     name: z.string().min(1),
-    scopes: z.array(
-      z.enum(['quote:read', 'fund:write', 'status:read', 'offramp:write', 'cex:read', 'admin:keys']),
-    ),
+    scopes: z.array(z.enum(PERMISSION_SCOPES as [PermissionScope, ...PermissionScope[]])).min(1),
     ipWhitelist: z.array(z.string()),
     expiresAt: z.number().nullable(),
     rateLimit: z.enum(['low', 'standard', 'high']),
   })
-  .partial()
-  .strict();
+  .partial();
 
 apiKeysRouter.post('/', requireScopes('admin:keys'), (req: Request, res: Response) => {
   const { name, scopes, ipWhitelist, expiresAt, rateLimit } = req.body as {
@@ -63,19 +69,18 @@ apiKeysRouter.get('/:id', requireScopes('admin:keys'), (req: Request, res: Respo
   res.json(record);
 });
 
-apiKeysRouter.patch('/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
-  const parsed = updateApiKeySchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'bad_request', message: 'invalid patch body', issues: parsed.error.issues });
-    return;
+apiKeysRouter.patch('/:id', requireScopes('admin:keys'), (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const patch = patchApiKeySchema.parse(req.body);
+    const updated = updateApiKey(req.params.id, patch);
+    if (!updated) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    res.json({ status: 'updated' });
+  } catch (err) {
+    next(err);
   }
-
-  const updated = updateApiKey(req.params.id, parsed.data);
-  if (!updated) {
-    res.status(404).json({ error: 'not_found' });
-    return;
-  }
-  res.json({ status: 'updated' });
 });
 
 apiKeysRouter.delete('/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {

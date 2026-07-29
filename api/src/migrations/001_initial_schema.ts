@@ -1,4 +1,4 @@
-import { Migration } from './runner';
+import { Migration, runDDL } from './runner';
 
 export const migration001: Migration = {
   version: '001',
@@ -59,8 +59,7 @@ export const migration001: Migration = {
         failed_at       BIGINT NOT NULL
       );
     `;
-    console.log('[migration 001] schema ready (no DB client attached; DDL logged for reference)');
-    console.log(schema);
+    await runDDL(schema);
   },
 
   async down() {
@@ -74,7 +73,6 @@ export const migration001: Migration = {
       DROP TABLE IF EXISTS transactions;
       DROP TABLE IF EXISTS schema_migrations;
     `;
-    console.log('[migration 001] rollback DDL (no DB client attached; DDL logged for reference)');
-    console.log(rollback);
+    await runDDL(rollback);
   },
 };

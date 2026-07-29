@@ -5,10 +5,10 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { sorobanService } from './soroban';
 import { explorerService } from './explorer';
+import { resolveRecord } from '../middleware/rbacAuth';
 
 const TX_HASH_RE = /^[a-f0-9]{64}$/;
 const HEARTBEAT_INTERVAL_MS = 30_000;
-const MAX_SUBSCRIPTIONS_PER_CONNECTION = 10;
 const POLL_INTERVAL_MS = 5_000;
 
 interface Subscription {
@@ -33,8 +33,10 @@ function send(ws: WebSocket, payload: unknown): void {
 function validateToken(token: string | null): boolean {
   if (!config.websocket.authRequired) return true;
   if (!token) return false;
-  const validKeys = config.apiKeys;
-  return validKeys.includes(token);
+  const record = resolveRecord(token);
+  if (!record || record.revoked) return false;
+  if (record.expiresAt !== null && Date.now() > record.expiresAt) return false;
+  return true;
 }
 
 async function pollStatus(client: ClientState, sub: Subscription): Promise<void> {
@@ -69,8 +71,8 @@ function subscribe(client: ClientState, txHash: string, lastKnownStatus: string 
     return;
   }
 
-  if (client.subscriptions.size >= MAX_SUBSCRIPTIONS_PER_CONNECTION) {
-    send(client.ws, { type: 'error', code: 'subscription_limit', max: MAX_SUBSCRIPTIONS_PER_CONNECTION });
+  if (client.subscriptions.size >= config.websocket.maxSubscriptionsPerConnection) {
+    send(client.ws, { type: 'error', code: 'subscription_limit', max: config.websocket.maxSubscriptionsPerConnection });
     return;
   }
 
