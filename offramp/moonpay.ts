@@ -9,6 +9,7 @@ export interface MoonpayConfig {
 /** Parameters for building a MoonPay widget URL. */
 export interface MoonpayPurchaseParams {
   walletAddress: string;
+  walletNetwork: string;
   currencyCode?: string;
   baseCurrency?: string;
   baseCurrencyAmount?: number;
@@ -27,6 +28,7 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
   const query = new URLSearchParams({
     apiKey: config.apiKey,
     walletAddress: params.walletAddress,
+    walletNetwork: params.walletNetwork,
     currencyCode: params.currencyCode ?? 'xlm',
   });
 
@@ -80,12 +82,27 @@ export async function getMoonpayBuyQuote(config: MoonpayConfig, params: {
     baseCurrency: params.baseCurrency,
     areFeesIncluded: 'true',
   });
-  const res = await fetch(`${url}?${query.toString()}`);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  let res: Response;
+  try {
+    res = await fetch(`${url}?${query.toString()}`, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+
   if (!res.ok) throw new Error(`moonpay quote failed: ${res.statusText}`);
+
   const data = await res.json();
-  return {
-    quoteCurrencyAmount: data.quoteCurrencyAmount,
-    feeAmount: data.feeAmount,
-    totalAmount: data.totalAmount,
-  };
+  const { quoteCurrencyAmount, feeAmount, totalAmount } = data ?? {};
+  if (
+    typeof quoteCurrencyAmount !== 'number'
+    || typeof feeAmount !== 'number'
+    || typeof totalAmount !== 'number'
+  ) {
+    throw new Error('moonpay quote response missing expected numeric fields');
+  }
+
+  return { quoteCurrencyAmount, feeAmount, totalAmount };
 }
