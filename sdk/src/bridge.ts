@@ -179,6 +179,8 @@ export class BridgeClient {
               fields?: Record<string, string>;
               retryAfter?: number;
             },
+            undefined,
+            this.config.locale,
           );
           if (
             bridgeErr.retryable &&
@@ -202,7 +204,7 @@ export class BridgeClient {
           (error instanceof DOMException || error instanceof Error) &&
           error.name === "AbortError"
         ) {
-          throw new TimeoutError(`${method} ${path}`, timeoutMs);
+          throw new TimeoutError(`${method} ${path}`, timeoutMs, { locale: this.config.locale });
         }
         // Re-wrap network failures
         if (
