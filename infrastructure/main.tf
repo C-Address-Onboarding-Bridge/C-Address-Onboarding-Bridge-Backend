@@ -49,8 +49,12 @@ resource "aws_elasticache_cluster" "redis" {
   port                 = 6379
 }
 
-# CloudFront CDN & Load Balancer placeholder
-# ...
+# CloudFront CDN
+module "cdn" {
+  source                = "./cdn"
+  api_origin_domain     = var.cdn_api_origin_domain
+  origin_verify_secret  = var.cdn_origin_verify_secret
+}
 
 # Secrets Manager
 resource "aws_secretsmanager_secret" "api_secrets" {
