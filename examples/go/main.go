@@ -49,7 +49,11 @@ func run(client *caddressbridge.BridgeClient) error {
 	}
 	fmt.Printf("Fund submitted: %v hash=%v\n", funded["status"], funded["hash"])
 
-	status, err := client.GetStatus(funded["hash"].(string))
+	hash, ok := funded["hash"].(string)
+	if !ok || hash == "" {
+		return fmt.Errorf("fund response missing or invalid hash field")
+	}
+	status, err := client.GetStatus(hash)
 	if err != nil {
 		return err
 	}
@@ -78,5 +82,17 @@ func run(client *caddressbridge.BridgeClient) error {
 		return err
 	}
 	fmt.Printf("Transak URL: %v\n", transak["url"])
+
+	cex, err := client.RouteCexWithdrawal(map[string]any{
+		"exchange":      "coinbase",
+		"sourceAsset":   "XLM",
+		"amount":        "10000000",
+		"targetCAddress": mockCAddress,
+		"targetNetwork": "stellar",
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("CEX withdrawal: status=%v id=%v\n", cex["status"], cex["withdrawalId"])
 	return nil
 }

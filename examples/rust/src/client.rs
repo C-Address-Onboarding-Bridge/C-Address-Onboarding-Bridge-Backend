@@ -1,6 +1,6 @@
 use crate::error::BridgeError;
 use crate::types::{
-    FundPrepareBody, FundPrepareResult, FundingResult, Quote, TransactionStatus, WidgetUrl,
+    CexResult, FundPrepareBody, FundPrepareResult, FundingResult, Quote, TransactionStatus, WidgetUrl,
 };
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE};
 use serde_json::{json, Value};
@@ -133,6 +133,13 @@ impl BridgeClient {
     pub async fn create_transak_url(&self, body: Value) -> Result<WidgetUrl, BridgeError> {
         let value = self
             .request(reqwest::Method::POST, "/api/v1/offramp/transak", &[], Some(body))
+            .await?;
+        Ok(serde_json::from_value(value)?)
+    }
+
+    pub async fn route_cex_withdrawal(&self, body: Value) -> Result<CexResult, BridgeError> {
+        let value = self
+            .request(reqwest::Method::POST, "/api/v1/cex/route", &[], Some(body))
             .await?;
         Ok(serde_json::from_value(value)?)
     }

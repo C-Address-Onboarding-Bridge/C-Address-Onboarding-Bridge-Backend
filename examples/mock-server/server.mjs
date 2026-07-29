@@ -71,6 +71,9 @@ function send(res, status, body) {
 
 function route(method, pathname) {
   if (method === 'GET' && pathname === '/health') return { status: 200, body: { status: 'ok' } };
+  if (method === 'GET' && pathname === '/api/v1/quote' && process.env.MOCK_FORCE_ERROR === '1') {
+    return { status: 503, body: { message: 'Service unavailable', code: 'SERVICE_UNAVAILABLE' } };
+  }
   if (method === 'GET' && pathname === '/api/v1/quote') return { status: 200, body: fixtures.quote };
   if (method === 'POST' && pathname === '/api/v1/fund/prepare') return { status: 200, body: fixtures.fundingPrepare };
   if (method === 'POST' && pathname === '/api/v1/fund') return { status: 201, body: fixtures.fundingResult };
@@ -78,9 +81,7 @@ function route(method, pathname) {
   if (method === 'POST' && pathname === '/api/v1/offramp/moonpay') return { status: 200, body: fixtures.moonpay };
   if (method === 'POST' && pathname === '/api/v1/offramp/transak') return { status: 200, body: fixtures.transak };
   if (method === 'POST' && pathname === '/api/v1/cex/route') return { status: 200, body: fixtures.cex };
-  if (method === 'GET' && pathname === '/api/v1/quote' && process.env.MOCK_FORCE_ERROR === '1') {
-    return { status: 503, body: { message: 'Service unavailable', code: 'SERVICE_UNAVAILABLE' } };
-  }
+
   return { status: 404, body: { message: `No mock for ${method} ${pathname}` } };
 }
 

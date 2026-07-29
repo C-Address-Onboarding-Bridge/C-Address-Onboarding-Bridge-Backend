@@ -1,6 +1,7 @@
 import { QueueEntry, OfflineQueueOptions, StorageAdapter, RequestOptions, HttpMethod } from './types';
 import { BridgeClient, BridgeClientConfig } from './bridge';
 import { OfflineError, QueueFullError, TimeoutError } from './errors';
+import type { SupportedLocale } from './i18n/types';
 
 const QUEUE_STORAGE_KEY = 'bridge_sdk_offline_queue';
 
@@ -9,11 +10,14 @@ type DrainHandler = (count: number, at: string) => void;
 export class OfflineQueue {
   private queue: QueueEntry[] = [];
   private readonly maxSize: number;
+  private readonly maxRetries: number;
+  private readonly shouldRetry: (err: unknown) => boolean;
   private readonly storage?: StorageAdapter;
   private healthTimer?: ReturnType<typeof setInterval>;
   private serverOnline = true;
   private replaying = false;
   private readonly drainHandlers: DrainHandler[] = [];
+  private readonly deadLetters: QueueEntry[] = [];
 
   constructor(
     private readonly executeEntry: (entry: QueueEntry) => Promise<unknown>,
@@ -21,7 +25,10 @@ export class OfflineQueue {
     options?: OfflineQueueOptions,
   ) {
     this.maxSize = options?.maxSize ?? 50;
+    this.maxRetries = options?.maxRetries ?? 3;
+    this.shouldRetry = options?.shouldRetry ?? (() => true);
     this.storage = options?.storageAdapter;
+    this.locale = options?.locale;
     const intervalMs = options?.healthCheckIntervalMs ?? 5_000;
 
     void this.loadFromStorage();
@@ -43,7 +50,7 @@ export class OfflineQueue {
 
   async enqueue(entry: Omit<QueueEntry, 'id' | 'timestamp' | 'retryCount'>): Promise<string> {
     if (this.queue.length >= this.maxSize) {
-      throw new QueueFullError(this.maxSize);
+      throw new QueueFullError(this.maxSize, { locale: this.locale });
     }
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const item: QueueEntry = { ...entry, id, timestamp: new Date().toISOString(), retryCount: 0 };
@@ -55,6 +62,11 @@ export class OfflineQueue {
   /** Returns a snapshot of all pending queue entries. */
   getQueue(): QueueEntry[] {
     return [...this.queue];
+  }
+
+  /** Inspect all entries that exceeded max retries or were non-retryable. */
+  getDeadLetters(): QueueEntry[] {
+    return [...this.deadLetters];
   }
 
   /** Removes all pending entries and clears persisted storage. */
@@ -90,8 +102,16 @@ export class OfflineQueue {
       try {
         await this.executeEntry(entry);
         processedCount++;
-      } catch {
+      } catch (err) {
+        if (!this.shouldRetry(err)) {
+          this.deadLetters.push(entry);
+          continue;
+        }
         entry.retryCount++;
+        if (entry.retryCount >= this.maxRetries) {
+          this.deadLetters.push(entry);
+          continue;
+        }
         remaining.push(entry);
       }
     }
@@ -129,11 +149,13 @@ export class OfflineQueue {
 export class OfflineBridgeClient extends BridgeClient {
   readonly offlineQueue: OfflineQueue;
   private readonly autoQueue: boolean;
+  private readonly locale?: SupportedLocale;
 
   constructor(config: BridgeClientConfig & { offlineOptions?: OfflineQueueOptions }) {
     super(config);
 
     this.autoQueue = config.offlineOptions?.autoQueue ?? true;
+    this.locale = config.locale;
     const healthPath = config.offlineOptions?.healthCheckPath ?? '/api/v1/health';
     const base = config.baseUrl.replace(/\/+$/, '');
 
@@ -143,7 +165,10 @@ export class OfflineBridgeClient extends BridgeClient {
         fetch(`${base}${healthPath}`, { method: 'GET' })
           .then((r) => r.ok)
           .catch(() => false),
-      config.offlineOptions,
+      {
+        ...config.offlineOptions,
+        shouldRetry: (err) => this.shouldRetry(err),
+      },
     );
   }
 
@@ -159,7 +184,7 @@ export class OfflineBridgeClient extends BridgeClient {
     } catch (err) {
       if (this.autoQueue && this.isNetworkError(err)) {
         await this.offlineQueue.enqueue({ method, path, body, params });
-        throw new OfflineError(true);
+        throw new OfflineError(true, { locale: this.locale });
       }
       throw err;
     }

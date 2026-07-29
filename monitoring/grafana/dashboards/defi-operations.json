@@ -29,8 +29,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(soroban_contract_calls_total{job=\"c-address-bridge\"}[5m])) by (function)",
-          "legendFormat": "{{function}}"
+          "expr": "sum(rate(external_api_call_duration_seconds_count{job=\"c-address-bridge\",service=~\"soroban.*\"}[5m])) by (service)",
+          "legendFormat": "{{service}}"
         }
       ],
       "title": "Smart Contract Interaction Rate by Function",
@@ -44,18 +44,18 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "histogram_quantile(0.50, sum(rate(soroban_rpc_duration_seconds_bucket{job=\"c-address-bridge\"}[5m])) by (le, endpoint))",
-          "legendFormat": "p50 {{endpoint}}"
+          "expr": "histogram_quantile(0.50, sum(rate(external_api_call_duration_seconds_bucket{job=\"c-address-bridge\",service=~\"soroban.*\"}[5m])) by (le, service))",
+          "legendFormat": "p50 {{service}}"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "histogram_quantile(0.95, sum(rate(soroban_rpc_duration_seconds_bucket{job=\"c-address-bridge\"}[5m])) by (le, endpoint))",
-          "legendFormat": "p95 {{endpoint}}"
+          "expr": "histogram_quantile(0.95, sum(rate(external_api_call_duration_seconds_bucket{job=\"c-address-bridge\",service=~\"soroban.*\"}[5m])) by (le, service))",
+          "legendFormat": "p95 {{service}}"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "histogram_quantile(0.99, sum(rate(soroban_rpc_duration_seconds_bucket{job=\"c-address-bridge\"}[5m])) by (le, endpoint))",
-          "legendFormat": "p99 {{endpoint}}"
+          "expr": "histogram_quantile(0.99, sum(rate(external_api_call_duration_seconds_bucket{job=\"c-address-bridge\",service=~\"soroban.*\"}[5m])) by (le, service))",
+          "legendFormat": "p99 {{service}}"
         }
       ],
       "title": "Soroban RPC Latency",
@@ -69,7 +69,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(soroban_rpc_errors_total{job=\"c-address-bridge\"}[5m])) / sum(rate(soroban_rpc_calls_total{job=\"c-address-bridge\"}[5m]))",
+          "expr": "sum(rate(external_api_call_duration_seconds_count{job=\"c-address-bridge\",service=~\"soroban.*\",status=\"error\"}[5m])) / sum(rate(external_api_call_duration_seconds_count{job=\"c-address-bridge\",service=~\"soroban.*\"}[5m]))",
           "legendFormat": "RPC Error Rate"
         }
       ],
@@ -84,13 +84,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(soroban_contract_calls_total{job=\"c-address-bridge\",status=\"success\"}[5m])) by (function)",
-          "legendFormat": "success {{function}}"
+          "expr": "sum(rate(external_api_call_duration_seconds_count{job=\"c-address-bridge\",service=~\"soroban.*\",status=\"success\"}[5m])) by (service)",
+          "legendFormat": "success {{service}}"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum(rate(soroban_contract_calls_total{job=\"c-address-bridge\",status=\"error\"}[5m])) by (function)",
-          "legendFormat": "error {{function}}"
+          "expr": "sum(rate(external_api_call_duration_seconds_count{job=\"c-address-bridge\",service=~\"soroban.*\",status=\"error\"}[5m])) by (service)",
+          "legendFormat": "error {{service}}"
         }
       ],
       "title": "Contract Call Success vs Error",
@@ -105,7 +105,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "soroban_rpc_pool_size{job=\"c-address-bridge\"}",
+          "expr": "count(external_api_call_duration_seconds_count{job=\"c-address-bridge\",service=~\"soroban.*\"})",
           "legendFormat": "Pool Size"
         }
       ],
@@ -121,7 +121,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "soroban_rpc_pool_active{job=\"c-address-bridge\"}",
+          "expr": "sum(rate(external_api_call_duration_seconds_count{job=\"c-address-bridge\",service=~\"soroban.*\"}[1m]))",
           "legendFormat": "Active RPC Connections"
         }
       ],
@@ -137,7 +137,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "increase(bridge_fee_withdrawals_total{job=\"c-address-bridge\"}[24h])",
+          "expr": "increase(fee_collected_total{job=\"c-address-bridge\"}[24h])",
           "legendFormat": "Fee Withdrawals (24h)"
         }
       ],
@@ -152,8 +152,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "avg(soroban_rpc_duration_seconds{job=\"c-address-bridge\",quantile=\"0.99\"}) by (node)",
-          "legendFormat": "p99 {{node}}"
+          "expr": "histogram_quantile(0.99, sum(rate(external_api_call_duration_seconds_bucket{job=\"c-address-bridge\",service=~\"soroban.*\"}[5m])) by (le, service))",
+          "legendFormat": "p99 {{service}}"
         }
       ],
       "title": "RPC Latency per Node",

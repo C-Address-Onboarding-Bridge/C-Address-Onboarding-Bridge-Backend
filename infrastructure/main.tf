@@ -20,34 +20,43 @@ provider "aws" {
 
 # ECS Cluster
 resource "aws_ecs_cluster" "main" {
-  name = "c-address-cluster"
+  name = "c-address-cluster-${var.environment}"
 }
 
 # RDS PostgreSQL
 resource "aws_db_instance" "postgres" {
-  identifier           = "c-address-db"
+  identifier           = "c-address-db-${var.environment}"
   engine               = "postgres"
-  instance_class       = "db.t3.micro"
+  instance_class       = var.db_instance_class
   allocated_storage    = 20
   db_name              = "caddress"
   username             = var.db_username
   password             = var.db_password
   skip_final_snapshot  = true
+
+  storage_encrypted       = true
+  backup_retention_period = 7
+  vpc_security_group_ids  = [var.db_security_group_id]
+  db_subnet_group_name    = var.db_subnet_group_name
 }
 
 # Redis ElastiCache
 resource "aws_elasticache_cluster" "redis" {
-  cluster_id           = "c-address-redis"
+  cluster_id           = "c-address-redis-${var.environment}"
   engine               = "redis"
-  node_type            = "cache.t3.micro"
+  node_type            = var.redis_node_type
   num_cache_nodes      = 1
   port                 = 6379
 }
 
-# CloudFront CDN & Load Balancer placeholder
-# ...
+# CloudFront CDN
+module "cdn" {
+  source                = "./cdn"
+  api_origin_domain     = var.cdn_api_origin_domain
+  origin_verify_secret  = var.cdn_origin_verify_secret
+}
 
 # Secrets Manager
 resource "aws_secretsmanager_secret" "api_secrets" {
-  name = "c-address-api-secrets"
+  name = "c-address-api-secrets-${var.environment}"
 }

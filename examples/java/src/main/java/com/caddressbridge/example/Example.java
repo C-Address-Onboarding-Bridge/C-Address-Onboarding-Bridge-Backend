@@ -32,23 +32,18 @@ public final class Example {
             }
             String hash = hashNode.asText();
             System.out.println("Status: " + client.getStatus(hash));
-
-            ObjectNode moonpayBody = MAPPER.createObjectNode();
-            moonpayBody.put("walletAddress", MOCK_C_ADDRESS);
-            moonpayBody.put("currencyCode", "xlm");
-            moonpayBody.put("walletNetwork", "stellar");
-            moonpayBody.put("baseCurrencyAmount", 100);
-            moonpayBody.put("baseCurrencyCode", "USD");
-            System.out.println("MoonPay: " + client.createMoonpayUrl(moonpayBody));
-
-            ObjectNode transakBody = MAPPER.createObjectNode();
-            transakBody.put("walletAddress", MOCK_C_ADDRESS);
-            transakBody.put("network", "stellar");
-            transakBody.put("fiatCurrency", "USD");
-            transakBody.put("cryptoCurrency", "XLM");
-            transakBody.put("fiatAmount", 100);
-            System.out.println("Transak: " + client.createTransakUrl(transakBody));
-
+            System.out.println("MoonPay: " + client.createMoonpayUrl(String.format(
+                    "{\"walletAddress\":\"%s\",\"currencyCode\":\"xlm\",\"walletNetwork\":\"stellar\","
+                            + "\"baseCurrencyAmount\":100,\"baseCurrencyCode\":\"USD\"}",
+                    MOCK_C_ADDRESS)));
+            System.out.println("Transak: " + client.createTransakUrl(String.format(
+                    "{\"walletAddress\":\"%s\",\"network\":\"stellar\",\"fiatCurrency\":\"USD\","
+                            + "\"cryptoCurrency\":\"XLM\",\"fiatAmount\":100}",
+                    MOCK_C_ADDRESS)));
+            System.out.println("CEX: " + client.routeCexWithdrawal(String.format(
+                    "{\"exchange\":\"coinbase\",\"sourceAsset\":\"XLM\",\"amount\":\"10000000\","
+                            + "\"targetCAddress\":\"%s\",\"targetNetwork\":\"stellar\"}",
+                    MOCK_C_ADDRESS)));
             System.out.println("All flows completed successfully.");
         } catch (BridgeException e) {
             System.err.printf("Bridge error (%d): %s%n", e.getStatusCode(), e.getMessage());

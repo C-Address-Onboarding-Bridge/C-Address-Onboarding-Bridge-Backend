@@ -53,6 +53,15 @@ def main() -> int:
         )
         print(f"Transak URL: {transak['url'][:60]}...")
 
+        cex = client.route_cex_withdrawal(
+            exchange="coinbase",
+            sourceAsset="XLM",
+            amount="10000000",
+            targetCAddress=MOCK_C_ADDRESS,
+            targetNetwork="stellar",
+        )
+        print(f"CEX withdrawal: status={cex['status']} id={cex['withdrawalId']}")
+
         print("All flows completed successfully.")
         return 0
     except BridgeError as exc:

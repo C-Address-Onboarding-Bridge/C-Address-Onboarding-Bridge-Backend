@@ -270,3 +270,149 @@ describe('Utils', () => {
   });
 });
 
+describe('BridgeClient.getTokenMetadata URL encoding', () => {
+  it('encodes special characters in contractId', async () => {
+    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
+    const mockMeta = { decimals: 6, name: 'Test', symbol: 'TST' };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve(mockMeta),
+    }));
+
+    const contractIdWithSpecialChars = 'CABCDEFGHIJKLMNOPQRSTUVWXYZ234567+%20#';
+    await client.getTokenMetadata({ contractId: contractIdWithSpecialChars });
+
+    const calledUrl: string = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(calledUrl).toContain('/api/v1/token/');
+    expect(calledUrl).not.toContain('+%20#');
+    const url = new URL(calledUrl);
+    expect(url.pathname).toBe(`/api/v1/token/${encodeURIComponent(contractIdWithSpecialChars)}/metadata`);
+  });
+
+  it('rejects invalid contractId format', async () => {
+    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
+    await expect(client.getTokenMetadata({ contractId: 'invalid' })).rejects.toThrow();
+  });
+});
+
+describe('BridgeClient.getStatus URL encoding', () => {
+  it('encodes special characters in txHash', async () => {
+    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
+    const mockStatus = { status: 'success' as const, txHash: 'abc+def#123' };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve(mockStatus),
+    }));
+
+    const txHash = 'abc+def#123';
+    await client.getStatus(txHash);
+
+    const calledUrl: string = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(calledUrl).toContain('/api/v1/status/');
+    expect(calledUrl).not.toContain('+#');
+    const url = new URL(calledUrl);
+    expect(url.pathname).toBe(`/api/v1/status/${encodeURIComponent(txHash)}`);
+  });
+
+  it('rejects empty txHash', async () => {
+    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
+    await expect(client.getStatus('')).rejects.toThrow();
+    await expect(client.getStatus('   ')).rejects.toThrow();
+  });
+});
+
+describe('BridgeClient.runDiagnostics', () => {
+  let client: BridgeClient;
+
+  beforeEach(() => {
+    client = new BridgeClient({ baseUrl: 'http://localhost:3001', apiKey: 'test-key' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns healthy when all checks pass', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health latency
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ estimatedFee: '100', expectedReceive: '9900', feeBps: 100, rate: '1.0' }) }) // quote
+    );
+
+    const result = await client.runDiagnostics();
+    expect(result.status).toBe('healthy');
+    expect(result.checks.apiKey?.status).toBe('pass');
+    expect(result.checks.connectivity?.status).toBe('pass');
+    expect(result.checks.contractStatus?.status).toBe('pass');
+    expect(result.timestamp).toBeTruthy();
+  });
+
+  it('returns unhealthy when API key check fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: false, status: 401, json: () => Promise.resolve({ message: 'Unauthorized' }) }));
+
+    const result = await client.runDiagnostics({ checkApiKey: true, checkConnectivity: false, checkContractStatus: false });
+    expect(result.status).toBe('unhealthy');
+    expect(result.checks.apiKey?.status).toBe('fail');
+    expect(result.checks.apiKey?.message).toContain('Unauthorized');
+  });
+
+  it('returns unhealthy when connectivity check fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({ message: 'Server error' }) }));
+
+    const result = await client.runDiagnostics({ checkApiKey: false, checkConnectivity: true, checkContractStatus: false });
+    expect(result.status).toBe('unhealthy');
+    expect(result.checks.connectivity?.status).toBe('fail');
+  });
+
+  it('returns unhealthy when contract status check fails', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health latency
+      .mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({ message: 'Contract error' }) }) // quote
+    );
+
+    const result = await client.runDiagnostics({ checkApiKey: false, checkConnectivity: false, checkContractStatus: true });
+    expect(result.status).toBe('unhealthy');
+    expect(result.checks.contractStatus?.status).toBe('fail');
+  });
+
+  it('validates address when targetAddress is provided', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }));
+
+    const result = await client.runDiagnostics({
+      checkApiKey: false,
+      checkConnectivity: false,
+      checkContractStatus: false,
+      targetAddress: 'CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW',
+    });
+    expect(result.checks.addressValidation?.status).toBe('pass');
+    expect(result.checks.addressValidation?.addressType).toBe('C-address');
+  });
+
+  it('fails address validation for invalid address', async () => {
+    const result = await client.runDiagnostics({
+      checkApiKey: false,
+      checkConnectivity: false,
+      checkContractStatus: false,
+      targetAddress: 'invalid-address',
+    });
+    expect(result.status).toBe('unhealthy');
+    expect(result.checks.addressValidation?.status).toBe('fail');
+    expect(result.checks.addressValidation?.message).toContain('Invalid Stellar address format');
+  });
+
+  it('skips checks when explicitly disabled', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+
+    const result = await client.runDiagnostics({
+      checkApiKey: false,
+      checkConnectivity: false,
+      checkContractStatus: false,
+    });
+    expect(result.status).toBe('healthy');
+    expect(result.checks).toEqual({});
+  });
+});
+

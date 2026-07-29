@@ -18,6 +18,12 @@ const moonpaySchema = z.object({
   email: z.string().email().optional(),
 });
 
+const moonpayQuoteSchema = z.object({
+  baseCurrency: z.string().min(1),
+  baseCurrencyAmount: z.coerce.number().positive(),
+  quoteCurrency: z.string().min(1).default('xlm'),
+});
+
 const transakSchema = z.object({
   walletAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
   network: z.string().default('stellar'),
@@ -45,6 +51,16 @@ offrampRouter.post('/moonpay', async (req: Request, res: Response, next: NextFun
       { provider: 'moonpay', status: 'failed' },
       () => onrampRequestCount.inc({ provider: 'moonpay', status: 'failed' }),
     );
+    next(err);
+  }
+});
+
+offrampRouter.get('/moonpay/quote', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const params = moonpayQuoteSchema.parse(req.query);
+    const quote = await moonpayService.getBuyQuote(params);
+    res.json(quote);
+  } catch (err) {
     next(err);
   }
 });
