@@ -42,7 +42,7 @@ groups:
 
       - alert: HealthEndpointDown
         expr: |
-          probe_success{job="blackbox",instance=~".*c-address-bridge.*/health"} == 0
+          up{job="c-address-bridge"} == 0
         for: 2m
         labels:
           severity: critical
