@@ -134,6 +134,107 @@ impl TestToken {
 }
 
 // ---------------------------------------------------------------------------
+// Malicious reentrant test token — attempts to call back into the bridge's
+// fund_c_address from within its own transfer() callback, so the
+// reentrancy guard can be genuinely exercised (not just asserted absent).
+// ---------------------------------------------------------------------------
+
+#[contracttype]
+#[derive(Clone)]
+enum MTK {
+    Bal(Address),
+    ReentryConfig,
+}
+
+#[contracttype]
+#[derive(Clone)]
+struct ReentryConfig {
+    bridge: Address,
+    source: Address,
+    target: Address,
+    token_addr: Address,
+}
+
+#[contract]
+struct MaliciousToken;
+
+#[contractimpl]
+impl MaliciousToken {
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        let bal: i128 = env
+            .storage()
+            .persistent()
+            .get::<MTK, i128>(&MTK::Bal(to.clone()))
+            .unwrap_or(0);
+        env.storage().persistent().set(&MTK::Bal(to), &(bal + amount));
+    }
+
+    /// Arms the token: the next transfer() call will attempt to reenter
+    /// `fund_c_address` on `bridge` using the given call arguments.
+    pub fn configure(env: Env, bridge: Address, source: Address, target: Address, token_addr: Address) {
+        env.storage().instance().set(
+            &MTK::ReentryConfig,
+            &ReentryConfig {
+                bridge,
+                source,
+                target,
+                token_addr,
+            },
+        );
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get::<MTK, i128>(&MTK::Bal(id))
+            .unwrap_or(0)
+    }
+
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        from.require_auth();
+
+        if let Some(cfg) = env
+            .storage()
+            .instance()
+            .get::<MTK, ReentryConfig>(&MTK::ReentryConfig)
+        {
+            let bridge = OnboardingBridgeClient::new(&env, &cfg.bridge);
+            let memo = String::from_str(&env, "reentrant");
+            // This nested call must be rejected by the bridge's reentrancy guard.
+            bridge.fund_c_address(&cfg.source, &cfg.target, &cfg.token_addr, &amount, &memo);
+        }
+
+        let fb: i128 = env
+            .storage()
+            .persistent()
+            .get::<MTK, i128>(&MTK::Bal(from.clone()))
+            .unwrap_or(0);
+        assert!(fb >= amount, "insufficient balance");
+        let tb: i128 = env
+            .storage()
+            .persistent()
+            .get::<MTK, i128>(&MTK::Bal(to.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&MTK::Bal(from), &(fb - amount));
+        env.storage().persistent().set(&MTK::Bal(to), &(tb + amount));
+    }
+
+    pub fn decimals(_env: Env) -> u32 {
+        7
+    }
+
+    pub fn name(env: Env) -> String {
+        String::from_str(&env, "MaliciousToken")
+    }
+
+    pub fn symbol(env: Env) -> String {
+        String::from_str(&env, "EVIL")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
@@ -1488,7 +1589,7 @@ fn test_token_transfer_direct() {
 // ===========================================================================
 
 #[test]
-fn test_reentrancy_guard_on_fund_c_address() {
+fn test_fund_c_address_normal_path_unaffected_by_guard() {
     let (env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
     let source = Address::generate(&env);
     let target = Address::generate(&env);
@@ -1503,6 +1604,39 @@ fn test_reentrancy_guard_on_fund_c_address() {
         &String::from_str(&env, "normal"),
     );
     assert_eq!(fee, 10);
+}
+
+/// Genuinely exercises the reentrancy guard: a malicious token's transfer()
+/// callback attempts to reenter `fund_c_address` on the bridge mid-call.
+/// The guard set in `fund_c_address` before invoking `tk.transfer` must
+/// cause the nested call to panic with ERR_REENTRANT_CALL.
+#[test]
+#[should_panic(expected = "reentrant call detected")]
+fn test_reentrancy_guard_blocks_malicious_token_callback() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let bridge_id = env.register_contract(None, OnboardingBridge);
+    let bridge = OnboardingBridgeClient::new(&env, &bridge_id);
+    let admins = create_admins(&env, 1);
+    bridge.initialize(&admins, &1, &100, &1000, &1, &i128::MAX);
+
+    let evil_token = env.register_contract(None, MaliciousToken);
+    let evil_client = MaliciousTokenClient::new(&env, &evil_token);
+    evil_client.mint(&source, &2000);
+    // Arm the token to reenter fund_c_address during its own transfer callback.
+    evil_client.configure(&bridge_id, &source, &target, &evil_token);
+
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &evil_token,
+        &1000,
+        &String::from_str(&env, "attack"),
+    );
 }
 
 // ===========================================================================
