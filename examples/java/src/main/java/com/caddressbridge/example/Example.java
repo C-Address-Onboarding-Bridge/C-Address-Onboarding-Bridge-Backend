@@ -31,6 +31,10 @@ public final class Example {
                     "{\"walletAddress\":\"%s\",\"network\":\"stellar\",\"fiatCurrency\":\"USD\","
                             + "\"cryptoCurrency\":\"XLM\",\"fiatAmount\":100}",
                     MOCK_C_ADDRESS)));
+            System.out.println("CEX: " + client.routeCexWithdrawal(String.format(
+                    "{\"exchange\":\"coinbase\",\"sourceAsset\":\"XLM\",\"amount\":\"10000000\","
+                            + "\"targetCAddress\":\"%s\",\"targetNetwork\":\"stellar\"}",
+                    MOCK_C_ADDRESS)));
             System.out.println("All flows completed successfully.");
         } catch (BridgeException e) {
             System.err.printf("Bridge error (%d): %s%n", e.getStatusCode(), e.getMessage());

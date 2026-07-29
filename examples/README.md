@@ -10,6 +10,7 @@ Runnable integration examples for the C-Address Bridge API in **Python**, **Rust
 | Transaction status | `GET /api/v1/status/:hash` |
 | MoonPay URL | `POST /api/v1/offramp/moonpay` |
 | Transak URL | `POST /api/v1/offramp/transak` |
+| CEX withdrawal routing | `POST /api/v1/cex/route` |
 | Error handling | Typed errors per language |
 
 Examples run against a lightweight mock server by default — no live API or secrets required.

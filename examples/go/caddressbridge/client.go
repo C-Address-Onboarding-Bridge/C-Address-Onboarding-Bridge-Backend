@@ -129,3 +129,7 @@ func (c *BridgeClient) CreateMoonpayURL(body map[string]any) (map[string]any, er
 func (c *BridgeClient) CreateTransakURL(body map[string]any) (map[string]any, error) {
 	return c.request(http.MethodPost, "/api/v1/offramp/transak", nil, body)
 }
+
+func (c *BridgeClient) RouteCexWithdrawal(body map[string]any) (map[string]any, error) {
+	return c.request(http.MethodPost, "/api/v1/cex/route", nil, body)
+}
