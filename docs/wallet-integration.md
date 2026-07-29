@@ -189,10 +189,40 @@ After the user completes the purchase, the provider sends a webhook to the bridg
 
 ## Error Handling
 
-All `BridgeClient` methods throw a native `Error` on failure. The message comes from the API response body when available.
+All `BridgeClient` methods throw a typed `BridgeError` on failure. The SDK provides a
+hierarchy of error classes and type-guard helpers so you can handle errors precisely
+instead of relying on string matching.
+
+### Typed Error Hierarchy
+
+| Error Class | `type` | `statusCode` | Retryable | Use Case |
+|-------------|--------|--------------|-----------|----------|
+| `AuthError` | `'AuthError'` | 401 / 403 | No | Missing or invalid `X-API-Key` header |
+| `ValidationError` | `'ValidationError'` | 400 / 422 | No | Invalid query parameter, malformed address, or bad input |
+| `NotFoundError` | `'NotFoundError'` | 404 | No | Resource doesn't exist |
+| `RateLimitError` | `'RateLimitError'` | 429 | Yes | Too many requests (includes `retryAfterMs`) |
+| `ServerError` | `'ServerError'` | 500+ | Yes | Server-side failure |
+| `NetworkError` | `'NetworkError'` | — | Yes | Connectivity lost (no HTTP response) |
+| `TimeoutError` | `'TimeoutError'` | — | Yes | Request timed out (includes `timeoutMs` and `operation`) |
+| `OfflineError` | `'OfflineError'` | — | No | Client is offline (includes `queued` flag) |
+| `QueueFullError` | `'QueueFullError'` | — | No | Offline queue capacity exceeded |
+| `BridgeError` | `'BridgeError'` | varies | varies | Fallback base class |
+
+### Using Type Guards
+
+The SDK exports type-guard functions for every error class. Use them in `instanceof`-style
+checks or with `catch` blocks for precise handling:
 
 ```typescript
-import { BridgeClient } from '@c-address-bridge/sdk';
+import {
+  BridgeClient,
+  isAuthError,
+  isValidationError,
+  isRateLimitError,
+  isNetworkError,
+  isTimeoutError,
+  isBridgeError,
+} from '@c-address-bridge/sdk';
 
 const client = new BridgeClient({ baseUrl: '...', apiKey: '...' });
 
@@ -203,31 +233,42 @@ try {
     targetAddress: 'C...',
   });
 } catch (err) {
-  if (err instanceof Error) {
-    switch (true) {
-      case err.message === 'unauthorized':
-        // Prompt user to re-authenticate or contact support
-        break;
-      case err.message.startsWith('validation_error'):
-        // Show inline field error
-        break;
-      default:
-        // Generic fallback
-        console.error('Bridge error:', err.message);
+  if (isAuthError(err)) {
+    // 401 or 403 — prompt user to re-authenticate
+    console.error(`Auth error (${err.statusCode}):`, err.message);
+  } else if (isValidationError(err)) {
+    // 400 or 422 — show inline field error
+    console.error('Validation error:', err.message);
+    if (err.fields) {
+      for (const [field, msg] of Object.entries(err.fields)) {
+        console.error(`  ${field}: ${msg}`);
+      }
     }
+  } else if (isRateLimitError(err)) {
+    // 429 — wait and retry
+    const delay = err.retryAfterMs ?? 5000;
+    console.warn(`Rate limited, retrying in ${delay}ms`);
+    await new Promise(r => setTimeout(r, delay));
+    // re-execute request...
+  } else if (isTimeoutError(err)) {
+    // Request timed out — retry with backoff
+    console.warn(`Operation "${err.operation}" timed out after ${err.timeoutMs}ms`);
+  } else if (isNetworkError(err)) {
+    // Connection lost — wait for connectivity
+    console.warn('Network error:', err.message);
+  } else if (isBridgeError(err)) {
+    // Any BridgeError (generic fallback)
+    console.error('Bridge error:', err.message, `(retryable: ${err.retryable})`);
+  } else {
+    // Unexpected non-BridgeError (shouldn't happen)
+    console.error('Unexpected error:', err);
   }
 }
 ```
 
-Common error messages:
-
-| Message | Cause |
-|---------|-------|
-| `unauthorized` | Missing or invalid `X-API-Key` header |
-| `validation_error` | Invalid query parameter (bad address, missing field, etc.) |
-| `request failed: ...` | HTTP-level failure or network error |
-
-Requests time out after **30 seconds**. Implement retry logic with exponential backoff in your application as needed.
+Requests time out after **30 seconds**. Implement retry logic with exponential backoff
+in your application as needed. The `retryable` property on every `BridgeError` tells you
+whether a retry is safe.
 
 ---
 
