@@ -33,6 +33,11 @@ resource "aws_db_instance" "postgres" {
   username             = var.db_username
   password             = var.db_password
   skip_final_snapshot  = true
+
+  storage_encrypted       = true
+  backup_retention_period = 7
+  vpc_security_group_ids  = [var.db_security_group_id]
+  db_subnet_group_name    = var.db_subnet_group_name
 }
 
 # Redis ElastiCache

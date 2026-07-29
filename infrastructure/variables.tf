@@ -15,3 +15,13 @@ variable "db_password" {
   type        = string
   sensitive   = true
 }
+
+variable "db_security_group_id" {
+  description = "Security group ID for the RDS instance (must not use the default VPC security group)"
+  type        = string
+}
+
+variable "db_subnet_group_name" {
+  description = "DB subnet group name for the RDS instance"
+  type        = string
+}
