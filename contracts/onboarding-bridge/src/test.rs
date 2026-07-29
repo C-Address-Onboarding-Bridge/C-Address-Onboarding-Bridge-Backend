@@ -566,6 +566,19 @@ fn test_initialize_validates_admins_not_empty() {
 }
 
 #[test]
+#[should_panic(expected = "admin address cannot be the contract address")]
+fn test_initialize_rejects_admin_equal_to_contract_address() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let bridge_id = env.register_contract(None, OnboardingBridge);
+    let bridge = OnboardingBridgeClient::new(&env, &bridge_id);
+
+    let mut admins: Vec<Address> = Vec::new(&env);
+    admins.push_back(bridge_id.clone());
+    bridge.initialize(&admins, &1, &50, &1000, &1, &i128::MAX);
+}
+
+#[test]
 #[should_panic(expected = "amount must be positive")]
 fn test_fund_c_address_zero_amount() {
     let (env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
