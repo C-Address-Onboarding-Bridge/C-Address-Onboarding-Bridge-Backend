@@ -7,7 +7,8 @@ export type JobName =
   | 'cleanup'
   | 'async-audit-log'
   | 'async-analytics'
-  | 'async-metrics';
+  | 'async-metrics'
+  | 'webhook-retry';
 
 export interface CacheWarmupData {
   assets: string[];
@@ -49,13 +50,23 @@ export interface PipelineMetricsJobData {
   data: Record<string, unknown>;
 }
 
+export interface WebhookRetryData {
+  registrationId: string;
+  event: string;
+  payload: string;
+  signature: string;
+  data: unknown;
+  attemptNumber: number;
+}
+
 export type JobData =
   | CacheWarmupData
   | MetricsData
   | CleanupData
   | AuditLogJobData
   | AnalyticsJobData
-  | PipelineMetricsJobData;
+  | PipelineMetricsJobData
+  | WebhookRetryData;
 
 function parseRedisUrl(url: string): { host: string; port: number; password?: string; db?: number } {
   const parsed = new URL(url);
@@ -98,6 +109,7 @@ let _queues: {
   cleanup: Queue<CleanupData>;
   asyncCritical: Queue<AuditLogJobData>;
   asyncPipeline: Queue<AnalyticsJobData | PipelineMetricsJobData>;
+  webhookRetry: Queue<WebhookRetryData>;
   all: Queue[];
 } | null = null;
 
@@ -110,13 +122,23 @@ function getQueues() {
     const cleanup = new Queue<CleanupData>('cleanup', opts);
     const asyncCritical = new Queue<AuditLogJobData>('async-critical', criticalOpts);
     const asyncPipeline = new Queue<AnalyticsJobData | PipelineMetricsJobData>('async-pipeline', opts);
+    const webhookRetry = new Queue<WebhookRetryData>('webhook-retry', {
+      connection: parseRedisUrl(config.redis.url),
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: 'fixed', delay: 10_000 },
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 200 },
+      },
+    });
     _queues = {
       cacheWarmup,
       metrics,
       cleanup,
       asyncCritical,
       asyncPipeline,
-      all: [cacheWarmup, metrics, cleanup, asyncCritical, asyncPipeline],
+      webhookRetry,
+      all: [cacheWarmup, metrics, cleanup, asyncCritical, asyncPipeline, webhookRetry],
     };
   }
   return _queues;
@@ -150,6 +172,10 @@ export async function enqueueAnalytics(data: AnalyticsJobData): Promise<void> {
 
 export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Promise<void> {
   await getQueues().asyncPipeline.add('async-metrics', data);
+}
+
+export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void> {
+  await getQueues().webhookRetry.add('webhook-retry', data);
 }
 
 /** Returns the number of waiting (not yet picked up) jobs in a queue. */

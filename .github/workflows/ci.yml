@@ -100,6 +100,34 @@ jobs:
       - name: Verify strict consumer build
         run: npm run build:strict-consumer
 
+  hooks:
+    name: React Hooks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hooks
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js environment
+        uses: ./.github/actions/setup-node-env
+
+      - name: Build sdk workspace dependency
+        working-directory: .
+        run: npm run build --workspace sdk
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint --ext .ts,.tsx src/
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest

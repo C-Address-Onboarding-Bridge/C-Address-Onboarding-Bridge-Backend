@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { logger } from '../index';
 import { hashPayload, integrityAuditLog } from './auditLog';
 import { enqueueAudit } from './asyncPipeline';
+import { enqueueWebhookRetry } from '../jobs/queue';
 
 export interface WebhookRegistration {
   id: string;
@@ -181,10 +182,22 @@ export class WebhookDeliveryService {
         { registrationId: registration.id, event, nextAttemptIn: delay, attempt: attemptNumber + 1 },
         'scheduling webhook retry',
       );
-      setTimeout(
-        () => this.attemptDelivery(registration, event, data, payload, signature, attemptNumber + 1),
-        delay,
-      );
+      try {
+        await enqueueWebhookRetry({
+          registrationId: registration.id,
+          event,
+          payload,
+          signature,
+          data,
+          attemptNumber: attemptNumber + 1,
+        });
+      } catch (err) {
+        logger.error(
+          { registrationId: registration.id, event, error: err instanceof Error ? err.message : String(err) },
+          'failed to enqueue webhook retry',
+        );
+        this.moveToDLQ(registration, event, data);
+      }
     } else {
       this.moveToDLQ(registration, event, data);
     }

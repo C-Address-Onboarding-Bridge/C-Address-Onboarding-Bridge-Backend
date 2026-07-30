@@ -68,6 +68,7 @@ export class BridgeClient {
   private readonly cache: SimpleCache;
   private readonly telemetry: TelemetryClient;
   private readonly metrics = { totalRequests: 0 };
+  private readonly refreshing = new Set<string>();
   private readonly defaultTimeout: number;
   private readonly fundSubmissionTimeout: number;
   private baseUrl: string;
@@ -249,6 +250,32 @@ export class BridgeClient {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  /**
+   * Kicks off a background refresh for a stale cache entry without blocking
+   * the caller, which already has a stale value to return immediately.
+   * Deduplicates concurrent refreshes for the same key.
+   */
+  private triggerBackgroundRefresh<T>(
+    cacheKey: string,
+    ttlKind: "quote" | "status" | "health",
+    refresh: () => Promise<T>,
+  ): void {
+    if (this.refreshing.has(cacheKey)) return;
+    this.refreshing.add(cacheKey);
+
+    refresh()
+      .then((result) => {
+        this.cache.set(cacheKey, result, this.getTtl(ttlKind), this.shouldUseStaleWhileRevalidate());
+      })
+      .catch(() => {
+        // Swallow background refresh failures; the stale value was already
+        // returned to the caller, and the next request will retry.
+      })
+      .finally(() => {
+        this.refreshing.delete(cacheKey);
+      });
+  }
+
   async requestPaginated<T>(
     path: string,
     params?: PaginatedRequestParams,
@@ -275,6 +302,20 @@ export class BridgeClient {
 
     const cached = this.cache.get<Quote>(cacheKey);
     if (cached) {
+      if (cached.stale) {
+        this.triggerBackgroundRefresh(cacheKey, "quote", () =>
+          this.request<Quote>(
+            "GET",
+            "/api/v1/quote",
+            undefined,
+            {
+              sourceAsset: sourceAssetForApi,
+              amount: params.amount,
+              targetAddress: params.targetAddress,
+            },
+          ),
+        );
+      }
       return cached.value;
     }
 
@@ -384,6 +425,14 @@ export class BridgeClient {
     const cacheKey = `status:${txHash}`;
     const cached = this.cache.get<TransactionStatus>(cacheKey);
     if (cached) {
+      if (cached.stale) {
+        this.triggerBackgroundRefresh(cacheKey, "status", () =>
+          this.request<TransactionStatus>(
+            "GET",
+            `/api/v1/status/${encodeURIComponent(txHash)}`,
+          ),
+        );
+      }
       return cached.value;
     }
 
@@ -444,6 +493,11 @@ export class BridgeClient {
     const cacheKey = "health";
     const cached = this.cache.get<{ status: string }>(cacheKey);
     if (cached) {
+      if (cached.stale) {
+        this.triggerBackgroundRefresh(cacheKey, "health", () =>
+          this.request<{ status: string }>("GET", "/health"),
+        );
+      }
       return cached.value;
     }
 
