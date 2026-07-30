@@ -5,7 +5,8 @@
   "description": "Backend for the C-Address Onboarding Bridge protocol - route funds to Soroban smart accounts",
   "workspaces": [
     "api",
-    "sdk"
+    "sdk",
+    "hooks"
   ],
   "scripts": {
     "prepare": "husky",

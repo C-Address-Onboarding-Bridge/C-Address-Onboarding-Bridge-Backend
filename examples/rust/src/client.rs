@@ -60,10 +60,16 @@ impl BridgeClient {
         }
         let resp = req.send().await?;
         let status = resp.status().as_u16();
-        let value: Value = resp.json().await?;
+        let text = resp.text().await?;
         if (200..300).contains(&status) {
-            Ok(value)
+            Ok(serde_json::from_str(&text)?)
         } else {
+            // Non-2xx bodies aren't guaranteed to be JSON (proxies/gateways may
+            // return HTML or plain text) — fall back to the raw text as the
+            // error message instead of letting a parse failure mask the real
+            // HTTP status.
+            let value: Value =
+                serde_json::from_str(&text).unwrap_or_else(|_| json!({ "message": text }));
             Err(BridgeError::from_response(status, &value))
         }
     }
