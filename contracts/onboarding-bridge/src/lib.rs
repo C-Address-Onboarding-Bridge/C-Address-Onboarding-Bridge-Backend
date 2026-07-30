@@ -61,6 +61,10 @@ use soroban_sdk::{
 
 const TTL_THRESHOLD: u32 = 5000;
 const TTL_EXTEND: u32 = 50000;
+/// Maximum number of rebate tiers an admin may register. `rebate_bps` scans
+/// every tier on each funding call, so this bounds that cost regardless of
+/// how many `set_rebate_tier` calls have ever been made.
+const MAX_TIERS: u32 = 50;
 
 const ERR_INVALID_C_ADDRESS: &str = "invalid c-address: not a contract address";
 const ERR_REENTRANT_CALL: &str = "reentrant call detected";
@@ -68,6 +72,7 @@ const ERR_EMPTY_BATCH: &str = "batch inputs must not be empty";
 const ERR_MISMATCHED_LENGTHS: &str = "batch input vectors must have same length";
 const ERR_NO_ENTRIES_TO_ARCHIVE: &str = "no entries to archive";
 const ERR_ADMIN_CANNOT_BE_CONTRACT: &str = "admin address cannot be the contract address";
+const ERR_TIER_CAP_EXCEEDED: &str = "tier count exceeds maximum allowed";
 
 /// Storage keys used throughout the contract.
 ///
@@ -90,6 +95,7 @@ pub enum DataKey {
     ProposalNonce,
     Proposal(u32),
     ProposalApproval(u32, Address),
+    NextPruneId,
     ReentrancyGuard,
     Funding(u32),
     FundingCount,
@@ -129,6 +135,12 @@ pub enum ProposalAction {
     WithdrawFees(Address, Address, i128),
     Pause,
     Unpause,
+    /// Replaces the entire admin set. The current threshold must still be
+    /// satisfiable by the new admin count, or execution panics.
+    RotateAdmins(Vec<Address>),
+    /// Changes the multisig approval threshold. Must be > 0 and <= the
+    /// current admin count.
+    SetThreshold(u32),
 }
 
 #[contracttype]
@@ -293,6 +305,7 @@ impl OnboardingBridge {
         env.storage().instance().set(&DataKey::NextArchiveId, &0u32);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::ProposalNonce, &0u32);
+        env.storage().instance().set(&DataKey::NextPruneId, &1u32);
         env.storage()
             .instance()
             .set(&DataKey::MinAmount, &min_amount);
@@ -465,6 +478,7 @@ impl OnboardingBridge {
             .expect("not initialized");
         admins.get_unchecked(0).require_auth();
         assert!(discount_bps <= 5000, "discount capped at 50%");
+        assert!(tier_index < MAX_TIERS, "{}", ERR_TIER_CAP_EXCEEDED);
         env.storage()
             .instance()
             .set(&DataKey::TierThreshold(tier_index), &threshold);
@@ -987,6 +1001,45 @@ impl OnboardingBridge {
                 env.events().publish((Symbol::new(&env, "unpaused"),), ());
                 0i128
             }
+            ProposalAction::RotateAdmins(new_admins) => {
+                assert!(!new_admins.is_empty(), "admins must not be empty");
+                Self::validate_admins(&env, &new_admins);
+                let threshold: u32 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Threshold)
+                    .expect("not initialized");
+                assert!(
+                    threshold <= new_admins.len(),
+                    "threshold exceeds admin count"
+                );
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Admins, &new_admins);
+                env.events().publish(
+                    (Symbol::new(&env, "admins_rotated"),),
+                    (new_admins.clone(),),
+                );
+                0i128
+            }
+            ProposalAction::SetThreshold(new_threshold) => {
+                let admins: Vec<Address> = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Admins)
+                    .expect("not initialized");
+                assert!(new_threshold > 0, "threshold must be > 0");
+                assert!(
+                    new_threshold <= admins.len(),
+                    "threshold exceeds admin count"
+                );
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Threshold, &new_threshold);
+                env.events()
+                    .publish((Symbol::new(&env, "threshold_set"),), (new_threshold,));
+                0i128
+            }
         };
 
         env.events()
@@ -1024,6 +1077,87 @@ impl OnboardingBridge {
         }
 
         active
+    }
+
+    /// Removes executed or expired proposals — and their per-admin approval
+    /// flags — from instance storage.
+    ///
+    /// `propose`/`approve` write `DataKey::Proposal`/`DataKey::ProposalApproval`
+    /// into instance storage and previously nothing ever removed them, so the
+    /// contract's instance footprint grew forever with governance activity.
+    /// This sweeps forward from the last pruned id, scanning at most
+    /// `max_scan` proposals, stopping early if it reaches a proposal that is
+    /// still active (neither executed nor expired) so a later call can pick
+    /// up from there once it becomes terminal. Returns the number of
+    /// proposals actually pruned.
+    pub fn prune_proposals(env: Env, max_scan: u32) -> u32 {
+        let admins: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admins)
+            .expect("not initialized");
+        if !admins.is_empty() {
+            admins.get_unchecked(0).require_auth();
+        }
+        Self::extend_ttl(&env);
+
+        let nonce: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalNonce)
+            .unwrap_or(0);
+        let mut cursor: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextPruneId)
+            .unwrap_or(1);
+        let current_block = env.ledger().sequence();
+
+        let mut pruned: u32 = 0;
+        let mut scanned: u32 = 0;
+
+        while cursor <= nonce && scanned < max_scan {
+            match env
+                .storage()
+                .instance()
+                .get::<DataKey, Proposal>(&DataKey::Proposal(cursor))
+            {
+                Some(proposal) => {
+                    if proposal.executed || current_block > proposal.expiry {
+                        env.storage().instance().remove(&DataKey::Proposal(cursor));
+                        for i in 0..admins.len() {
+                            let approval_key =
+                                DataKey::ProposalApproval(cursor, admins.get_unchecked(i));
+                            env.storage().instance().remove(&approval_key);
+                        }
+                        // The proposer always has an approval flag from
+                        // `propose`, even if no longer an admin by the time
+                        // this runs — clear it explicitly so it can't linger.
+                        env.storage()
+                            .instance()
+                            .remove(&DataKey::ProposalApproval(cursor, proposal.proposer));
+                        pruned += 1;
+                        cursor += 1;
+                    } else {
+                        // Still active: stop advancing so a future call
+                        // resumes here instead of skipping it permanently.
+                        break;
+                    }
+                }
+                None => {
+                    // Already pruned in a previous call — keep advancing.
+                    cursor += 1;
+                }
+            }
+            scanned += 1;
+        }
+
+        env.storage().instance().set(&DataKey::NextPruneId, &cursor);
+
+        env.events()
+            .publish((Symbol::new(&env, "proposals_pruned"),), (pruned, cursor));
+
+        pruned
     }
 }
 
