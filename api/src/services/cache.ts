@@ -48,7 +48,7 @@ export function buildCacheKey(namespace: string, discriminator: string): string 
 let _client: Redis | null = null;
 
 function getClient(): Redis | null {
-  if (!config.redis.url) return null;
+  if (!config.redis.enabled || !config.redis.url) return null;
   if (_client) return _client;
 
   _client = new Redis(config.redis.url, {
@@ -385,7 +385,7 @@ export function getCacheMetrics(): CacheMetrics {
 }
 
 export function isRedisEnabled(): boolean {
-  return !!config.redis.url;
+  return config.redis.enabled;
 }
 
 /** Expose the internal Redis client for callers that need direct access (e.g. tests). */
