@@ -864,6 +864,29 @@ fn test_set_fee_accepts_below_max() {
     assert_eq!(bridge.fee_bps(), 100);
 }
 
+#[test]
+fn test_initialization_params_stays_consistent_after_fee_change() {
+    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 50, 1000);
+
+    // Right after init, both views must agree.
+    assert_eq!(bridge.fee_bps(), 50);
+    assert_eq!(bridge.initialization_params().fee_bps, 50);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::SetFee(300),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+
+    // After a governance-approved fee change, initialization_params() must
+    // no longer report the stale deploy-time fee_bps.
+    assert_eq!(bridge.fee_bps(), 300);
+    assert_eq!(bridge.initialization_params().fee_bps, 300);
+    assert_eq!(bridge.initialization_params().fee_bps, bridge.fee_bps());
+}
+
 // ===========================================================================
 // Task 4: Multisig Governance Tests
 // ===========================================================================

@@ -947,6 +947,17 @@ impl OnboardingBridge {
                     .expect("not initialized");
                 assert!(new_fee_bps <= max_fee, "fee exceeds max_fee_bps");
                 env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
+
+                let mut params: InitializationParams = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::InitializationParams)
+                    .expect("not initialized");
+                params.fee_bps = new_fee_bps;
+                env.storage()
+                    .instance()
+                    .set(&DataKey::InitializationParams, &params);
+
                 env.events()
                     .publish((Symbol::new(&env, "set_fee"),), (new_fee_bps,));
                 0i128
