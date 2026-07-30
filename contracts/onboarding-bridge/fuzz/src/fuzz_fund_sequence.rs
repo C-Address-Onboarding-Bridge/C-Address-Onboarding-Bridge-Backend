@@ -33,8 +33,20 @@ fn run_iteration(rng: &mut Lcg) {
     let bridge = OnboardingBridgeClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
+    let mut admins = soroban_sdk::Vec::new(&env);
+    admins.push_back(admin);
+
     let fee_bps = rng.next_u32_bounded(10000);
-    bridge.initialize(&admin, &fee_bps);
+    let max_fee_bps = fee_bps.saturating_add(rng.next_u32_bounded(10000 - fee_bps));
+
+    bridge.initialize(
+        &admins,
+        &1u32,  // threshold
+        &fee_bps,
+        &max_fee_bps,
+        &1i128,  // min_amount
+        &1_000_000_000i128,  // max_amount
+    );
 
     let source = Address::generate(&env);
     let target = Address::generate(&env);

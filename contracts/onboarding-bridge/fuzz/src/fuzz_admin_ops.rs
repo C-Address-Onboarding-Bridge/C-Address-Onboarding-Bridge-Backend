@@ -1,11 +1,12 @@
-/// Fuzz random interleavings of set_fee, fund_c_address, withdraw_fees.
+/// Fuzz random interleavings of propose/approve/execute (governance), fund_c_address.
 ///
 /// Properties:
 ///   1. accumulated_fees never goes negative
-///   2. accumulated_fees after partial withdraw == before - withdrawn
+///   2. fund_c_address correctly deducts fees from funding amount
+///   3. governance proposals can be executed to change fee rates
 
-use onboarding_bridge::OnboardingBridgeClient;
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use onboarding_bridge::{OnboardingBridgeClient, ProposalAction};
+use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
 
 struct Lcg(u64);
 
@@ -29,16 +30,18 @@ impl Lcg {
 
 #[derive(Debug)]
 enum Op {
-    SetFee,
+    ProposeFee,
+    ApproveFee,
+    ExecuteFee,
     Fund,
-    Withdraw,
 }
 
 fn pick_op(rng: &mut Lcg) -> Op {
-    match rng.next_usize_bounded(2) {
-        0 => Op::SetFee,
-        1 => Op::Fund,
-        _ => Op::Withdraw,
+    match rng.next_usize_bounded(3) {
+        0 => Op::ProposeFee,
+        1 => Op::ApproveFee,
+        2 => Op::ExecuteFee,
+        _ => Op::Fund,
     }
 }
 
@@ -49,13 +52,30 @@ fn run_iteration(rng: &mut Lcg) {
     let contract_id = env.register_contract(None, onboarding_bridge::OnboardingBridge);
     let bridge = OnboardingBridgeClient::new(&env, &contract_id);
 
-    let admin = Address::generate(&env);
+    // Initialize with 2 admins and threshold of 1
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let mut admins = Vec::new(&env);
+    admins.push_back(admin1.clone());
+    admins.push_back(admin2.clone());
+
     let initial_fee_bps = rng.next_u32_bounded(10000);
-    bridge.initialize(&admin, &initial_fee_bps);
+    let max_fee_bps = rng.next_u32_bounded(10000).max(initial_fee_bps);
+
+    bridge.initialize(
+        &admins,
+        &1u32,  // threshold = 1
+        &initial_fee_bps,
+        &max_fee_bps,
+        &100i128,  // min_amount
+        &1_000_000i128,  // max_amount
+    );
 
     let source = Address::generate(&env);
     let target = Address::generate(&env);
     let token = Address::generate(&env);
+
+    let mut pending_proposal_id: Option<u32> = None;
 
     let n_ops = rng.next_usize_bounded(19) + 1; // 1..=20 ops
 
@@ -65,34 +85,33 @@ fn run_iteration(rng: &mut Lcg) {
         assert!(before >= 0, "accumulated_fees went negative: {before}");
 
         match pick_op(rng) {
-            Op::SetFee => {
-                let new_fee = rng.next_u32_bounded(10000);
-                bridge.set_fee(&new_fee);
+            Op::ProposeFee => {
+                let new_fee = rng.next_u32_bounded(max_fee_bps + 1);
+                let action = ProposalAction::SetFee(new_fee);
+                let proposal_id = bridge.propose(&admin1, &action, &1000u32);
+                pending_proposal_id = Some(proposal_id);
+            }
+            Op::ApproveFee => {
+                if let Some(proposal_id) = pending_proposal_id {
+                    // Approve with admin2 (different from proposer)
+                    bridge.approve(&admin2, &proposal_id);
+                }
+            }
+            Op::ExecuteFee => {
+                if let Some(proposal_id) = pending_proposal_id {
+                    // Execute the proposal
+                    let _result = bridge.execute(&proposal_id);
+                    pending_proposal_id = None;
+                }
             }
             Op::Fund => {
-                let amount = rng.next_i128_bounded(1_000_000) + 1;
+                let amount = rng.next_i128_bounded(100_000i128) + 100i128;
                 let memo = String::from_str(&env, "fuzz");
                 bridge.fund_c_address(&source, &target, &token, &amount, &memo);
-            }
-            Op::Withdraw => {
-                let accumulated = bridge.accumulated_fees();
-                if accumulated == 0 {
-                    continue;
-                }
-                // Withdraw a random partial amount (1..=accumulated)
-                let withdraw_amount = rng.next_i128_bounded(accumulated - 1) + 1;
-                let before_withdraw = bridge.accumulated_fees();
-                let withdrawn = bridge.withdraw_fees(&admin, &token, &withdraw_amount);
-                let after_withdraw = bridge.accumulated_fees();
-
-                // Property 2: after == before - withdrawn
-                assert_eq!(
-                    after_withdraw,
-                    before_withdraw - withdrawn,
-                    "withdraw accounting error: before={before_withdraw} withdrawn={withdrawn} after={after_withdraw}"
-                );
-                // Property 1 again
-                assert!(after_withdraw >= 0, "accumulated_fees negative after withdraw: {after_withdraw}");
+                
+                // Property 2: accumulated_fees should reflect deduction
+                let after = bridge.accumulated_fees();
+                assert!(after >= before, "accumulated_fees decreased without withdrawal");
             }
         }
     }

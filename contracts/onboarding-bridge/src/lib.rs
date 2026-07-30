@@ -109,6 +109,9 @@ pub enum DataKey {
     TierCount,
     // #20: analytics counters
     TotalVolume,
+    /// Per-token volume tracking to handle multi-currency environments.
+    /// Only use this; TotalVolume is deprecated when multiple tokens are active.
+    TotalVolumeByToken(Address),
     UniqueFunder(Address),
     UniqueFunderCount,
 }
@@ -164,6 +167,11 @@ pub struct Proposal {
 }
 
 /// #20: Batch analytics view returned by `get_stats`.
+/// 
+/// **Warning**: When multiple token types are active, `total_volume` and `total_fees`
+/// become meaningless as they mix units from different tokens. Use
+/// `total_volume_for_token(token)` and `accumulated_fees_for_token(token)` instead
+/// for per-token metrics.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stats {
@@ -382,6 +390,15 @@ impl OnboardingBridge {
             .unwrap_or(0)
     }
 
+    /// Returns the total volume funded for a specific token.
+    /// Use this instead of accumulated_fees() when operating with multiple token types.
+    pub fn total_volume_for_token(env: Env, token_address: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalVolumeByToken(token_address))
+            .unwrap_or(0)
+    }
+
     pub fn max_fee_bps(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -415,6 +432,9 @@ impl OnboardingBridge {
     }
 
     /// Returns the total unclaimed fees accumulated in the contract (stroops).
+    /// 
+    /// **⚠️ Warning**: When multiple token types are active, this value is a mixed-unit sum
+    /// and becomes meaningless. Use `accumulated_fees_for_token(token)` for per-token metrics.
     pub fn accumulated_fees(env: Env) -> i128 {
         Self::extend_ttl(&env);
         env.storage()
@@ -624,6 +644,17 @@ impl OnboardingBridge {
         env.storage()
             .instance()
             .set(&DataKey::TotalVolume, &(total_vol + amount));
+
+        // Track per-token volume separately for meaningful multi-token analytics
+        let token_vol_key = DataKey::TotalVolumeByToken(token_address.clone());
+        let token_vol: i128 = env
+            .storage()
+            .instance()
+            .get(&token_vol_key)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&token_vol_key, &(token_vol + amount));
 
         let unique_key = DataKey::UniqueFunder(source.clone());
         if !env.storage().persistent().has(&unique_key) {

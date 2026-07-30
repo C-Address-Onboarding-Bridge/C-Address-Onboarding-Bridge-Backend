@@ -463,6 +463,30 @@ fn test_route_from_exchange_increments_stats() {
     assert_eq!(s.unique_funder_count, 1);
 }
 
+#[test]
+fn test_total_volume_for_token() {
+    let (env, bridge, token, _) = full_setup(100);
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let memo = String::from_str(&env, "t");
+    TestTokenClient::new(&env, &token).mint(&source, &10000);
+
+    // Initial volume should be 0
+    assert_eq!(bridge.total_volume_for_token(&token), 0);
+
+    // After first funding
+    bridge.fund_c_address(&source, &target, &token, &1000, &memo);
+    assert_eq!(bridge.total_volume_for_token(&token), 1000);
+
+    // After second funding
+    bridge.fund_c_address(&source, &target, &token, &2000, &memo);
+    assert_eq!(bridge.total_volume_for_token(&token), 3000);
+
+    // Should match the aggregated total_volume when only one token is used
+    let s = bridge.get_stats();
+    assert_eq!(s.total_volume, bridge.total_volume_for_token(&token));
+}
+
 // ---------------------------------------------------------------------------
 // #19: SAC-compatible token integration — cross-contract flows
 // ---------------------------------------------------------------------------
