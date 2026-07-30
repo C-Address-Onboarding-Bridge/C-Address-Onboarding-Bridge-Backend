@@ -23,3 +23,38 @@ logs/secrets-audit.jsonl
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Test output / snapshots
+__snapshots__/
+*.snap
+vitest-snapshots/
+
+# TypeScript build output
+*.tsbuildinfo
+*.js.map
+
+# Temporary / editor files
+*.swp
+*.swo
+*~
+.editorconfig.local
+
+# OS generated files
+ehthumbs.db
+Desktop.ini
+
+# Dependency lock files for example sub-projects (not the root workspace)
+examples/rust/Cargo.lock
+examples/java/*.jar
+examples/python/__pycache__/
+examples/python/*.pyc
+
+# Reports (auto-generated; keep .gitkeep stubs but not content)
+reports/*.md
+reports/*.json
+!reports/.gitkeep
+
+# Package manager caches
+.npm/
+.pnpm-store/
+.yarn/cache/
