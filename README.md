@@ -724,10 +724,22 @@ docker run -p 3001:3001 --env-file .env c-address-bridge-api
 
 ### Blue-Green Deployment
 
+`deploy.yml` runs blue/green deploys for staging and production automatically —
+see [scripts/blue-green-deploy.sh](scripts/blue-green-deploy.sh) and
+[scripts/deploy-api.sh](scripts/deploy-api.sh) (the latter ships the API Docker
+image to a single host over SSH; the former orchestrates it across both
+colors). To run it manually:
+
 ```bash
 export BLUE_URL=https://blue.example.com
 export GREEN_URL=https://green.example.com
-export DEPLOY_GREEN_COMMAND='bash ./scripts/deploy.sh --network testnet'
+export BLUE_DEPLOY_HOST=blue.internal.example.com
+export GREEN_DEPLOY_HOST=green.internal.example.com
+export DEPLOY_USER=deploy
+export DEPLOY_KEY="$(cat ~/.ssh/deploy_key)"
+export IMAGE_TAG=sha-abc1234
+export DEPLOY_BLUE_COMMAND='DEPLOY_HOST="$BLUE_DEPLOY_HOST" bash scripts/deploy-api.sh'
+export DEPLOY_GREEN_COMMAND='DEPLOY_HOST="$GREEN_DEPLOY_HOST" bash scripts/deploy-api.sh'
 export SWITCH_TRAFFIC_COMMAND='echo "switch traffic to {{color}}"'
 export POST_SWITCH_CHECK_COMMAND='bash ./scripts/smoke-test.sh'
 
@@ -735,6 +747,25 @@ npm run deploy:blue-green
 ```
 
 The blue-green flow deploys to the inactive environment, runs smoke tests, switches traffic, keeps the previous environment warm for rollback, drains old connections, and records the active color for the next release.
+
+In CI, `SWITCH_TRAFFIC_COMMAND` should point at your load balancer / DNS
+integration (set it as the `SWITCH_TRAFFIC_COMMAND` repository or environment
+variable); until it's configured, the workflow only records the active color
+and logs that no traffic switch was performed.
+
+#### Required GitHub secrets/variables for `deploy.yml` / `rollback.yml`
+
+| Name | Kind | Used by | Description |
+|------|------|---------|-------------|
+| `DEPLOY_HOST` | secret | dev | SSH host for the single-target dev deploy |
+| `DEPLOY_USER` | secret | dev, staging, production | SSH user for `scripts/deploy-api.sh` |
+| `DEPLOY_KEY` | secret | dev, staging, production | SSH private key (PEM content) |
+| `BLUE_DEPLOY_HOST` / `GREEN_DEPLOY_HOST` | secret | staging, production | SSH hosts for each blue/green color |
+| `DATABASE_URL` | secret | all | Used for `npm run migrate` |
+| `SMOKE_API_KEY` | secret | all | Optional — authenticated smoke test check |
+| `APP_URL` | variable | all | Public URL used for the GitHub Environment link and smoke tests |
+| `BLUE_APP_URL` / `GREEN_APP_URL` | variable | staging, production | Per-color URLs used for deploy + smoke tests before the traffic switch |
+| `SWITCH_TRAFFIC_COMMAND` | variable | production | Shell command that flips your load balancer / DNS to `{{color}}` |
 
 ---
 

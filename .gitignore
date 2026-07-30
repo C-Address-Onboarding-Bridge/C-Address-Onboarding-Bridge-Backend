@@ -23,6 +23,7 @@ __snapshots__/
 .vitest-cache/
 *.tsbuildinfo
 deployments/*.json
+deployments/blue-green-state.txt
 .secrets.local.json
 .secrets.local.enc
 logs/secrets-audit.jsonl
