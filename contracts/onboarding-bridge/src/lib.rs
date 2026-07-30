@@ -144,6 +144,7 @@ pub enum ProposalAction {
     /// Changes the multisig approval threshold. Must be > 0 and <= the
     /// current admin count.
     SetThreshold(u32),
+    SetRebateTier(u32, i128, u32),
 }
 
 #[contracttype]
@@ -488,37 +489,6 @@ impl OnboardingBridge {
                 .get(&DataKey::UniqueFunderCount)
                 .unwrap_or(0),
         }
-    }
-
-    pub fn set_rebate_tier(env: Env, tier_index: u32, threshold: i128, discount_bps: u32) {
-        let admins: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admins)
-            .expect("not initialized");
-        admins.get_unchecked(0).require_auth();
-        assert!(discount_bps <= 5000, "discount capped at 50%");
-        assert!(tier_index < MAX_TIERS, "{}", ERR_TIER_CAP_EXCEEDED);
-        env.storage()
-            .instance()
-            .set(&DataKey::TierThreshold(tier_index), &threshold);
-        env.storage()
-            .instance()
-            .set(&DataKey::TierDiscount(tier_index), &discount_bps);
-        let count: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TierCount)
-            .unwrap_or(0);
-        if tier_index >= count {
-            env.storage()
-                .instance()
-                .set(&DataKey::TierCount, &(tier_index + 1));
-        }
-        env.events().publish(
-            (Symbol::new(&env, "tier_set"),),
-            (tier_index, threshold, discount_bps),
-        );
     }
 
     pub fn fund_c_address(
@@ -1097,6 +1067,31 @@ impl OnboardingBridge {
                     .set(&DataKey::Threshold, &new_threshold);
                 env.events()
                     .publish((Symbol::new(&env, "threshold_set"),), (new_threshold,));
+                0i128
+            }
+            ProposalAction::SetRebateTier(tier_index, threshold, discount_bps) => {
+                assert!(discount_bps <= 5000, "discount capped at 50%");
+                assert!(tier_index < MAX_TIERS, "{}", ERR_TIER_CAP_EXCEEDED);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::TierThreshold(tier_index), &threshold);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::TierDiscount(tier_index), &discount_bps);
+                let count: u32 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::TierCount)
+                    .unwrap_or(0);
+                if tier_index >= count {
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::TierCount, &(tier_index + 1));
+                }
+                env.events().publish(
+                    (Symbol::new(&env, "tier_set"),),
+                    (tier_index, threshold, discount_bps),
+                );
                 0i128
             }
         };
