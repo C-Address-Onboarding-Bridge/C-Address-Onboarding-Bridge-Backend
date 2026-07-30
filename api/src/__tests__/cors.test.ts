@@ -33,11 +33,46 @@ describe('CORS origin allowlist', () => {
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
-  it('only advertises GET and POST methods in preflight', async () => {
+  it('allows GET, POST, DELETE, PATCH methods in preflight', async () => {
     const res = await request(app)
-      .options('/api/quote')
+      .options('/api/v1/keys/test-id')
       .set('Origin', 'https://app.example.com')
-      .set('Access-Control-Request-Method', 'GET');
-    expect(res.headers['access-control-allow-methods']).toBe('GET,POST');
+      .set('Access-Control-Request-Method', 'DELETE');
+    expect(res.headers['access-control-allow-methods']).toBe('GET,POST,DELETE,PATCH');
+  });
+
+  it('allows DELETE method for API key revocation (CORS preflight)', async () => {
+    const res = await request(app)
+      .options('/api/v1/keys/test-id')
+      .set('Origin', 'https://app.example.com')
+      .set('Access-Control-Request-Method', 'DELETE');
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-methods']).toContain('DELETE');
+  });
+
+  it('allows PATCH method for API key updates (CORS preflight)', async () => {
+    const res = await request(app)
+      .options('/api/v1/keys/test-id')
+      .set('Origin', 'https://app.example.com')
+      .set('Access-Control-Request-Method', 'PATCH');
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-methods']).toContain('PATCH');
+  });
+
+  it('allows DELETE method for webhook management (CORS preflight)', async () => {
+    const res = await request(app)
+      .options('/api/v1/webhooks/registrations/test-id')
+      .set('Origin', 'https://admin.example.com')
+      .set('Access-Control-Request-Method', 'DELETE');
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-methods']).toContain('DELETE');
+  });
+
+  it('does not allow preflight from an unconfigured origin', async () => {
+    const res = await request(app)
+      .options('/api/v1/keys/test-id')
+      .set('Origin', 'https://attacker.example.com')
+      .set('Access-Control-Request-Method', 'DELETE');
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 });

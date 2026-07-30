@@ -61,6 +61,15 @@ use soroban_sdk::{
 
 const TTL_THRESHOLD: u32 = 5000;
 const TTL_EXTEND: u32 = 50000;
+/// Minimum ledgers that must elapse between `propose` and `execute` for
+/// sensitive actions (WithdrawFees, SetFee, Pause). Prevents a single admin
+/// with threshold == 1 from proposing and immediately executing with no
+/// transparency window.
+const MIN_EXEC_DELAY: u32 = 10;
+/// Maximum amount that can be passed to fund_c_address. Ensures the fee
+/// multiplication `amount * effective_fee_bps` never overflows i128.
+/// i128::MAX / 10_000 ≈ 1.7 × 10^34, far above any realistic token amount.
+const MAX_SAFE_AMOUNT: i128 = i128::MAX / 10_000;
 /// Maximum number of rebate tiers an admin may register. `rebate_bps` scans
 /// every tier on each funding call, so this bounds that cost regardless of
 /// how many `set_rebate_tier` calls have ever been made.
@@ -146,6 +155,7 @@ pub enum ProposalAction {
     SetThreshold(u32),
     /// Archives old funding entries up to the specified count.
     ArchiveOldEntries(u32),
+    SetRebateTier(u32, i128, u32),
 }
 
 #[contracttype]
@@ -166,6 +176,9 @@ pub struct Proposal {
     pub approval_count: u32,
     pub executed: bool,
     pub expiry: u32,
+    /// Ledger sequence at which the proposal was created. Used to enforce
+    /// the minimum execution delay for sensitive actions.
+    pub proposed_at: u32,
 }
 
 /// #20: Batch analytics view returned by `get_stats`.
@@ -492,37 +505,6 @@ impl OnboardingBridge {
         }
     }
 
-    pub fn set_rebate_tier(env: Env, tier_index: u32, threshold: i128, discount_bps: u32) {
-        let admins: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admins)
-            .expect("not initialized");
-        admins.get_unchecked(0).require_auth();
-        assert!(discount_bps <= 5000, "discount capped at 50%");
-        assert!(tier_index < MAX_TIERS, "{}", ERR_TIER_CAP_EXCEEDED);
-        env.storage()
-            .instance()
-            .set(&DataKey::TierThreshold(tier_index), &threshold);
-        env.storage()
-            .instance()
-            .set(&DataKey::TierDiscount(tier_index), &discount_bps);
-        let count: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TierCount)
-            .unwrap_or(0);
-        if tier_index >= count {
-            env.storage()
-                .instance()
-                .set(&DataKey::TierCount, &(tier_index + 1));
-        }
-        env.events().publish(
-            (Symbol::new(&env, "tier_set"),),
-            (tier_index, threshold, discount_bps),
-        );
-    }
-
     pub fn fund_c_address(
         env: Env,
         source: Address,
@@ -570,6 +552,8 @@ impl OnboardingBridge {
             .unwrap_or(i128::MAX);
         assert!(amount >= min_amt, "amount below minimum");
         assert!(amount <= max_amt, "amount above maximum");
+        // Guard: amount must not overflow the fee multiplication.
+        assert!(amount <= MAX_SAFE_AMOUNT, "amount too large: would overflow fee calculation");
 
         let fee_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         let discount = rebate_bps(env, source);
@@ -891,6 +875,7 @@ impl OnboardingBridge {
             approval_count: 1,
             executed: false,
             expiry: current_block + expiry_blocks,
+            proposed_at: current_block,
         };
 
         env.storage()
@@ -970,6 +955,23 @@ impl OnboardingBridge {
             proposal.approval_count >= threshold,
             "insufficient approvals"
         );
+
+        // Enforce a minimum transparency window for sensitive actions.
+        // Prevents a single admin (threshold == 1) from proposing and
+        // immediately executing WithdrawFees, SetFee, or Pause in the same
+        // ledger with no observation window.
+        let sensitive = matches!(
+            proposal.action,
+            ProposalAction::WithdrawFees(_, _, _)
+                | ProposalAction::SetFee(_)
+                | ProposalAction::Pause
+        );
+        if sensitive {
+            assert!(
+                env.ledger().sequence() >= proposal.proposed_at + MIN_EXEC_DELAY,
+                "execution too soon: minimum delay not elapsed"
+            );
+        }
 
         let mut executed_proposal = proposal.clone();
         executed_proposal.executed = true;
@@ -1095,6 +1097,29 @@ impl OnboardingBridge {
             }
             ProposalAction::ArchiveOldEntries(count) => {
                 Self::archive_old_entries_internal(&env, count);
+            ProposalAction::SetRebateTier(tier_index, threshold, discount_bps) => {
+                assert!(discount_bps <= 5000, "discount capped at 50%");
+                assert!(tier_index < MAX_TIERS, "{}", ERR_TIER_CAP_EXCEEDED);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::TierThreshold(tier_index), &threshold);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::TierDiscount(tier_index), &discount_bps);
+                let count: u32 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::TierCount)
+                    .unwrap_or(0);
+                if tier_index >= count {
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::TierCount, &(tier_index + 1));
+                }
+                env.events().publish(
+                    (Symbol::new(&env, "tier_set"),),
+                    (tier_index, threshold, discount_bps),
+                );
                 0i128
             }
         };

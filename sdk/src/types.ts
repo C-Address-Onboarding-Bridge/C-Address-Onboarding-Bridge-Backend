@@ -227,6 +227,12 @@ export interface QueueEntry {
   path: string;
   body?: Record<string, unknown>;
   params?: Record<string, string | undefined>;
+  /**
+   * Idempotency key for non-idempotent POST operations.
+   * Generated once at enqueue time and reused on every replay so the server
+   * can deduplicate duplicate submissions caused by network failures.
+   */
+  idempotencyKey?: string;
 }
 
 export interface OfflineQueueOptions {

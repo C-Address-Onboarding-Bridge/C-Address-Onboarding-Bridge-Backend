@@ -127,12 +127,26 @@ export class BridgeClient {
     };
   }
 
+  /**
+   * Set of paths that are non-idempotent — a retry of these endpoints without
+   * an idempotency key can cause duplicate side-effects (e.g. double withdrawal).
+   * When one of these paths is retried we attach a stable `Idempotency-Key`
+   * header generated once before the first attempt.
+   */
+  private static readonly NON_IDEMPOTENT_POST_PATHS: ReadonlySet<string> = new Set([
+    '/api/v1/offramp/moonpay',
+    '/api/v1/offramp/transak',
+    '/api/v1/cex/route',
+    '/api/v1/fund',
+  ]);
+
   protected async request<T>(
     method: HttpMethod,
     path: string,
     body?: Record<string, unknown>,
     params?: RequestParams,
     options?: RequestOptions,
+    idempotencyKey?: string,
   ): Promise<T> {
     const timeoutMs = options?.timeout ?? this.defaultTimeout;
     this.metrics.totalRequests++;
@@ -149,11 +163,25 @@ export class BridgeClient {
     const bodyStr = body ? JSON.stringify(body) : "";
     const signingHeaders = await this.buildSigningHeaders(bodyStr);
 
+    // For non-idempotent POST endpoints generate a stable key once per logical
+    // request so that every retry carries the same key and the server can
+    // deduplicate duplicate submissions.
+    const isNonIdempotentPost =
+      method === "POST" &&
+      BridgeClient.NON_IDEMPOTENT_POST_PATHS.has(path);
+
+    const resolvedIdempotencyKey =
+      idempotencyKey ??
+      (isNonIdempotentPost ? this.generateIdempotencyKey() : undefined);
+
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...signingHeaders,
     };
     if (this.apiKey) headers["X-API-Key"] = this.apiKey;
+    if (resolvedIdempotencyKey) {
+      headers["Idempotency-Key"] = resolvedIdempotencyKey;
+    }
 
     let attempt = 0;
     const startedAt = Date.now();

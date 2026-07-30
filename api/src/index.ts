@@ -25,7 +25,7 @@ import { compressionMiddleware } from './middleware/compression';
 import { errorHandler } from './middleware/error';
 import { CircuitBreaker } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
-import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware } from './middleware/rateLimit';
+import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
 import { setFeeRateBps } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
@@ -65,7 +65,7 @@ app.use(helmet());
 app.use(
   cors({
     origin: config.corsOrigins.length > 0 ? config.corsOrigins : '*',
-    methods: ['GET', 'POST'],
+    methods: ['GET', 'POST', 'DELETE', 'PATCH'],
   })
 );
 
@@ -155,7 +155,7 @@ app.get('/api/v1/deprecations', (_req, res) => {
 app.use('/api', docsRouter);
 
 app.use('/api/v1/quote', rbacAuth, quoteRouter);
-app.use('/api', telemetryRouter);
+app.use('/api/telemetry', telemetryRateLimit, telemetryRouter);
 app.use('/api/v2/quote', rbacAuth, quoteRouter);
 app.use('/api/v1/fund', rbacAuth, fundingRouter);
 app.use('/api/v2/fund', rbacAuth, fundingRouter);

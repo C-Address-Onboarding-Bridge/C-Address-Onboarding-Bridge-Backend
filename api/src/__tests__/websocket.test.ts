@@ -42,9 +42,23 @@ vi.mock('../middleware/rbacAuth', () => ({
   }),
 }));
 
+vi.mock('../services/cache', () => ({
+  buildCacheKey: vi.fn((namespace, discriminator) => `${namespace}:${discriminator}`),
+  CACHE_TTL: {
+    quote: 60,
+    status: 30,
+    cex: 60,
+    transactions: 60,
+  },
+  getOrCompute: vi.fn(async (_key, _ttl, compute) => {
+    return compute();
+  }),
+}));
+
 import { createWebSocketServer, handleUpgrade } from '../services/websocket';
 import { sorobanService } from '../services/soroban';
 import { explorerService } from '../services/explorer';
+import { getOrCompute } from '../services/cache';
 import { IncomingMessage } from 'http';
 
 // Helper to wait for message
@@ -666,10 +680,50 @@ describe('WebSocket Service', () => {
       wss = createWebSocketServer();
       vi.mocked(sorobanService.getTransactionStatus).mockClear();
       vi.mocked(explorerService.txUrl).mockClear();
+      vi.mocked(getOrCompute).mockClear();
     });
 
     afterEach(() => {
       wss.close();
+    });
+
+    it('uses shared cache for status polling to prevent N clients × N RPC polls', async () => {
+      // This test verifies the fix: WebSocket polling now uses getOrCompute (shared cache)
+      // instead of calling sorobanService directly
+      const mockWs = new EventEmitter() as any;
+      mockWs.readyState = WebSocket.OPEN;
+      const messages: any[] = [];
+      mockWs.send = vi.fn((data) => {
+        messages.push(JSON.parse(data));
+      });
+
+      vi.mocked(sorobanService.getTransactionStatus).mockResolvedValue({
+        status: 'pending',
+        hash: 'a'.repeat(64),
+      });
+
+      // Mock getOrCompute to track calls and use the soroban service
+      vi.mocked(getOrCompute).mockImplementation(async (_key, _ttl, compute) => {
+        return compute();
+      });
+
+      wss.emit('connection', mockWs);
+
+      const txHash = 'a'.repeat(64);
+      mockWs.emit('message', JSON.stringify({
+        action: 'subscribe',
+        txHash,
+      }));
+
+      // Wait a bit for the initial poll to happen
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      // Verify getOrCompute was called (the shared cache function)
+      expect(vi.mocked(getOrCompute)).toHaveBeenCalled();
+
+      // Verify the cache key was built correctly
+      const cacheCallArgs = vi.mocked(getOrCompute).mock.calls[0];
+      expect(cacheCallArgs[0]).toContain(txHash);
     });
 
     it('polls for status changes', async () => {
