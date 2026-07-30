@@ -135,6 +135,12 @@ pub enum ProposalAction {
     WithdrawFees(Address, Address, i128),
     Pause,
     Unpause,
+    /// Replaces the entire admin set. The current threshold must still be
+    /// satisfiable by the new admin count, or execution panics.
+    RotateAdmins(Vec<Address>),
+    /// Changes the multisig approval threshold. Must be > 0 and <= the
+    /// current admin count.
+    SetThreshold(u32),
 }
 
 #[contracttype]
@@ -993,6 +999,45 @@ impl OnboardingBridge {
             ProposalAction::Unpause => {
                 env.storage().instance().set(&DataKey::Paused, &false);
                 env.events().publish((Symbol::new(&env, "unpaused"),), ());
+                0i128
+            }
+            ProposalAction::RotateAdmins(new_admins) => {
+                assert!(!new_admins.is_empty(), "admins must not be empty");
+                Self::validate_admins(&env, &new_admins);
+                let threshold: u32 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Threshold)
+                    .expect("not initialized");
+                assert!(
+                    threshold <= new_admins.len(),
+                    "threshold exceeds admin count"
+                );
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Admins, &new_admins);
+                env.events().publish(
+                    (Symbol::new(&env, "admins_rotated"),),
+                    (new_admins.clone(),),
+                );
+                0i128
+            }
+            ProposalAction::SetThreshold(new_threshold) => {
+                let admins: Vec<Address> = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Admins)
+                    .expect("not initialized");
+                assert!(new_threshold > 0, "threshold must be > 0");
+                assert!(
+                    new_threshold <= admins.len(),
+                    "threshold exceeds admin count"
+                );
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Threshold, &new_threshold);
+                env.events()
+                    .publish((Symbol::new(&env, "threshold_set"),), (new_threshold,));
                 0i128
             }
         };

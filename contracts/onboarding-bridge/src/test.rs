@@ -1206,6 +1206,198 @@ fn test_proposal_withdraw_excessive_fees_rejected() {
 }
 
 // ===========================================================================
+// Governed admin rotation / threshold change tests
+// ===========================================================================
+
+#[test]
+fn test_rotate_admins_happy_path() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let new_admin = Address::generate(&env);
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(admins.get_unchecked(0));
+    new_admins.push_back(new_admin.clone());
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins.clone()),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+
+    let stored = bridge.get_admins();
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored.get_unchecked(0), admins.get_unchecked(0));
+    assert_eq!(stored.get_unchecked(1), new_admin);
+
+    // The removed admin can no longer propose/approve.
+    assert!(!bridge.is_paused());
+}
+
+#[test]
+#[should_panic(expected = "only admins can propose")]
+fn test_rotate_admins_removes_old_admin_privileges() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let removed_admin = admins.get_unchecked(1);
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(admins.get_unchecked(0));
+    new_admins.push_back(Address::generate(&env));
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins),
+        &1000,
+    );
+    bridge.approve(&removed_admin, &pid);
+    bridge.execute(&pid);
+
+    // removed_admin is no longer in the admin set — must be rejected.
+    bridge.propose(&removed_admin, &ProposalAction::SetFee(1), &1000);
+}
+
+#[test]
+fn test_rotate_admins_new_admin_can_govern() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let new_admin = Address::generate(&env);
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(admins.get_unchecked(0));
+    new_admins.push_back(new_admin.clone());
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+
+    // The newly added admin can now propose/approve/execute.
+    let pid2 = bridge.propose(&new_admin, &ProposalAction::SetFee(250), &1000);
+    bridge.approve(&admins.get_unchecked(0), &pid2);
+    bridge.execute(&pid2);
+    assert_eq!(bridge.fee_bps(), 250);
+}
+
+#[test]
+#[should_panic(expected = "threshold exceeds admin count")]
+fn test_rotate_admins_rejects_below_current_threshold() {
+    let (env, bridge, admins) = setup_env_with_admins(3, 3, 100, 1000);
+    // Threshold is 3, but the new admin set only has 2 members.
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(admins.get_unchecked(0));
+    new_admins.push_back(admins.get_unchecked(1));
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.approve(&admins.get_unchecked(2), &pid);
+    bridge.execute(&pid);
+}
+
+#[test]
+#[should_panic(expected = "admins must not be empty")]
+fn test_rotate_admins_rejects_empty() {
+    let (env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
+    let empty: Vec<Address> = Vec::new(&env);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(empty),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+#[should_panic(expected = "admin address cannot be the contract address")]
+fn test_rotate_admins_rejects_contract_address_as_admin() {
+    let (env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
+    let bridge_address = bridge.address.clone();
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(bridge_address);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+fn test_set_threshold_happy_path() {
+    let (_env, bridge, admins) = setup_env_with_admins(3, 2, 100, 1000);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::SetThreshold(3),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+
+    assert_eq!(bridge.get_threshold(), 3);
+}
+
+#[test]
+#[should_panic(expected = "threshold must be > 0")]
+fn test_set_threshold_rejects_zero() {
+    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::SetThreshold(0),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+}
+
+#[test]
+#[should_panic(expected = "threshold exceeds admin count")]
+fn test_set_threshold_rejects_above_admin_count() {
+    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::SetThreshold(3),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+}
+
+/// Edge case: lowering the threshold below an already-accrued approval count
+/// on a separate, still-pending proposal must not corrupt state — that
+/// proposal simply becomes immediately executable under the new threshold.
+#[test]
+fn test_set_threshold_below_active_proposal_approval_count() {
+    let (_env, bridge, admins) = setup_env_with_admins(3, 3, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+
+    // fee-change proposal accrues 2 approvals under the original threshold of 3.
+    let fee_pid = bridge.propose(&proposer, &ProposalAction::SetFee(400), &1000);
+    bridge.approve(&admins.get_unchecked(1), &fee_pid);
+    assert_eq!(bridge.get_proposal(&fee_pid).approval_count, 2);
+
+    // Separately, lower the threshold to 2 (itself reaching the 3-approval
+    // threshold first).
+    let threshold_pid = bridge.propose(&proposer, &ProposalAction::SetThreshold(2), &1000);
+    bridge.approve(&admins.get_unchecked(1), &threshold_pid);
+    bridge.approve(&admins.get_unchecked(2), &threshold_pid);
+    bridge.execute(&threshold_pid);
+    assert_eq!(bridge.get_threshold(), 2);
+
+    // fee_pid already had 2 approvals, which now meets the new threshold —
+    // it must be executable without requiring a fresh approval.
+    bridge.execute(&fee_pid);
+    assert_eq!(bridge.fee_bps(), 400);
+}
+
+// ===========================================================================
 // Original behavior tests (adapted for multisig)
 // ===========================================================================
 
