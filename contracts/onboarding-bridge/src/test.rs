@@ -1696,6 +1696,56 @@ fn test_set_rebate_tier_rejects_discount_above_cap() {
     bridge.set_rebate_tier(&0, &1000i128, &5001); // > 5000 bps (50%)
 }
 
+// ===========================================================================
+// Rebate tier count cap tests
+// ===========================================================================
+
+#[test]
+fn test_set_rebate_tier_accepts_up_to_cap() {
+    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    // MAX_TIERS is 50, so indices 0..=49 must all be accepted.
+    for i in 0..50u32 {
+        bridge.set_rebate_tier(&i, &(i as i128 * 100), &10);
+    }
+}
+
+#[test]
+#[should_panic(expected = "tier count exceeds maximum allowed")]
+fn test_set_rebate_tier_rejects_beyond_cap() {
+    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    bridge.set_rebate_tier(&50, &1000i128, &10); // index 50 is the 51st tier, beyond MAX_TIERS
+}
+
+#[test]
+#[should_panic(expected = "tier count exceeds maximum allowed")]
+fn test_set_rebate_tier_rejects_far_beyond_cap() {
+    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    bridge.set_rebate_tier(&10_000, &1000i128, &10);
+}
+
+#[test]
+fn test_set_rebate_tier_update_within_cap_still_allowed() {
+    let (env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    bridge.set_rebate_tier(&0, &1000i128, &100);
+    // Re-registering an existing (in-range) tier index must not be blocked
+    // by the cap check even after many updates.
+    for _ in 0..5 {
+        bridge.set_rebate_tier(&0, &1000i128, &200);
+    }
+    let user = Address::generate(&env);
+    let target = Address::generate(&env);
+    let token_addr = register_test_token(&env);
+    TestTokenClient::new(&env, &token_addr).mint(&user, &5000);
+    bridge.fund_c_address(
+        &user,
+        &target,
+        &token_addr,
+        &2000,
+        &String::from_str(&env, "tier"),
+    );
+    assert_eq!(bridge.rebate_for(&user), 200);
+}
+
 #[test]
 fn test_user_volume_tracks_funding() {
     let (env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);

@@ -61,6 +61,10 @@ use soroban_sdk::{
 
 const TTL_THRESHOLD: u32 = 5000;
 const TTL_EXTEND: u32 = 50000;
+/// Maximum number of rebate tiers an admin may register. `rebate_bps` scans
+/// every tier on each funding call, so this bounds that cost regardless of
+/// how many `set_rebate_tier` calls have ever been made.
+const MAX_TIERS: u32 = 50;
 
 const ERR_INVALID_C_ADDRESS: &str = "invalid c-address: not a contract address";
 const ERR_REENTRANT_CALL: &str = "reentrant call detected";
@@ -68,6 +72,7 @@ const ERR_EMPTY_BATCH: &str = "batch inputs must not be empty";
 const ERR_MISMATCHED_LENGTHS: &str = "batch input vectors must have same length";
 const ERR_NO_ENTRIES_TO_ARCHIVE: &str = "no entries to archive";
 const ERR_ADMIN_CANNOT_BE_CONTRACT: &str = "admin address cannot be the contract address";
+const ERR_TIER_CAP_EXCEEDED: &str = "tier count exceeds maximum allowed";
 
 /// Storage keys used throughout the contract.
 ///
@@ -465,6 +470,7 @@ impl OnboardingBridge {
             .expect("not initialized");
         admins.get_unchecked(0).require_auth();
         assert!(discount_bps <= 5000, "discount capped at 50%");
+        assert!(tier_index < MAX_TIERS, "{}", ERR_TIER_CAP_EXCEEDED);
         env.storage()
             .instance()
             .set(&DataKey::TierThreshold(tier_index), &threshold);
