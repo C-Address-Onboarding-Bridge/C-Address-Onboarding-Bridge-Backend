@@ -5,6 +5,19 @@ import type { SupportedLocale } from './i18n/types';
 
 const QUEUE_STORAGE_KEY = 'bridge_sdk_offline_queue';
 
+/**
+ * Non-idempotent POST paths: replaying these without a stable idempotency key
+ * risks duplicate side-effects (e.g. double CEX withdrawal). We still allow
+ * them to be queued, but we always attach the idempotency key that was
+ * generated at enqueue time so the server can deduplicate.
+ */
+const NON_IDEMPOTENT_POST_PATHS: ReadonlySet<string> = new Set([
+  '/api/v1/offramp/moonpay',
+  '/api/v1/offramp/transak',
+  '/api/v1/cex/route',
+  '/api/v1/fund',
+]);
+
 type DrainHandler = (count: number, at: string) => void;
 
 export class OfflineQueue {
@@ -19,6 +32,13 @@ export class OfflineQueue {
   private readonly drainHandlers: DrainHandler[] = [];
   private readonly deadLetters: QueueEntry[] = [];
 
+  /**
+   * Promise that resolves once the initial storage load is complete.
+   * enqueue() awaits this so that a concurrent storage load cannot overwrite
+   * entries that were enqueued before the load finished (#261).
+   */
+  private readonly storageReady: Promise<void>;
+
   constructor(
     private readonly executeEntry: (entry: QueueEntry) => Promise<unknown>,
     private readonly checkHealth: () => Promise<boolean>,
@@ -31,7 +51,8 @@ export class OfflineQueue {
     this.locale = options?.locale;
     const intervalMs = options?.healthCheckIntervalMs ?? 5_000;
 
-    void this.loadFromStorage();
+    // #261 fix: capture the load promise so enqueue() can await it.
+    this.storageReady = this.loadFromStorage();
 
     this.healthTimer = setInterval(async () => {
       try {
@@ -49,11 +70,30 @@ export class OfflineQueue {
   }
 
   async enqueue(entry: Omit<QueueEntry, 'id' | 'timestamp' | 'retryCount'>): Promise<string> {
+    // #261 fix: wait for the initial storage load before modifying the queue
+    // so the load cannot overwrite entries added before it completes.
+    await this.storageReady;
+
     if (this.queue.length >= this.maxSize) {
       throw new QueueFullError(this.maxSize, { locale: this.locale });
     }
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const item: QueueEntry = { ...entry, id, timestamp: new Date().toISOString(), retryCount: 0 };
+
+    // #262 fix: generate a stable idempotency key once at enqueue time for
+    // non-idempotent POST operations. The same key is sent on every replay so
+    // the server can deduplicate submissions caused by connection failures.
+    const idempotencyKey =
+      entry.method === 'POST' && NON_IDEMPOTENT_POST_PATHS.has(entry.path)
+        ? entry.idempotencyKey ?? generateIdempotencyKey()
+        : entry.idempotencyKey;
+
+    const item: QueueEntry = {
+      ...entry,
+      id,
+      timestamp: new Date().toISOString(),
+      retryCount: 0,
+      idempotencyKey,
+    };
     this.queue.push(item);
     await this.persistToStorage();
     return id;
@@ -134,7 +174,19 @@ export class OfflineQueue {
     if (!this.storage) return;
     try {
       const raw = await this.storage.get(QUEUE_STORAGE_KEY);
-      if (raw) this.queue = JSON.parse(raw) as QueueEntry[];
+      if (raw) {
+        const loaded = JSON.parse(raw) as QueueEntry[];
+        // #261 fix: merge loaded entries with any already-enqueued in-memory
+        // entries instead of replacing them outright. This prevents the async
+        // load from silently discarding items that were enqueued before it
+        // resolved. We deduplicate by id so re-loading the same entries is safe.
+        const existingIds = new Set(this.queue.map((e) => e.id));
+        for (const entry of loaded) {
+          if (!existingIds.has(entry.id)) {
+            this.queue.push(entry);
+          }
+        }
+      }
     } catch {}
   }
 
@@ -144,6 +196,16 @@ export class OfflineQueue {
       await this.storage.set(QUEUE_STORAGE_KEY, JSON.stringify(this.queue));
     } catch {}
   }
+}
+
+// ─── Idempotency key generator (module-level, shared with OfflineBridgeClient) ─
+
+function generateIdempotencyKey(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 export class OfflineBridgeClient extends BridgeClient {
@@ -178,9 +240,10 @@ export class OfflineBridgeClient extends BridgeClient {
     body?: Record<string, unknown>,
     params?: Record<string, string | undefined>,
     options?: RequestOptions,
+    idempotencyKey?: string,
   ): Promise<T> {
     try {
-      return await super.request<T>(method, path, body, params, options);
+      return await super.request<T>(method, path, body, params, options, idempotencyKey);
     } catch (err) {
       if (this.autoQueue && this.isNetworkError(err)) {
         await this.offlineQueue.enqueue({ method, path, body, params });
@@ -225,6 +288,8 @@ export class OfflineBridgeClient extends BridgeClient {
   }
 
   private async executeQueueEntry(entry: QueueEntry): Promise<unknown> {
-    return super.request(entry.method, entry.path, entry.body, entry.params);
+    // #262 fix: forward the stored idempotency key so the replayed request
+    // carries the same key as the original submission attempt.
+    return super.request(entry.method, entry.path, entry.body, entry.params, undefined, entry.idempotencyKey);
   }
 }
