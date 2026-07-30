@@ -864,6 +864,29 @@ fn test_set_fee_accepts_below_max() {
     assert_eq!(bridge.fee_bps(), 100);
 }
 
+#[test]
+fn test_initialization_params_stays_consistent_after_fee_change() {
+    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 50, 1000);
+
+    // Right after init, both views must agree.
+    assert_eq!(bridge.fee_bps(), 50);
+    assert_eq!(bridge.initialization_params().fee_bps, 50);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::SetFee(300),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+
+    // After a governance-approved fee change, initialization_params() must
+    // no longer report the stale deploy-time fee_bps.
+    assert_eq!(bridge.fee_bps(), 300);
+    assert_eq!(bridge.initialization_params().fee_bps, 300);
+    assert_eq!(bridge.initialization_params().fee_bps, bridge.fee_bps());
+}
+
 // ===========================================================================
 // Task 4: Multisig Governance Tests
 // ===========================================================================
@@ -1765,7 +1788,7 @@ fn test_storage_usage() {
     assert_eq!(fund_count, 0);
     assert_eq!(archive_count, 0);
     assert_eq!(acc_fees, 0);
-    assert_eq!(hot, 5);
+    assert_eq!(hot, 0);
 
     bridge.fund_c_address(
         &source,
@@ -1775,9 +1798,16 @@ fn test_storage_usage() {
         &String::from_str(&env, "usage test"),
     );
 
-    let (fund_count, _, acc_fees, _) = bridge.storage_usage();
+    let (fund_count, _, acc_fees, hot) = bridge.storage_usage();
     assert_eq!(fund_count, 1);
     assert_eq!(acc_fees, 10);
+    assert_eq!(hot, 1);
+
+    bridge.archive_old_entries(&1);
+
+    let (_, archive_count, _, hot) = bridge.storage_usage();
+    assert_eq!(archive_count, 1);
+    assert_eq!(hot, 0);
 }
 
 #[test]
@@ -1819,6 +1849,48 @@ fn test_archive_old_entries() {
 fn test_archive_no_entries_fails() {
     let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
     bridge.archive_old_entries(&1);
+}
+
+#[test]
+fn test_archive_hash_differs_for_different_records() {
+    // Two independent envs perform the identical sequence of Address::generate
+    // calls, so source/target come out byte-identical across both. Only the
+    // funded amount differs, and only in a high byte: 1000 and 1256 share the
+    // same low byte (0xE8), which is exactly what the old hash implementation
+    // hashed (plus the low byte of `fee`, kept at 0 via fee_bps=0 here). Under
+    // the old truncating implementation these two batches would have hashed
+    // to the same value; the fix must tell them apart.
+    let (env1, bridge1, _admins1) = setup_env_with_admins(1, 1, 0, 1000);
+    let source1 = Address::generate(&env1);
+    let target1 = Address::generate(&env1);
+    let token1 = register_test_token(&env1);
+    TestTokenClient::new(&env1, &token1).mint(&source1, &10000);
+    bridge1.fund_c_address(
+        &source1,
+        &target1,
+        &token1,
+        &1000,
+        &String::from_str(&env1, "same-memo"),
+    );
+    let hash1 = bridge1.archive_old_entries(&1);
+
+    let (env2, bridge2, _admins2) = setup_env_with_admins(1, 1, 0, 1000);
+    let source2 = Address::generate(&env2);
+    let target2 = Address::generate(&env2);
+    let token2 = register_test_token(&env2);
+    TestTokenClient::new(&env2, &token2).mint(&source2, &10000);
+    bridge2.fund_c_address(
+        &source2,
+        &target2,
+        &token2,
+        &1256,
+        &String::from_str(&env2, "same-memo"),
+    );
+    let hash2 = bridge2.archive_old_entries(&1);
+
+    assert_eq!(source1, source2);
+    assert_eq!(target1, target2);
+    assert_ne!(hash1, hash2);
 }
 
 #[test]
@@ -2149,4 +2221,144 @@ fn test_fund_c_address_above_max_amount_panics() {
         &20_000, // above max_amount of 10_000
         &String::from_str(&env, "above max"),
     );
+}
+
+// ===========================================================================
+// Fee-token whitelist / rate coverage
+// ===========================================================================
+
+#[test]
+fn test_fee_token_whitelist_default_and_toggle() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    assert!(!bridge.is_fee_token_whitelisted(&token));
+
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenWhitelist(token.clone(), true),
+        &1000,
+    );
+    bridge.execute(&pid);
+    assert!(bridge.is_fee_token_whitelisted(&token));
+
+    let pid2 = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenWhitelist(token.clone(), false),
+        &1000,
+    );
+    bridge.execute(&pid2);
+    assert!(!bridge.is_fee_token_whitelisted(&token));
+}
+
+#[test]
+fn test_fee_token_rate_default_and_set() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    assert_eq!(bridge.fee_token_rate(&token), 10000);
+
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 5000),
+        &1000,
+    );
+    bridge.execute(&pid);
+    assert_eq!(bridge.fee_token_rate(&token), 5000);
+}
+
+#[test]
+fn test_fee_token_rate_accepts_bounds() {
+    let (_env, bridge, token, admin) = full_setup(100);
+
+    let pid_min = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 1000),
+        &1000,
+    );
+    bridge.execute(&pid_min);
+    assert_eq!(bridge.fee_token_rate(&token), 1000);
+
+    let pid_max = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 20000),
+        &1000,
+    );
+    bridge.execute(&pid_max);
+    assert_eq!(bridge.fee_token_rate(&token), 20000);
+}
+
+#[test]
+#[should_panic(expected = "rate must be >= 1000")]
+fn test_fee_token_rate_rejects_below_min() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 999),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+#[should_panic(expected = "rate must be <= 20000")]
+fn test_fee_token_rate_rejects_above_max() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 20001),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+fn test_funding_with_whitelisted_fee_token_accrues_token_fees() {
+    let (env, bridge, token, admin) = full_setup(1000); // 10% fee
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    TestTokenClient::new(&env, &token).mint(&source, &10000);
+
+    let pid_wl = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenWhitelist(token.clone(), true),
+        &1000,
+    );
+    bridge.execute(&pid_wl);
+
+    let pid_rate = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 5000), // 50% of the fee
+        &1000,
+    );
+    bridge.execute(&pid_rate);
+
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 0);
+
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token,
+        &1000,
+        &String::from_str(&env, "fee-token"),
+    );
+
+    // fee = 1000 * 1000bps / 10000 = 100; token_fee = 100 * 5000bps / 10000 = 50
+    assert_eq!(bridge.accumulated_fees(), 100);
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 50);
+}
+
+#[test]
+fn test_funding_with_non_whitelisted_token_does_not_accrue_token_fees() {
+    let (env, bridge, token, _admin) = full_setup(1000);
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    TestTokenClient::new(&env, &token).mint(&source, &10000);
+
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token,
+        &1000,
+        &String::from_str(&env, "no-whitelist"),
+    );
+
+    assert_eq!(bridge.accumulated_fees(), 100);
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 0);
 }

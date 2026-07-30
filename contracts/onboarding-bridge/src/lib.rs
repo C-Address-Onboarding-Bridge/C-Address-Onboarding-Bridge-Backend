@@ -746,7 +746,7 @@ impl OnboardingBridge {
         let archive_count = if count > total { total } else { count };
         assert!(archive_count > 0, "{}", ERR_NO_ENTRIES_TO_ARCHIVE);
 
-        let mut buf: Vec<i128> = Vec::new(&env);
+        let mut hash_bytes = Bytes::new(&env);
         for i in 1..=archive_count {
             if let Some(mut record) = env
                 .storage()
@@ -754,8 +754,13 @@ impl OnboardingBridge {
                 .get::<DataKey, FundingRecord>(&DataKey::Funding(i))
             {
                 record.archived = true;
-                buf.push_back(record.amount);
-                buf.push_back(record.fee);
+                hash_bytes.append(&record.source.to_string().to_bytes());
+                hash_bytes.append(&record.target.to_string().to_bytes());
+                hash_bytes.append(&record.token_address.to_string().to_bytes());
+                hash_bytes.extend_from_array(&record.amount.to_be_bytes());
+                hash_bytes.extend_from_array(&record.fee.to_be_bytes());
+                hash_bytes.extend_from_array(&record.ledger.to_be_bytes());
+                hash_bytes.append(&record.memo.to_bytes());
                 env.storage()
                     .persistent()
                     .set(&DataKey::Funding(i), &record);
@@ -768,12 +773,6 @@ impl OnboardingBridge {
             .get(&DataKey::NextArchiveId)
             .unwrap_or(0);
 
-        let mut hash_bytes = Bytes::new(&env);
-        for i in 0..buf.len() {
-            let val = buf.get(i).unwrap();
-            let byte: u8 = (val & 0xFF) as u8;
-            hash_bytes.push_back(byte);
-        }
         let hash: Hash<32> = env.crypto().sha256(&hash_bytes);
         let hash_val: BytesN<32> = hash.to_bytes();
 
@@ -797,6 +796,10 @@ impl OnboardingBridge {
         hash_val
     }
 
+    /// Returns `(funding_count, archived_batch_count, accumulated_fees, hot_count)`
+    /// where `hot_count` is the number of funding records still in "hot"
+    /// (non-archived) persistent storage, derived by scanning each record's
+    /// `archived` flag.
     pub fn storage_usage(env: Env) -> (u32, u32, i128, u32) {
         let funding_count: u32 = env
             .storage()
@@ -813,7 +816,21 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::AccumulatedFees)
             .unwrap_or(0);
-        (funding_count, archived_count, accumulated_fees, 5u32)
+
+        let mut hot_count: u32 = 0;
+        for i in 1..=funding_count {
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, FundingRecord>(&DataKey::Funding(i))
+            {
+                if !record.archived {
+                    hot_count += 1;
+                }
+            }
+        }
+
+        (funding_count, archived_count, accumulated_fees, hot_count)
     }
 
     pub fn propose(env: Env, proposer: Address, action: ProposalAction, expiry_blocks: u32) -> u32 {
@@ -944,6 +961,17 @@ impl OnboardingBridge {
                     .expect("not initialized");
                 assert!(new_fee_bps <= max_fee, "fee exceeds max_fee_bps");
                 env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
+
+                let mut params: InitializationParams = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::InitializationParams)
+                    .expect("not initialized");
+                params.fee_bps = new_fee_bps;
+                env.storage()
+                    .instance()
+                    .set(&DataKey::InitializationParams, &params);
+
                 env.events()
                     .publish((Symbol::new(&env, "set_fee"),), (new_fee_bps,));
                 0i128
