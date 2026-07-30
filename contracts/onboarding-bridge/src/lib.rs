@@ -782,6 +782,10 @@ impl OnboardingBridge {
         hash_val
     }
 
+    /// Returns `(funding_count, archived_batch_count, accumulated_fees, hot_count)`
+    /// where `hot_count` is the number of funding records still in "hot"
+    /// (non-archived) persistent storage, derived by scanning each record's
+    /// `archived` flag.
     pub fn storage_usage(env: Env) -> (u32, u32, i128, u32) {
         let funding_count: u32 = env
             .storage()
@@ -798,7 +802,21 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::AccumulatedFees)
             .unwrap_or(0);
-        (funding_count, archived_count, accumulated_fees, 5u32)
+
+        let mut hot_count: u32 = 0;
+        for i in 1..=funding_count {
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, FundingRecord>(&DataKey::Funding(i))
+            {
+                if !record.archived {
+                    hot_count += 1;
+                }
+            }
+        }
+
+        (funding_count, archived_count, accumulated_fees, hot_count)
     }
 
     pub fn propose(env: Env, proposer: Address, action: ProposalAction, expiry_blocks: u32) -> u32 {

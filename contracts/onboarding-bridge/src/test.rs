@@ -1438,7 +1438,7 @@ fn test_storage_usage() {
     assert_eq!(fund_count, 0);
     assert_eq!(archive_count, 0);
     assert_eq!(acc_fees, 0);
-    assert_eq!(hot, 5);
+    assert_eq!(hot, 0);
 
     bridge.fund_c_address(
         &source,
@@ -1448,9 +1448,16 @@ fn test_storage_usage() {
         &String::from_str(&env, "usage test"),
     );
 
-    let (fund_count, _, acc_fees, _) = bridge.storage_usage();
+    let (fund_count, _, acc_fees, hot) = bridge.storage_usage();
     assert_eq!(fund_count, 1);
     assert_eq!(acc_fees, 10);
+    assert_eq!(hot, 1);
+
+    bridge.archive_old_entries(&1);
+
+    let (_, archive_count, _, hot) = bridge.storage_usage();
+    assert_eq!(archive_count, 1);
+    assert_eq!(hot, 0);
 }
 
 #[test]
