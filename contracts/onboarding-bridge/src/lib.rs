@@ -144,6 +144,8 @@ pub enum ProposalAction {
     /// Changes the multisig approval threshold. Must be > 0 and <= the
     /// current admin count.
     SetThreshold(u32),
+    /// Archives old funding entries up to the specified count.
+    ArchiveOldEntries(u32),
 }
 
 #[contracttype]
@@ -758,16 +760,8 @@ impl OnboardingBridge {
         env.storage().persistent().get(&DataKey::Funding(id))
     }
 
-    pub fn archive_old_entries(env: Env, count: u32) -> BytesN<32> {
-        let admins: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admins)
-            .expect("not initialized");
-        if !admins.is_empty() {
-            admins.get_unchecked(0).require_auth();
-        }
-        Self::extend_ttl(&env);
+    fn archive_old_entries_internal(env: &Env, count: u32) -> BytesN<32> {
+        Self::extend_ttl(env);
 
         let total: u32 = env
             .storage()
@@ -820,7 +814,7 @@ impl OnboardingBridge {
             .set(&DataKey::NextArchiveId, &(archive_id + 1));
 
         env.events().publish(
-            (Symbol::new(&env, "archived"),),
+            (Symbol::new(env, "archived"),),
             (archive_count, hash_val.clone()),
         );
 
@@ -1097,6 +1091,10 @@ impl OnboardingBridge {
                     .set(&DataKey::Threshold, &new_threshold);
                 env.events()
                     .publish((Symbol::new(&env, "threshold_set"),), (new_threshold,));
+                0i128
+            }
+            ProposalAction::ArchiveOldEntries(count) => {
+                Self::archive_old_entries_internal(&env, count);
                 0i128
             }
         };
