@@ -95,6 +95,7 @@ pub enum DataKey {
     ProposalNonce,
     Proposal(u32),
     ProposalApproval(u32, Address),
+    NextPruneId,
     ReentrancyGuard,
     Funding(u32),
     FundingCount,
@@ -298,6 +299,7 @@ impl OnboardingBridge {
         env.storage().instance().set(&DataKey::NextArchiveId, &0u32);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::ProposalNonce, &0u32);
+        env.storage().instance().set(&DataKey::NextPruneId, &1u32);
         env.storage()
             .instance()
             .set(&DataKey::MinAmount, &min_amount);
@@ -1030,6 +1032,87 @@ impl OnboardingBridge {
         }
 
         active
+    }
+
+    /// Removes executed or expired proposals — and their per-admin approval
+    /// flags — from instance storage.
+    ///
+    /// `propose`/`approve` write `DataKey::Proposal`/`DataKey::ProposalApproval`
+    /// into instance storage and previously nothing ever removed them, so the
+    /// contract's instance footprint grew forever with governance activity.
+    /// This sweeps forward from the last pruned id, scanning at most
+    /// `max_scan` proposals, stopping early if it reaches a proposal that is
+    /// still active (neither executed nor expired) so a later call can pick
+    /// up from there once it becomes terminal. Returns the number of
+    /// proposals actually pruned.
+    pub fn prune_proposals(env: Env, max_scan: u32) -> u32 {
+        let admins: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admins)
+            .expect("not initialized");
+        if !admins.is_empty() {
+            admins.get_unchecked(0).require_auth();
+        }
+        Self::extend_ttl(&env);
+
+        let nonce: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalNonce)
+            .unwrap_or(0);
+        let mut cursor: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextPruneId)
+            .unwrap_or(1);
+        let current_block = env.ledger().sequence();
+
+        let mut pruned: u32 = 0;
+        let mut scanned: u32 = 0;
+
+        while cursor <= nonce && scanned < max_scan {
+            match env
+                .storage()
+                .instance()
+                .get::<DataKey, Proposal>(&DataKey::Proposal(cursor))
+            {
+                Some(proposal) => {
+                    if proposal.executed || current_block > proposal.expiry {
+                        env.storage().instance().remove(&DataKey::Proposal(cursor));
+                        for i in 0..admins.len() {
+                            let approval_key =
+                                DataKey::ProposalApproval(cursor, admins.get_unchecked(i));
+                            env.storage().instance().remove(&approval_key);
+                        }
+                        // The proposer always has an approval flag from
+                        // `propose`, even if no longer an admin by the time
+                        // this runs — clear it explicitly so it can't linger.
+                        env.storage()
+                            .instance()
+                            .remove(&DataKey::ProposalApproval(cursor, proposal.proposer));
+                        pruned += 1;
+                        cursor += 1;
+                    } else {
+                        // Still active: stop advancing so a future call
+                        // resumes here instead of skipping it permanently.
+                        break;
+                    }
+                }
+                None => {
+                    // Already pruned in a previous call — keep advancing.
+                    cursor += 1;
+                }
+            }
+            scanned += 1;
+        }
+
+        env.storage().instance().set(&DataKey::NextPruneId, &cursor);
+
+        env.events()
+            .publish((Symbol::new(&env, "proposals_pruned"),), (pruned, cursor));
+
+        pruned
     }
 }
 

@@ -1000,6 +1000,141 @@ fn test_get_active_proposals() {
     assert_eq!(active.get_unchecked(0).id, pid3);
 }
 
+// ===========================================================================
+// Proposal storage pruning tests
+// ===========================================================================
+
+/// Instance storage can only be inspected from within the contract's own
+/// execution context, so tests that peek at raw `DataKey` presence wrap the
+/// check with `env.as_contract(&bridge_address, ...)`.
+fn proposal_exists(env: &Env, bridge_address: &Address, id: u32) -> bool {
+    env.as_contract(bridge_address, || {
+        env.storage().instance().has(&DataKey::Proposal(id))
+    })
+}
+
+fn approval_exists(env: &Env, bridge_address: &Address, id: u32, admin: &Address) -> bool {
+    env.as_contract(bridge_address, || {
+        env.storage()
+            .instance()
+            .has(&DataKey::ProposalApproval(id, admin.clone()))
+    })
+}
+
+#[test]
+fn test_prune_proposals_removes_executed_and_expired() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+    let approver = admins.get_unchecked(1);
+
+    let pid1 = bridge.propose(&proposer, &ProposalAction::SetFee(200), &1000);
+    bridge.approve(&approver, &pid1);
+    bridge.execute(&pid1);
+
+    let pid2 = bridge.propose(&proposer, &ProposalAction::SetFee(300), &10);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 20);
+
+    assert!(proposal_exists(&env, &bridge.address, pid1));
+    assert!(proposal_exists(&env, &bridge.address, pid2));
+
+    let pruned = bridge.prune_proposals(&10);
+    assert_eq!(pruned, 2);
+
+    assert!(!proposal_exists(&env, &bridge.address, pid1));
+    assert!(!proposal_exists(&env, &bridge.address, pid2));
+    assert!(!approval_exists(&env, &bridge.address, pid1, &proposer));
+    assert!(!approval_exists(&env, &bridge.address, pid1, &approver));
+    assert!(!approval_exists(&env, &bridge.address, pid2, &proposer));
+}
+
+#[test]
+fn test_prune_proposals_stops_at_still_active_proposal() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+    let approver = admins.get_unchecked(1);
+
+    let pid1 = bridge.propose(&proposer, &ProposalAction::SetFee(200), &1000);
+    bridge.approve(&approver, &pid1);
+    bridge.execute(&pid1);
+
+    // pid2 is neither executed nor expired — pruning must not skip past it.
+    let pid2 = bridge.propose(&proposer, &ProposalAction::SetFee(300), &1000);
+
+    let pruned = bridge.prune_proposals(&10);
+    assert_eq!(pruned, 1);
+    assert!(!proposal_exists(&env, &bridge.address, pid1));
+    assert!(proposal_exists(&env, &bridge.address, pid2));
+
+    // Once pid2 becomes terminal, a later prune call must still reach it.
+    bridge.approve(&approver, &pid2);
+    bridge.execute(&pid2);
+    let pruned2 = bridge.prune_proposals(&10);
+    assert_eq!(pruned2, 1);
+    assert!(!proposal_exists(&env, &bridge.address, pid2));
+}
+
+#[test]
+fn test_prune_proposals_respects_max_scan() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+    let approver = admins.get_unchecked(1);
+
+    let mut ids: std::vec::Vec<u32> = std::vec::Vec::new();
+    for _ in 0..5 {
+        let pid = bridge.propose(&proposer, &ProposalAction::SetFee(50), &1000);
+        bridge.approve(&approver, &pid);
+        bridge.execute(&pid);
+        ids.push(pid);
+    }
+
+    // Only scan/prune 2 at a time.
+    let pruned = bridge.prune_proposals(&2);
+    assert_eq!(pruned, 2);
+    assert!(!proposal_exists(&env, &bridge.address, ids[0]));
+    assert!(!proposal_exists(&env, &bridge.address, ids[1]));
+    assert!(proposal_exists(&env, &bridge.address, ids[2]));
+
+    let pruned = bridge.prune_proposals(&2);
+    assert_eq!(pruned, 2);
+    assert!(!proposal_exists(&env, &bridge.address, ids[2]));
+    assert!(!proposal_exists(&env, &bridge.address, ids[3]));
+    assert!(proposal_exists(&env, &bridge.address, ids[4]));
+
+    let pruned = bridge.prune_proposals(&2);
+    assert_eq!(pruned, 1);
+    assert!(!proposal_exists(&env, &bridge.address, ids[4]));
+}
+
+/// Guards against the instance-storage-growth regression: however many
+/// propose/approve/execute cycles run, pruning after each one keeps the
+/// resident (non-removed) proposal count at zero rather than accumulating.
+#[test]
+fn test_instance_storage_does_not_grow_unboundedly_with_proposal_cycles() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+    let approver = admins.get_unchecked(1);
+
+    const CYCLES: u32 = 200;
+    for _ in 0..CYCLES {
+        let pid = bridge.propose(&proposer, &ProposalAction::SetFee(50), &1000);
+        bridge.approve(&approver, &pid);
+        bridge.execute(&pid);
+
+        let pruned = bridge.prune_proposals(&10);
+        assert_eq!(pruned, 1);
+
+        assert!(!proposal_exists(&env, &bridge.address, pid));
+        assert!(!approval_exists(&env, &bridge.address, pid, &proposer));
+        assert!(!approval_exists(&env, &bridge.address, pid, &approver));
+    }
+
+    assert_eq!(bridge.get_active_proposals().len(), 0);
+    for id in 1..=CYCLES {
+        assert!(!proposal_exists(&env, &bridge.address, id));
+    }
+}
+
 #[test]
 fn test_proposal_withdraw_fees_execution() {
     let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
