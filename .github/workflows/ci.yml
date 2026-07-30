@@ -112,6 +112,10 @@ jobs:
       - name: Setup Node.js environment
         uses: ./.github/actions/setup-node-env
 
+      - name: Build sdk workspace dependency
+        working-directory: .
+        run: npm run build --workspace sdk
+
       - name: Type check
         run: npx tsc --noEmit
 
