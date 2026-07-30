@@ -1495,6 +1495,48 @@ fn test_archive_no_entries_fails() {
 }
 
 #[test]
+fn test_archive_hash_differs_for_different_records() {
+    // Two independent envs perform the identical sequence of Address::generate
+    // calls, so source/target come out byte-identical across both. Only the
+    // funded amount differs, and only in a high byte: 1000 and 1256 share the
+    // same low byte (0xE8), which is exactly what the old hash implementation
+    // hashed (plus the low byte of `fee`, kept at 0 via fee_bps=0 here). Under
+    // the old truncating implementation these two batches would have hashed
+    // to the same value; the fix must tell them apart.
+    let (env1, bridge1, _admins1) = setup_env_with_admins(1, 1, 0, 1000);
+    let source1 = Address::generate(&env1);
+    let target1 = Address::generate(&env1);
+    let token1 = register_test_token(&env1);
+    TestTokenClient::new(&env1, &token1).mint(&source1, &10000);
+    bridge1.fund_c_address(
+        &source1,
+        &target1,
+        &token1,
+        &1000,
+        &String::from_str(&env1, "same-memo"),
+    );
+    let hash1 = bridge1.archive_old_entries(&1);
+
+    let (env2, bridge2, _admins2) = setup_env_with_admins(1, 1, 0, 1000);
+    let source2 = Address::generate(&env2);
+    let target2 = Address::generate(&env2);
+    let token2 = register_test_token(&env2);
+    TestTokenClient::new(&env2, &token2).mint(&source2, &10000);
+    bridge2.fund_c_address(
+        &source2,
+        &target2,
+        &token2,
+        &1256,
+        &String::from_str(&env2, "same-memo"),
+    );
+    let hash2 = bridge2.archive_old_entries(&1);
+
+    assert_eq!(source1, source2);
+    assert_eq!(target1, target2);
+    assert_ne!(hash1, hash2);
+}
+
+#[test]
 fn test_batch_fund_then_funding_count() {
     let (env, bridge, _admins) = setup_env_with_admins(1, 1, 50, 1000);
     let source = Address::generate(&env);
