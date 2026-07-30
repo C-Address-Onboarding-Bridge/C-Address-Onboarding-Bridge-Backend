@@ -48,14 +48,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+      - name: Setup Node.js environment
+        uses: ./.github/actions/setup-node-env
 
       - name: Type check
         run: npx tsc --noEmit
@@ -78,14 +72,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+      - name: Setup Node.js environment
+        uses: ./.github/actions/setup-node-env
 
       - name: Type check
         run: npx tsc --noEmit
@@ -112,6 +100,34 @@ jobs:
       - name: Verify strict consumer build
         run: npm run build:strict-consumer
 
+  hooks:
+    name: React Hooks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hooks
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js environment
+        uses: ./.github/actions/setup-node-env
+
+      - name: Build sdk workspace dependency
+        working-directory: .
+        run: npm run build --workspace sdk
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint --ext .ts,.tsx src/
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
@@ -121,14 +137,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+      - name: Setup Node.js environment
+        uses: ./.github/actions/setup-node-env
 
       - name: Run E2E tests
         run: npx vitest run --config vitest.e2e.config.ts
@@ -147,14 +157,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+      - name: Setup Node.js environment
+        uses: ./.github/actions/setup-node-env
 
       - name: Run webhook simulation tests
         run: npm run test:webhook-sim

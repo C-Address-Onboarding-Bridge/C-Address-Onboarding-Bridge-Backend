@@ -7,18 +7,34 @@ vi.mock('../index', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock('../jobs/queue', () => ({
+  enqueueWebhookRetry: vi.fn().mockResolvedValue(undefined),
+  enqueueAuditLog: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../services/asyncPipeline', () => ({
+  enqueueAudit: vi.fn(),
+}));
+
+vi.mock('../services/auditLog', () => ({
+  hashPayload: vi.fn(() => 'mock-hash'),
+  integrityAuditLog: {
+    append: vi.fn(),
+  },
+}));
+
 import { WebhookDeliveryService } from '../services/webhookDelivery';
+import { enqueueWebhookRetry } from '../jobs/queue';
 
 describe('WebhookDeliveryService', () => {
   let service: WebhookDeliveryService;
 
   beforeEach(() => {
     service = new WebhookDeliveryService();
-    vi.useFakeTimers();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -96,29 +112,42 @@ describe('WebhookDeliveryService', () => {
   });
 
   describe('deliver — retry path', () => {
-    it('retries on HTTP 500 and moves to DLQ after max retries', async () => {
+    it('enqueues retries on HTTP 500', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
       vi.stubGlobal('fetch', fetchMock);
+      const enqueueMock = vi.mocked(enqueueWebhookRetry);
 
       const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKey: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: 'deadbeef' });
 
-      // Initial attempt
+      // Initial attempt fails, should enqueue retry
       expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(enqueueMock).toHaveBeenCalledTimes(1);
       expect(service.getDLQ()).toHaveLength(0);
 
-      // First retry after 10s
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      // First retry enqueued with attemptNumber: 1
+      expect(enqueueMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          registrationId: reg.id,
+          event: 'tx.failed',
+          attemptNumber: 1,
+        })
+      );
+    });
 
-      // Second retry after 60s
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+    it('moves to DLQ if webhook retry enqueue fails', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+      vi.stubGlobal('fetch', fetchMock);
+      const enqueueMock = vi.mocked(enqueueWebhookRetry);
+      enqueueMock.mockRejectedValueOnce(new Error('Redis unavailable'));
 
-      // Third retry after 300s → DLQ
-      await vi.advanceTimersByTimeAsync(300_000);
-      expect(fetchMock).toHaveBeenCalledTimes(4);
+      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKey: 'k', events: ['*'] });
+      await service.deliver(reg, 'tx.failed', { txHash: 'deadbeef' });
+
+      // Enqueue failed → moves to DLQ immediately
       expect(service.getDLQ()).toHaveLength(1);
+      const dlq = service.getDLQ();
+      expect(dlq[0].event).toBe('tx.failed');
     });
   });
 
@@ -126,13 +155,21 @@ describe('WebhookDeliveryService', () => {
     it('getDLQEntry returns the correct entry', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
       vi.stubGlobal('fetch', fetchMock);
+      const enqueueMock = vi.mocked(enqueueWebhookRetry);
 
       const reg = service.register({ url: 'https://fail.example', secret: 'mysecret123456!', apiKey: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: '1234' });
-      await vi.advanceTimersByTimeAsync(10_000 + 60_000 + 300_000);
+
+      // First delivery fails, enqueue retry
+      expect(enqueueMock).toHaveBeenCalledTimes(1);
+      expect(service.getDLQ()).toHaveLength(0);
+
+      // Simulate enqueue failure → moves to DLQ
+      enqueueMock.mockRejectedValueOnce(new Error('Redis unavailable'));
+      await service.deliver(reg, 'tx.failed', { txHash: '1234' });
+      expect(service.getDLQ()).toHaveLength(1);
 
       const dlq = service.getDLQ();
-      expect(dlq).toHaveLength(1);
       const entry = service.getDLQEntry(dlq[0].id);
       expect(entry).toBeDefined();
       expect(entry!.event).toBe('tx.failed');
@@ -141,12 +178,14 @@ describe('WebhookDeliveryService', () => {
     it('deleteDLQEntry removes the entry', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
       vi.stubGlobal('fetch', fetchMock);
+      const enqueueMock = vi.mocked(enqueueWebhookRetry);
+      enqueueMock.mockRejectedValue(new Error('Redis unavailable'));
 
       const reg = service.register({ url: 'https://fail.example', secret: 'mysecret123456!', apiKey: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: '5678' });
-      await vi.advanceTimersByTimeAsync(10_000 + 60_000 + 300_000);
 
       const dlq = service.getDLQ();
+      expect(dlq).toHaveLength(1);
       const id = dlq[0].id;
       expect(service.deleteDLQEntry(id)).toBe(true);
       expect(service.getDLQ()).toHaveLength(0);

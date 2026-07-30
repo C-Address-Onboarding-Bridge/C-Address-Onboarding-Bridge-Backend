@@ -5,9 +5,11 @@
   "description": "Backend for the C-Address Onboarding Bridge protocol - route funds to Soroban smart accounts",
   "workspaces": [
     "api",
-    "sdk"
+    "sdk",
+    "hooks"
   ],
   "scripts": {
+    "prepare": "husky",
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "test:e2e": "npm run test:e2e --workspace api",
@@ -18,12 +20,14 @@
     "secrets:decrypt": "node scripts/secrets.mjs decrypt",
     "secrets:rotate": "node scripts/secrets.mjs rotate",
     "secrets:schema": "node scripts/secrets.mjs schema",
-    "secrets:scan:all": "node scripts/secrets.mjs scan --all"
+    "secrets:scan:all": "node scripts/secrets.mjs scan --all",
+    "deploy:blue-green": "bash scripts/blue-green-deploy.sh"
   },
   "dependencies": {
     "ioredis": "^5.11.1"
   },
   "devDependencies": {
+    "husky": "^9.1.7",
     "lint-staged": "^15.2.10"
   },
   "lint-staged": {

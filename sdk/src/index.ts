@@ -44,3 +44,17 @@ export {
 } from './errors';
 export { BridgeEventEmitter } from './events';
 export { OfflineQueue, OfflineBridgeClient } from './offline';
+export {
+  translate,
+  t,
+  getCatalog,
+  CATALOGS,
+  DEFAULT_LOCALE,
+  SUPPORTED_LOCALES,
+  LOCALE_METADATA,
+  type SupportedLocale,
+  type LocaleMetadata,
+  type MessageKey,
+  type MessageParams,
+  type MessageCatalog,
+} from './i18n';

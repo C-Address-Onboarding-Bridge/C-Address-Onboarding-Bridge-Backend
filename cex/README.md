@@ -44,6 +44,13 @@ router.registerExchange('your-exchange', {
 });
 ```
 
+> **`defaultCexHandlers` are non-functional placeholders.** `binance`, `coinbase`, and `kraken`
+> in `defaultCexHandlers` never call an exchange API — they immediately return a fake
+> `success: true` / `status: 'pending'` result. They exist only to illustrate the handler
+> shape shown above. Registering them directly with `WithdrawalRouter` (instead of writing your
+> own handler, as shown in the snippet) will silently "succeed" without ever moving funds. Always
+> implement and register your own handler before routing real withdrawals.
+
 2. Use the bridge memo format for tracking:
 - Format: `bridge:{exchange_name}:{c_address_suffix}`
 - Example: `bridge:binance:AB12CD34`

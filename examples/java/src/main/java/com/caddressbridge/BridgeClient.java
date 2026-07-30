@@ -1,5 +1,9 @@
 package com.caddressbridge;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -15,6 +19,7 @@ public final class BridgeClient {
     private final String baseUrl;
     private final String apiKey;
     private final HttpClient http;
+    private final ObjectMapper mapper = new ObjectMapper();
 
     public BridgeClient(String baseUrl, String apiKey) {
         this.baseUrl = baseUrl.replaceAll("/+$", "");
@@ -28,7 +33,7 @@ public final class BridgeClient {
         return new BridgeClient(baseUrl, apiKey);
     }
 
-    public String request(String method, String path, Map<String, String> query, String jsonBody)
+    public JsonNode request(String method, String path, Map<String, String> query, Object jsonBody)
             throws IOException, InterruptedException, BridgeException {
         String url = baseUrl + path;
         if (query != null && !query.isEmpty()) {
@@ -47,7 +52,7 @@ public final class BridgeClient {
             builder.header("X-API-Key", apiKey);
         }
         if (jsonBody != null) {
-            builder.method(method, HttpRequest.BodyPublishers.ofString(jsonBody));
+            builder.method(method, HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(jsonBody)));
         } else {
             builder.method(method, HttpRequest.BodyPublishers.noBody());
         }
@@ -55,14 +60,18 @@ public final class BridgeClient {
         if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
             throw BridgeException.fromResponse(resp.statusCode(), resp.body());
         }
-        return resp.body();
+        String body = resp.body();
+        if (body == null || body.isBlank()) {
+            return mapper.createObjectNode();
+        }
+        return mapper.readTree(body);
     }
 
-    public String health() throws IOException, InterruptedException, BridgeException {
+    public JsonNode health() throws IOException, InterruptedException, BridgeException {
         return request("GET", "/health", null, null);
     }
 
-    public String getQuote(String sourceAsset, String amount, String targetAddress)
+    public JsonNode getQuote(String sourceAsset, String amount, String targetAddress)
             throws IOException, InterruptedException, BridgeException {
         return request("GET", "/api/v1/quote", Map.of(
                 "sourceAsset", sourceAsset,
@@ -71,29 +80,37 @@ public final class BridgeClient {
         ), null);
     }
 
-    public String prepareFunding(String source, String target, String token, String amount, String memo)
+    public JsonNode prepareFunding(String source, String target, String token, String amount, String memo)
             throws IOException, InterruptedException, BridgeException {
-        String body = String.format(
-                "{\"sourceAddress\":\"%s\",\"targetAddress\":\"%s\",\"tokenAddress\":\"%s\",\"amount\":\"%s\",\"memo\":\"%s\"}",
-                source, target, token, amount, memo
-        );
+        ObjectNode body = mapper.createObjectNode();
+        body.put("sourceAddress", source);
+        body.put("targetAddress", target);
+        body.put("tokenAddress", token);
+        body.put("amount", amount);
+        body.put("memo", memo);
         return request("POST", "/api/v1/fund/prepare", null, body);
     }
 
-    public String submitSignedXdr(String signedXdr)
+    public JsonNode submitSignedXdr(String signedXdr)
             throws IOException, InterruptedException, BridgeException {
-        return request("POST", "/api/v1/fund", null, "{\"signedXdr\":\"" + signedXdr + "\"}");
+        ObjectNode body = mapper.createObjectNode();
+        body.put("signedXdr", signedXdr);
+        return request("POST", "/api/v1/fund", null, body);
     }
 
-    public String getStatus(String txHash) throws IOException, InterruptedException, BridgeException {
+    public JsonNode getStatus(String txHash) throws IOException, InterruptedException, BridgeException {
         return request("GET", "/api/v1/status/" + txHash, null, null);
     }
 
-    public String createMoonpayUrl(String jsonBody) throws IOException, InterruptedException, BridgeException {
+    public JsonNode createMoonpayUrl(Object jsonBody) throws IOException, InterruptedException, BridgeException {
         return request("POST", "/api/v1/offramp/moonpay", null, jsonBody);
     }
 
-    public String createTransakUrl(String jsonBody) throws IOException, InterruptedException, BridgeException {
+    public JsonNode createTransakUrl(Object jsonBody) throws IOException, InterruptedException, BridgeException {
         return request("POST", "/api/v1/offramp/transak", null, jsonBody);
+    }
+
+    public String routeCexWithdrawal(String jsonBody) throws IOException, InterruptedException, BridgeException {
+        return request("POST", "/api/v1/cex/route", null, jsonBody);
     }
 }

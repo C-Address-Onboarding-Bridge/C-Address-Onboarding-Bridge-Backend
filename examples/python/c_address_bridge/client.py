@@ -97,5 +97,8 @@ class BridgeClient:
     def create_transak_url(self, **params: Any) -> dict[str, str]:
         return self._request("POST", "/api/v1/offramp/transak", body=params)
 
+    def route_cex_withdrawal(self, **params: Any) -> dict[str, Any]:
+        return self._request("POST", "/api/v1/cex/route", body=params)
+
     def health(self) -> dict[str, str]:
         return self._request("GET", "/health")

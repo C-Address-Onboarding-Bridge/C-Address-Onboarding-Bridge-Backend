@@ -136,7 +136,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "bridge_active_connections{job=\"c-address-bridge\"}",
+          "expr": "http_active_requests{job=\"c-address-bridge\"}",
           "legendFormat": "Active Connections"
         }
       ],
@@ -152,7 +152,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "bridge_cache_hit_ratio{job=\"c-address-bridge\"}",
+          "expr": "cache_hit_ratio{job=\"c-address-bridge\"}",
           "legendFormat": "Cache Hit Ratio"
         }
       ],
@@ -168,7 +168,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "bridge_circuit_breaker_state{job=\"c-address-bridge\"}",
+          "expr": "circuit_breaker_state{job=\"c-address-bridge\"}",
           "legendFormat": "{{service}}"
         }
       ],

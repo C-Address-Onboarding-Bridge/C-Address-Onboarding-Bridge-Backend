@@ -34,7 +34,11 @@ async fn main() -> Result<(), BridgeError> {
     let funded = client
         .submit_signed_xdr("AAAAAgAAAABexampleSignedTransactionXdr")
         .await?;
-    println!("Fund submitted: {} hash={}...", funded.status, &funded.hash[..16]);
+    println!(
+        "Fund submitted: {} hash={}...",
+        funded.status,
+        &funded.hash[..funded.hash.len().min(16)]
+    );
 
     let status = client.get_status(&funded.hash).await?;
     println!("Transaction status: {}", status.status);
@@ -60,6 +64,17 @@ async fn main() -> Result<(), BridgeError> {
         }))
         .await?;
     println!("Transak URL: {}...", &transak.url[..transak.url.len().min(60)]);
+
+    let cex = client
+        .route_cex_withdrawal(json!({
+            "exchange": "coinbase",
+            "sourceAsset": "XLM",
+            "amount": "10000000",
+            "targetCAddress": MOCK_C_ADDRESS,
+            "targetNetwork": "stellar"
+        }))
+        .await?;
+    println!("CEX withdrawal: status={} id={}", cex.status, cex.withdrawal_id);
 
     println!("All flows completed successfully.");
     Ok(())
