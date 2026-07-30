@@ -85,8 +85,15 @@ const tierLimiters = {
   high: createLimiter(TIER_LIMITS.high, 'tier_high_'),
 };
 
-/** Global IP rate limit — applied to all requests before body parsing. */
+/** Global IP rate limit — applied to all requests before body parsing. Excludes webhooks. */
 export const ipRateLimitMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  // Skip IP rate limiting for webhook endpoints — they are server-to-server and already
+  // authenticated via HMAC signature verification. Excluding them prevents high webhook
+  // volume from one provider from throttling customer API traffic, and vice versa.
+  if (req.path && req.path.startsWith('/webhook/')) {
+    return next();
+  }
+
   const ip = req.ip ?? 'unknown';
   if (isIPBanned(ip)) {
     res.status(403).json({ error: 'forbidden', message: 'IP temporarily banned due to suspicious activity' });
