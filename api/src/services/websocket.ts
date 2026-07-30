@@ -6,10 +6,12 @@ import { logger } from '../logger';
 import { sorobanService } from './soroban';
 import { explorerService } from './explorer';
 import { resolveRecord } from '../middleware/rbacAuth';
+import { buildCacheKey, CACHE_TTL, getOrCompute } from './cache';
 
 const TX_HASH_RE = /^[a-f0-9]{64}$/;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const POLL_INTERVAL_MS = 5_000;
+const STATUS_CACHE_NAMESPACE = 'status';
 
 interface Subscription {
   txHash: string;
@@ -41,7 +43,18 @@ function validateToken(token: string | null): boolean {
 
 async function pollStatus(client: ClientState, sub: Subscription): Promise<void> {
   try {
-    const status = await sorobanService.getTransactionStatus(sub.txHash);
+    const cacheKey = buildCacheKey(STATUS_CACHE_NAMESPACE, sub.txHash);
+    
+    // Use the shared cache to fetch status (same cache as routes/status.ts)
+    // This prevents N clients from creating N independent RPC polls
+    const status = await getOrCompute(
+      cacheKey,
+      CACHE_TTL.status,
+      async () => {
+        return sorobanService.getTransactionStatus(sub.txHash);
+      }
+    );
+    
     const currentStatus = status.status;
 
     if (currentStatus !== sub.lastStatus) {

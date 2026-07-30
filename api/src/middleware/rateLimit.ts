@@ -14,6 +14,7 @@ const TIER_LIMITS: Record<string, number> = {
 
 export const FUND_ENDPOINT_LIMIT = 10;
 export const IP_RATE_LIMIT = 100;
+export const TELEMETRY_ENDPOINT_LIMIT = 20; // Stricter limit for telemetry — no auth required
 
 const abuseCache = new NodeCache({ stdTTL: 300 });
 const ipBanCache = new NodeCache({ stdTTL: 3600 });
@@ -79,6 +80,7 @@ function createLimiter(max: number, keyPrefix: string) {
 
 const ipLimiter = createLimiter(IP_RATE_LIMIT, 'ip_');
 const fundLimiter = createLimiter(FUND_ENDPOINT_LIMIT, 'fund_');
+const telemetryLimiter = createLimiter(TELEMETRY_ENDPOINT_LIMIT, 'telemetry_');
 const tierLimiters = {
   low: createLimiter(TIER_LIMITS.low, 'tier_low_'),
   standard: createLimiter(TIER_LIMITS.standard, 'tier_std_'),
@@ -110,6 +112,9 @@ export function tierRateLimitMiddleware(req: Request, res: Response, next: NextF
 
 /** Fund endpoint rate limit — 10 req/min per API key or IP. */
 export const fundEndpointRateLimit = fundLimiter;
+
+/** Telemetry endpoint rate limit — 20 req/min per IP (stricter, no auth required). */
+export const telemetryRateLimit = telemetryLimiter;
 
 export function applyRateLimitHeaders(_req: Request, res: Response, next: NextFunction) {
   res.on('finish', () => {
