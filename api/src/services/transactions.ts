@@ -178,20 +178,6 @@ export function withdrawAccumulatedFees(): { withdrawn: string; status: 'complet
   return { withdrawn, status: 'completed' };
 }
 
-export function getHealthSnapshot() {
-  return {
-    status: 'ok',
-    timestamp: Date.now(),
-    services: {
-      api: { status: 'ok' },
-      soroban: { status: 'ok', circuitState: 'closed' },
-      moonpay: { status: 'ok', circuitState: 'closed' },
-      transak: { status: 'ok', circuitState: 'closed' },
-      cex: { status: 'ok', circuitState: 'closed' },
-    },
-  };
-}
-
 export function recordAdminAction(action: string, details: Record<string, unknown>, actor = 'admin') {
   adminAuditLog.push({ ts: Date.now(), action, actor, details });
 }

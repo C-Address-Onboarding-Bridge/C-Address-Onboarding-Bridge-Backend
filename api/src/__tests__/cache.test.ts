@@ -69,6 +69,7 @@ vi.mock('../config', () => ({
   config: {
     redis: {
       url: 'redis://localhost:6379',
+      enabled: true,
       quoteTtlSeconds: 30,
       statusTtlSeconds: 10,
       cexTtlSeconds: 60,

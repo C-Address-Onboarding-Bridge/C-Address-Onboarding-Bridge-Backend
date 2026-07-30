@@ -7,6 +7,7 @@ import { processMetrics } from './processors/metrics';
 import { processCleanup } from './processors/cleanup';
 import { processAuditLog } from './processors/asyncAuditLog';
 import { processAsyncPipeline } from './processors/asyncPipeline';
+import { processWebhookRetry } from './processors/webhookRetry';
 
 const logger = pino({ level: config.logLevel });
 
@@ -31,6 +32,7 @@ export function startWorkers(): Worker[] {
     new Worker('cleanup', processCleanup, makeWorkerOptions(config.jobs.concurrency.cleanup)),
     new Worker('async-critical', processAuditLog, makeWorkerOptions(config.jobs.concurrency.asyncAudit)),
     new Worker('async-pipeline', processAsyncPipeline, makeWorkerOptions(config.jobs.concurrency.asyncPipeline)),
+    new Worker('webhook-retry', processWebhookRetry, makeWorkerOptions(config.jobs.concurrency.webhookRetry)),
   ];
 
   for (const worker of workers) {
