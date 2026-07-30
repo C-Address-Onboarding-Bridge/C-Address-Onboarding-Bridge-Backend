@@ -3,7 +3,6 @@ import { requireScopes } from '../middleware/rbacAuth';
 import {
   getAdminAuditLog,
   getFeeConfig,
-  getHealthSnapshot,
   getTransactionStats,
   recordAdminAction,
   updateFeeConfig,
@@ -11,6 +10,9 @@ import {
 } from '../services/transactions';
 import { AuditEventType, integrityAuditLog } from '../services/auditLog';
 import { enqueueAudit } from '../services/asyncPipeline';
+import { circuitBreakers } from '../index';
+import { getHealthStatus } from '../services/health';
+import { isRedisEnabled, getCacheMetrics } from '../services/cache';
 
 export const adminRouter = Router();
 
@@ -65,8 +67,20 @@ adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), (req: Request, r
   res.json(result);
 });
 
-adminRouter.get('/health', requireScopes('admin:keys'), (_req: Request, res: Response) => {
-  res.json(getHealthSnapshot());
+adminRouter.get('/health', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  const circuits: Record<string, string> = {};
+  for (const [name, cb] of circuitBreakers) {
+    circuits[name] = cb.getState();
+  }
+
+  const health = await getHealthStatus();
+  const statusCode = health.status === 'unhealthy' ? 503 : health.status === 'degraded' ? 207 : 200;
+
+  res.status(statusCode).json({
+    ...health,
+    circuits,
+    cache: { redis: isRedisEnabled(), metrics: getCacheMetrics() },
+  });
 });
 
 adminRouter.get('/audit/integrity', requireScopes('admin:keys'), (req: Request, res: Response) => {

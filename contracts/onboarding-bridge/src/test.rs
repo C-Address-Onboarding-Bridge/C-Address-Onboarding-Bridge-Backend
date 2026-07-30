@@ -888,6 +888,29 @@ fn test_set_fee_accepts_below_max() {
     assert_eq!(bridge.fee_bps(), 100);
 }
 
+#[test]
+fn test_initialization_params_stays_consistent_after_fee_change() {
+    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 50, 1000);
+
+    // Right after init, both views must agree.
+    assert_eq!(bridge.fee_bps(), 50);
+    assert_eq!(bridge.initialization_params().fee_bps, 50);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::SetFee(300),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+
+    // After a governance-approved fee change, initialization_params() must
+    // no longer report the stale deploy-time fee_bps.
+    assert_eq!(bridge.fee_bps(), 300);
+    assert_eq!(bridge.initialization_params().fee_bps, 300);
+    assert_eq!(bridge.initialization_params().fee_bps, bridge.fee_bps());
+}
+
 // ===========================================================================
 // Task 4: Multisig Governance Tests
 // ===========================================================================
@@ -1024,6 +1047,141 @@ fn test_get_active_proposals() {
     assert_eq!(active.get_unchecked(0).id, pid3);
 }
 
+// ===========================================================================
+// Proposal storage pruning tests
+// ===========================================================================
+
+/// Instance storage can only be inspected from within the contract's own
+/// execution context, so tests that peek at raw `DataKey` presence wrap the
+/// check with `env.as_contract(&bridge_address, ...)`.
+fn proposal_exists(env: &Env, bridge_address: &Address, id: u32) -> bool {
+    env.as_contract(bridge_address, || {
+        env.storage().instance().has(&DataKey::Proposal(id))
+    })
+}
+
+fn approval_exists(env: &Env, bridge_address: &Address, id: u32, admin: &Address) -> bool {
+    env.as_contract(bridge_address, || {
+        env.storage()
+            .instance()
+            .has(&DataKey::ProposalApproval(id, admin.clone()))
+    })
+}
+
+#[test]
+fn test_prune_proposals_removes_executed_and_expired() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+    let approver = admins.get_unchecked(1);
+
+    let pid1 = bridge.propose(&proposer, &ProposalAction::SetFee(200), &1000);
+    bridge.approve(&approver, &pid1);
+    bridge.execute(&pid1);
+
+    let pid2 = bridge.propose(&proposer, &ProposalAction::SetFee(300), &10);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 20);
+
+    assert!(proposal_exists(&env, &bridge.address, pid1));
+    assert!(proposal_exists(&env, &bridge.address, pid2));
+
+    let pruned = bridge.prune_proposals(&10);
+    assert_eq!(pruned, 2);
+
+    assert!(!proposal_exists(&env, &bridge.address, pid1));
+    assert!(!proposal_exists(&env, &bridge.address, pid2));
+    assert!(!approval_exists(&env, &bridge.address, pid1, &proposer));
+    assert!(!approval_exists(&env, &bridge.address, pid1, &approver));
+    assert!(!approval_exists(&env, &bridge.address, pid2, &proposer));
+}
+
+#[test]
+fn test_prune_proposals_stops_at_still_active_proposal() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+    let approver = admins.get_unchecked(1);
+
+    let pid1 = bridge.propose(&proposer, &ProposalAction::SetFee(200), &1000);
+    bridge.approve(&approver, &pid1);
+    bridge.execute(&pid1);
+
+    // pid2 is neither executed nor expired — pruning must not skip past it.
+    let pid2 = bridge.propose(&proposer, &ProposalAction::SetFee(300), &1000);
+
+    let pruned = bridge.prune_proposals(&10);
+    assert_eq!(pruned, 1);
+    assert!(!proposal_exists(&env, &bridge.address, pid1));
+    assert!(proposal_exists(&env, &bridge.address, pid2));
+
+    // Once pid2 becomes terminal, a later prune call must still reach it.
+    bridge.approve(&approver, &pid2);
+    bridge.execute(&pid2);
+    let pruned2 = bridge.prune_proposals(&10);
+    assert_eq!(pruned2, 1);
+    assert!(!proposal_exists(&env, &bridge.address, pid2));
+}
+
+#[test]
+fn test_prune_proposals_respects_max_scan() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+    let approver = admins.get_unchecked(1);
+
+    let mut ids: std::vec::Vec<u32> = std::vec::Vec::new();
+    for _ in 0..5 {
+        let pid = bridge.propose(&proposer, &ProposalAction::SetFee(50), &1000);
+        bridge.approve(&approver, &pid);
+        bridge.execute(&pid);
+        ids.push(pid);
+    }
+
+    // Only scan/prune 2 at a time.
+    let pruned = bridge.prune_proposals(&2);
+    assert_eq!(pruned, 2);
+    assert!(!proposal_exists(&env, &bridge.address, ids[0]));
+    assert!(!proposal_exists(&env, &bridge.address, ids[1]));
+    assert!(proposal_exists(&env, &bridge.address, ids[2]));
+
+    let pruned = bridge.prune_proposals(&2);
+    assert_eq!(pruned, 2);
+    assert!(!proposal_exists(&env, &bridge.address, ids[2]));
+    assert!(!proposal_exists(&env, &bridge.address, ids[3]));
+    assert!(proposal_exists(&env, &bridge.address, ids[4]));
+
+    let pruned = bridge.prune_proposals(&2);
+    assert_eq!(pruned, 1);
+    assert!(!proposal_exists(&env, &bridge.address, ids[4]));
+}
+
+/// Guards against the instance-storage-growth regression: however many
+/// propose/approve/execute cycles run, pruning after each one keeps the
+/// resident (non-removed) proposal count at zero rather than accumulating.
+#[test]
+fn test_instance_storage_does_not_grow_unboundedly_with_proposal_cycles() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+    let approver = admins.get_unchecked(1);
+
+    const CYCLES: u32 = 200;
+    for _ in 0..CYCLES {
+        let pid = bridge.propose(&proposer, &ProposalAction::SetFee(50), &1000);
+        bridge.approve(&approver, &pid);
+        bridge.execute(&pid);
+
+        let pruned = bridge.prune_proposals(&10);
+        assert_eq!(pruned, 1);
+
+        assert!(!proposal_exists(&env, &bridge.address, pid));
+        assert!(!approval_exists(&env, &bridge.address, pid, &proposer));
+        assert!(!approval_exists(&env, &bridge.address, pid, &approver));
+    }
+
+    assert_eq!(bridge.get_active_proposals().len(), 0);
+    for id in 1..=CYCLES {
+        assert!(!proposal_exists(&env, &bridge.address, id));
+    }
+}
+
 #[test]
 fn test_proposal_withdraw_fees_execution() {
     let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
@@ -1092,6 +1250,198 @@ fn test_proposal_withdraw_excessive_fees_rejected() {
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
     bridge.execute(&pid);
+}
+
+// ===========================================================================
+// Governed admin rotation / threshold change tests
+// ===========================================================================
+
+#[test]
+fn test_rotate_admins_happy_path() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let new_admin = Address::generate(&env);
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(admins.get_unchecked(0));
+    new_admins.push_back(new_admin.clone());
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins.clone()),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+
+    let stored = bridge.get_admins();
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored.get_unchecked(0), admins.get_unchecked(0));
+    assert_eq!(stored.get_unchecked(1), new_admin);
+
+    // The removed admin can no longer propose/approve.
+    assert!(!bridge.is_paused());
+}
+
+#[test]
+#[should_panic(expected = "only admins can propose")]
+fn test_rotate_admins_removes_old_admin_privileges() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let removed_admin = admins.get_unchecked(1);
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(admins.get_unchecked(0));
+    new_admins.push_back(Address::generate(&env));
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins),
+        &1000,
+    );
+    bridge.approve(&removed_admin, &pid);
+    bridge.execute(&pid);
+
+    // removed_admin is no longer in the admin set — must be rejected.
+    bridge.propose(&removed_admin, &ProposalAction::SetFee(1), &1000);
+}
+
+#[test]
+fn test_rotate_admins_new_admin_can_govern() {
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let new_admin = Address::generate(&env);
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(admins.get_unchecked(0));
+    new_admins.push_back(new_admin.clone());
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+
+    // The newly added admin can now propose/approve/execute.
+    let pid2 = bridge.propose(&new_admin, &ProposalAction::SetFee(250), &1000);
+    bridge.approve(&admins.get_unchecked(0), &pid2);
+    bridge.execute(&pid2);
+    assert_eq!(bridge.fee_bps(), 250);
+}
+
+#[test]
+#[should_panic(expected = "threshold exceeds admin count")]
+fn test_rotate_admins_rejects_below_current_threshold() {
+    let (env, bridge, admins) = setup_env_with_admins(3, 3, 100, 1000);
+    // Threshold is 3, but the new admin set only has 2 members.
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(admins.get_unchecked(0));
+    new_admins.push_back(admins.get_unchecked(1));
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.approve(&admins.get_unchecked(2), &pid);
+    bridge.execute(&pid);
+}
+
+#[test]
+#[should_panic(expected = "admins must not be empty")]
+fn test_rotate_admins_rejects_empty() {
+    let (env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
+    let empty: Vec<Address> = Vec::new(&env);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(empty),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+#[should_panic(expected = "admin address cannot be the contract address")]
+fn test_rotate_admins_rejects_contract_address_as_admin() {
+    let (env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
+    let bridge_address = bridge.address.clone();
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(bridge_address);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+fn test_set_threshold_happy_path() {
+    let (_env, bridge, admins) = setup_env_with_admins(3, 2, 100, 1000);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::SetThreshold(3),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+
+    assert_eq!(bridge.get_threshold(), 3);
+}
+
+#[test]
+#[should_panic(expected = "threshold must be > 0")]
+fn test_set_threshold_rejects_zero() {
+    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::SetThreshold(0),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+}
+
+#[test]
+#[should_panic(expected = "threshold exceeds admin count")]
+fn test_set_threshold_rejects_above_admin_count() {
+    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::SetThreshold(3),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    bridge.execute(&pid);
+}
+
+/// Edge case: lowering the threshold below an already-accrued approval count
+/// on a separate, still-pending proposal must not corrupt state — that
+/// proposal simply becomes immediately executable under the new threshold.
+#[test]
+fn test_set_threshold_below_active_proposal_approval_count() {
+    let (_env, bridge, admins) = setup_env_with_admins(3, 3, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+
+    // fee-change proposal accrues 2 approvals under the original threshold of 3.
+    let fee_pid = bridge.propose(&proposer, &ProposalAction::SetFee(400), &1000);
+    bridge.approve(&admins.get_unchecked(1), &fee_pid);
+    assert_eq!(bridge.get_proposal(&fee_pid).approval_count, 2);
+
+    // Separately, lower the threshold to 2 (itself reaching the 3-approval
+    // threshold first).
+    let threshold_pid = bridge.propose(&proposer, &ProposalAction::SetThreshold(2), &1000);
+    bridge.approve(&admins.get_unchecked(1), &threshold_pid);
+    bridge.approve(&admins.get_unchecked(2), &threshold_pid);
+    bridge.execute(&threshold_pid);
+    assert_eq!(bridge.get_threshold(), 2);
+
+    // fee_pid already had 2 approvals, which now meets the new threshold —
+    // it must be executable without requiring a fresh approval.
+    bridge.execute(&fee_pid);
+    assert_eq!(bridge.fee_bps(), 400);
 }
 
 // ===========================================================================
@@ -1462,7 +1812,7 @@ fn test_storage_usage() {
     assert_eq!(fund_count, 0);
     assert_eq!(archive_count, 0);
     assert_eq!(acc_fees, 0);
-    assert_eq!(hot, 5);
+    assert_eq!(hot, 0);
 
     bridge.fund_c_address(
         &source,
@@ -1472,9 +1822,16 @@ fn test_storage_usage() {
         &String::from_str(&env, "usage test"),
     );
 
-    let (fund_count, _, acc_fees, _) = bridge.storage_usage();
+    let (fund_count, _, acc_fees, hot) = bridge.storage_usage();
     assert_eq!(fund_count, 1);
     assert_eq!(acc_fees, 10);
+    assert_eq!(hot, 1);
+
+    bridge.archive_old_entries(&1);
+
+    let (_, archive_count, _, hot) = bridge.storage_usage();
+    assert_eq!(archive_count, 1);
+    assert_eq!(hot, 0);
 }
 
 #[test]
@@ -1516,6 +1873,48 @@ fn test_archive_old_entries() {
 fn test_archive_no_entries_fails() {
     let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
     bridge.archive_old_entries(&1);
+}
+
+#[test]
+fn test_archive_hash_differs_for_different_records() {
+    // Two independent envs perform the identical sequence of Address::generate
+    // calls, so source/target come out byte-identical across both. Only the
+    // funded amount differs, and only in a high byte: 1000 and 1256 share the
+    // same low byte (0xE8), which is exactly what the old hash implementation
+    // hashed (plus the low byte of `fee`, kept at 0 via fee_bps=0 here). Under
+    // the old truncating implementation these two batches would have hashed
+    // to the same value; the fix must tell them apart.
+    let (env1, bridge1, _admins1) = setup_env_with_admins(1, 1, 0, 1000);
+    let source1 = Address::generate(&env1);
+    let target1 = Address::generate(&env1);
+    let token1 = register_test_token(&env1);
+    TestTokenClient::new(&env1, &token1).mint(&source1, &10000);
+    bridge1.fund_c_address(
+        &source1,
+        &target1,
+        &token1,
+        &1000,
+        &String::from_str(&env1, "same-memo"),
+    );
+    let hash1 = bridge1.archive_old_entries(&1);
+
+    let (env2, bridge2, _admins2) = setup_env_with_admins(1, 1, 0, 1000);
+    let source2 = Address::generate(&env2);
+    let target2 = Address::generate(&env2);
+    let token2 = register_test_token(&env2);
+    TestTokenClient::new(&env2, &token2).mint(&source2, &10000);
+    bridge2.fund_c_address(
+        &source2,
+        &target2,
+        &token2,
+        &1256,
+        &String::from_str(&env2, "same-memo"),
+    );
+    let hash2 = bridge2.archive_old_entries(&1);
+
+    assert_eq!(source1, source2);
+    assert_eq!(target1, target2);
+    assert_ne!(hash1, hash2);
 }
 
 #[test]
@@ -1720,6 +2119,56 @@ fn test_set_rebate_tier_rejects_discount_above_cap() {
     bridge.set_rebate_tier(&0, &1000i128, &5001); // > 5000 bps (50%)
 }
 
+// ===========================================================================
+// Rebate tier count cap tests
+// ===========================================================================
+
+#[test]
+fn test_set_rebate_tier_accepts_up_to_cap() {
+    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    // MAX_TIERS is 50, so indices 0..=49 must all be accepted.
+    for i in 0..50u32 {
+        bridge.set_rebate_tier(&i, &(i as i128 * 100), &10);
+    }
+}
+
+#[test]
+#[should_panic(expected = "tier count exceeds maximum allowed")]
+fn test_set_rebate_tier_rejects_beyond_cap() {
+    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    bridge.set_rebate_tier(&50, &1000i128, &10); // index 50 is the 51st tier, beyond MAX_TIERS
+}
+
+#[test]
+#[should_panic(expected = "tier count exceeds maximum allowed")]
+fn test_set_rebate_tier_rejects_far_beyond_cap() {
+    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    bridge.set_rebate_tier(&10_000, &1000i128, &10);
+}
+
+#[test]
+fn test_set_rebate_tier_update_within_cap_still_allowed() {
+    let (env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    bridge.set_rebate_tier(&0, &1000i128, &100);
+    // Re-registering an existing (in-range) tier index must not be blocked
+    // by the cap check even after many updates.
+    for _ in 0..5 {
+        bridge.set_rebate_tier(&0, &1000i128, &200);
+    }
+    let user = Address::generate(&env);
+    let target = Address::generate(&env);
+    let token_addr = register_test_token(&env);
+    TestTokenClient::new(&env, &token_addr).mint(&user, &5000);
+    bridge.fund_c_address(
+        &user,
+        &target,
+        &token_addr,
+        &2000,
+        &String::from_str(&env, "tier"),
+    );
+    assert_eq!(bridge.rebate_for(&user), 200);
+}
+
 #[test]
 fn test_user_volume_tracks_funding() {
     let (env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
@@ -1796,4 +2245,144 @@ fn test_fund_c_address_above_max_amount_panics() {
         &20_000, // above max_amount of 10_000
         &String::from_str(&env, "above max"),
     );
+}
+
+// ===========================================================================
+// Fee-token whitelist / rate coverage
+// ===========================================================================
+
+#[test]
+fn test_fee_token_whitelist_default_and_toggle() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    assert!(!bridge.is_fee_token_whitelisted(&token));
+
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenWhitelist(token.clone(), true),
+        &1000,
+    );
+    bridge.execute(&pid);
+    assert!(bridge.is_fee_token_whitelisted(&token));
+
+    let pid2 = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenWhitelist(token.clone(), false),
+        &1000,
+    );
+    bridge.execute(&pid2);
+    assert!(!bridge.is_fee_token_whitelisted(&token));
+}
+
+#[test]
+fn test_fee_token_rate_default_and_set() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    assert_eq!(bridge.fee_token_rate(&token), 10000);
+
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 5000),
+        &1000,
+    );
+    bridge.execute(&pid);
+    assert_eq!(bridge.fee_token_rate(&token), 5000);
+}
+
+#[test]
+fn test_fee_token_rate_accepts_bounds() {
+    let (_env, bridge, token, admin) = full_setup(100);
+
+    let pid_min = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 1000),
+        &1000,
+    );
+    bridge.execute(&pid_min);
+    assert_eq!(bridge.fee_token_rate(&token), 1000);
+
+    let pid_max = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 20000),
+        &1000,
+    );
+    bridge.execute(&pid_max);
+    assert_eq!(bridge.fee_token_rate(&token), 20000);
+}
+
+#[test]
+#[should_panic(expected = "rate must be >= 1000")]
+fn test_fee_token_rate_rejects_below_min() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 999),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+#[should_panic(expected = "rate must be <= 20000")]
+fn test_fee_token_rate_rejects_above_max() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 20001),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+fn test_funding_with_whitelisted_fee_token_accrues_token_fees() {
+    let (env, bridge, token, admin) = full_setup(1000); // 10% fee
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    TestTokenClient::new(&env, &token).mint(&source, &10000);
+
+    let pid_wl = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenWhitelist(token.clone(), true),
+        &1000,
+    );
+    bridge.execute(&pid_wl);
+
+    let pid_rate = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 5000), // 50% of the fee
+        &1000,
+    );
+    bridge.execute(&pid_rate);
+
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 0);
+
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token,
+        &1000,
+        &String::from_str(&env, "fee-token"),
+    );
+
+    // fee = 1000 * 1000bps / 10000 = 100; token_fee = 100 * 5000bps / 10000 = 50
+    assert_eq!(bridge.accumulated_fees(), 100);
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 50);
+}
+
+#[test]
+fn test_funding_with_non_whitelisted_token_does_not_accrue_token_fees() {
+    let (env, bridge, token, _admin) = full_setup(1000);
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    TestTokenClient::new(&env, &token).mint(&source, &10000);
+
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token,
+        &1000,
+        &String::from_str(&env, "no-whitelist"),
+    );
+
+    assert_eq!(bridge.accumulated_fees(), 100);
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 0);
 }

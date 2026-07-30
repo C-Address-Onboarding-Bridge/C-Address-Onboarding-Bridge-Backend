@@ -63,7 +63,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── Dev: auto-deploy on every push to main ─────────────────────────────────
+  # ── Dev: auto-deploy on every push to main (single target, fast iteration) ──
   deploy-dev:
     name: Deploy → dev
     runs-on: ubuntu-latest
@@ -89,16 +89,13 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: development
 
-      - name: Deploy
+      - name: Deploy API
         if: env.DEPLOY_HOST != ''
-        run: bash scripts/deploy.sh
+        run: bash scripts/deploy-api.sh
         env:
-          ENVIRONMENT: dev
           IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
-          SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
-          SOROBAN_RPC_URL: ${{ vars.SOROBAN_RPC_URL }}
 
       - name: Smoke tests
         if: env.DEPLOY_HOST != ''
@@ -109,13 +106,12 @@ jobs:
 
       - name: Rollback on failure
         if: failure() && env.DEPLOY_HOST != ''
-        run: bash scripts/deploy.sh --rollback
+        run: bash scripts/deploy-api.sh --rollback
         env:
-          ENVIRONMENT: dev
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
 
-  # ── Staging: manual promote ────────────────────────────────────────────────
+  # ── Staging: manual promote, blue/green for zero-downtime releases ────────
   deploy-staging:
     name: Deploy → staging
     runs-on: ubuntu-latest
@@ -133,33 +129,39 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: staging
 
-      - name: Deploy
-        run: bash scripts/deploy.sh
+      - name: Restore blue/green state
+        uses: actions/cache/restore@v4
+        with:
+          path: deployments/blue-green-state.txt
+          key: blue-green-state-staging
+          restore-keys: blue-green-state-staging-
+
+      - name: Blue/green deploy
+        run: bash scripts/blue-green-deploy.sh
         env:
-          ENVIRONMENT: staging
+          BLUE_URL: ${{ vars.BLUE_APP_URL }}
+          GREEN_URL: ${{ vars.GREEN_APP_URL }}
+          BLUE_DEPLOY_HOST: ${{ secrets.BLUE_DEPLOY_HOST }}
+          GREEN_DEPLOY_HOST: ${{ secrets.GREEN_DEPLOY_HOST }}
           IMAGE_TAG: ${{ github.event.inputs.image_tag || needs.build.outputs.image_tag }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
-          SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
-          SOROBAN_RPC_URL: ${{ vars.SOROBAN_RPC_URL }}
-
-      - name: Smoke tests
-        run: bash scripts/smoke-test.sh
-        env:
-          APP_URL: ${{ vars.APP_URL }}
+          DEPLOY_BLUE_COMMAND: DEPLOY_HOST="$BLUE_DEPLOY_HOST" bash scripts/deploy-api.sh
+          DEPLOY_GREEN_COMMAND: DEPLOY_HOST="$GREEN_DEPLOY_HOST" bash scripts/deploy-api.sh
+          SMOKE_TEST_SCRIPT: scripts/smoke-test.sh
           SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+          POST_SWITCH_CHECK_COMMAND: bash scripts/smoke-test.sh
+          DRAIN_GRACE_SECONDS: '30'
+          WARMUP_WINDOW_SECONDS: '60'
 
-      - name: Rollback on failure
-        if: failure()
-        run: bash scripts/deploy.sh --rollback
-        env:
-          ENVIRONMENT: staging
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+      - name: Save blue/green state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: deployments/blue-green-state.txt
+          key: blue-green-state-staging-${{ github.run_id }}
 
-  # ── Production: 2-approver manual promote ─────────────────────────────────
+  # ── Production: 2-approver manual promote, blue/green for zero-downtime ───
   deploy-production:
     name: Deploy → production
     runs-on: ubuntu-latest
@@ -177,29 +179,33 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
 
-      - name: Deploy
-        run: bash scripts/deploy.sh
+      - name: Restore blue/green state
+        uses: actions/cache/restore@v4
+        with:
+          path: deployments/blue-green-state.txt
+          key: blue-green-state-production
+          restore-keys: blue-green-state-production-
+
+      - name: Blue/green deploy
+        run: bash scripts/blue-green-deploy.sh
         env:
-          ENVIRONMENT: production
+          BLUE_URL: ${{ vars.BLUE_APP_URL }}
+          GREEN_URL: ${{ vars.GREEN_APP_URL }}
+          BLUE_DEPLOY_HOST: ${{ secrets.BLUE_DEPLOY_HOST }}
+          GREEN_DEPLOY_HOST: ${{ secrets.GREEN_DEPLOY_HOST }}
           IMAGE_TAG: ${{ github.event.inputs.image_tag || needs.build.outputs.image_tag }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
-          SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
-          SOROBAN_RPC_URL: ${{ vars.SOROBAN_RPC_URL }}
-          SOROBAN_NETWORK_PASSPHRASE: ${{ secrets.SOROBAN_NETWORK_PASSPHRASE }}
-
-      - name: Smoke tests
-        run: bash scripts/smoke-test.sh
-        env:
-          APP_URL: ${{ vars.APP_URL }}
+          DEPLOY_BLUE_COMMAND: DEPLOY_HOST="$BLUE_DEPLOY_HOST" bash scripts/deploy-api.sh
+          DEPLOY_GREEN_COMMAND: DEPLOY_HOST="$GREEN_DEPLOY_HOST" bash scripts/deploy-api.sh
+          SMOKE_TEST_SCRIPT: scripts/smoke-test.sh
           SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+          POST_SWITCH_CHECK_COMMAND: bash scripts/smoke-test.sh
+          SWITCH_TRAFFIC_COMMAND: ${{ vars.SWITCH_TRAFFIC_COMMAND }}
 
-      - name: Rollback on failure
-        if: failure()
-        run: bash scripts/deploy.sh --rollback
-        env:
-          ENVIRONMENT: production
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+      - name: Save blue/green state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: deployments/blue-green-state.txt
+          key: blue-green-state-production-${{ github.run_id }}

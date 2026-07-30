@@ -323,6 +323,75 @@ describe('BridgeClient.getStatus URL encoding', () => {
   });
 });
 
+describe('BridgeClient stale-while-revalidate', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('returns a stale quote immediately and refreshes it in the background', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const client = new BridgeClient({
+      baseUrl: 'http://localhost:3001',
+      cache: { quoteTtlMs: 10 },
+    });
+    const staleQuote = { estimatedFee: '100', expectedReceive: '9900', feeBps: 100, rate: '1.0' };
+    const freshQuote = { estimatedFee: '200', expectedReceive: '9800', feeBps: 200, rate: '1.0' };
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(staleQuote) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(freshQuote) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const params = { sourceAsset: 'XLM', amount: '10000', targetAddress: VALID_G_ADDR };
+
+    const first = await client.getQuote(params);
+    expect(first).toEqual(staleQuote);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Advance past the 10ms TTL but within the (default) 2x stale-while-revalidate window.
+    vi.setSystemTime(15);
+
+    const second = await client.getQuote(params);
+    expect(second).toEqual(staleQuote); // stale value served immediately, no request awaited
+    expect(fetchMock).toHaveBeenCalledTimes(2); // but a background refresh was triggered
+
+    // Flush the background refresh's promise chain (cache.set happens in a .then()).
+    await vi.advanceTimersByTimeAsync(0);
+
+    const third = await client.getQuote(params);
+    expect(third).toEqual(freshQuote); // cache now holds the refreshed value
+    expect(fetchMock).toHaveBeenCalledTimes(2); // served from cache, no new request
+  });
+
+  it('does not trigger a background refresh for a fresh cache hit', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const client = new BridgeClient({
+      baseUrl: 'http://localhost:3001',
+      cache: { statusTtlMs: 10_000 },
+    });
+    const mockStatus = { status: 'pending' as const, hash: 'abc123' };
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve(mockStatus),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await client.getStatus('abc123');
+    vi.setSystemTime(1000); // well within the 10s TTL
+    const second = await client.getStatus('abc123');
+
+    expect(second).toEqual(mockStatus);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('BridgeClient.runDiagnostics', () => {
   let client: BridgeClient;
 
