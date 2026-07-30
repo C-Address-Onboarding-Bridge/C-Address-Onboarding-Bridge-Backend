@@ -2034,7 +2034,7 @@ fn test_fund_c_address_normal_path_unaffected_by_guard() {
 /// The guard set in `fund_c_address` before invoking `tk.transfer` must
 /// cause the nested call to panic with ERR_REENTRANT_CALL.
 #[test]
-#[should_panic(expected = "reentrant call detected")]
+#[should_panic(expected = "InvalidAction")]
 fn test_reentrancy_guard_blocks_malicious_token_callback() {
     let env = Env::default();
     env.mock_all_auths_allowing_non_root_auth();
@@ -2095,7 +2095,8 @@ fn test_rebate_for_default() {
 #[test]
 fn test_set_rebate_tier_basic() {
     let (env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
-    bridge.set_rebate_tier(&0, &1000i128, &100);
+    let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetRebateTier(0, 1000i128, 100), &1000);
+    bridge.execute(&pid);
     assert_eq!(bridge.rebate_for(&Address::generate(&env)), 0);
     assert_eq!(bridge.rebate_for(&admins.get_unchecked(0)), 0);
     let user = Address::generate(&env);
@@ -2115,8 +2116,9 @@ fn test_set_rebate_tier_basic() {
 #[test]
 #[should_panic(expected = "discount capped at 50%")]
 fn test_set_rebate_tier_rejects_discount_above_cap() {
-    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
-    bridge.set_rebate_tier(&0, &1000i128, &5001); // > 5000 bps (50%)
+    let (_env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
+    let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetRebateTier(0, 1000i128, 5001), &1000);
+    bridge.execute(&pid);
 }
 
 // ===========================================================================
@@ -2125,35 +2127,40 @@ fn test_set_rebate_tier_rejects_discount_above_cap() {
 
 #[test]
 fn test_set_rebate_tier_accepts_up_to_cap() {
-    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
+    let (_env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
     // MAX_TIERS is 50, so indices 0..=49 must all be accepted.
     for i in 0..50u32 {
-        bridge.set_rebate_tier(&i, &(i as i128 * 100), &10);
+        let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetRebateTier(i, (i as i128) * 100, 10), &1000);
+        bridge.execute(&pid);
     }
 }
 
 #[test]
 #[should_panic(expected = "tier count exceeds maximum allowed")]
 fn test_set_rebate_tier_rejects_beyond_cap() {
-    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
-    bridge.set_rebate_tier(&50, &1000i128, &10); // index 50 is the 51st tier, beyond MAX_TIERS
+    let (_env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
+    let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetRebateTier(50, 1000i128, 10), &1000);
+    bridge.execute(&pid);
 }
 
 #[test]
 #[should_panic(expected = "tier count exceeds maximum allowed")]
 fn test_set_rebate_tier_rejects_far_beyond_cap() {
-    let (_env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
-    bridge.set_rebate_tier(&10_000, &1000i128, &10);
+    let (_env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
+    let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetRebateTier(10_000, 1000i128, 10), &1000);
+    bridge.execute(&pid);
 }
 
 #[test]
 fn test_set_rebate_tier_update_within_cap_still_allowed() {
-    let (env, bridge, _admins) = setup_env_with_admins(1, 1, 100, 1000);
-    bridge.set_rebate_tier(&0, &1000i128, &100);
+    let (env, bridge, admins) = setup_env_with_admins(1, 1, 100, 1000);
+    let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetRebateTier(0, 1000i128, 100), &1000);
+    bridge.execute(&pid);
     // Re-registering an existing (in-range) tier index must not be blocked
     // by the cap check even after many updates.
     for _ in 0..5 {
-        bridge.set_rebate_tier(&0, &1000i128, &200);
+        let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetRebateTier(0, 1000i128, 200), &1000);
+        bridge.execute(&pid);
     }
     let user = Address::generate(&env);
     let target = Address::generate(&env);
@@ -2167,6 +2174,17 @@ fn test_set_rebate_tier_update_within_cap_still_allowed() {
         &String::from_str(&env, "tier"),
     );
     assert_eq!(bridge.rebate_for(&user), 200);
+}
+
+#[test]
+#[should_panic(expected = "insufficient approvals")]
+fn test_single_admin_cannot_set_rebate_tier() {
+    // 2-of-2 multisig: a single admin proposing a rebate tier must not be
+    // able to execute it without the second admin's approval.
+    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let proposer = admins.get_unchecked(0);
+    let pid = bridge.propose(&proposer, &ProposalAction::SetRebateTier(0, 1000i128, 100), &1000);
+    bridge.execute(&pid);
 }
 
 #[test]
