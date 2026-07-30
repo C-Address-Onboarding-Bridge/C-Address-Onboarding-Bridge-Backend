@@ -24,13 +24,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Rollback deploy
-        run: bash scripts/deploy.sh --rollback --steps "${{ github.event.inputs.steps }}"
+      # ── dev: single target, roll back directly ─────────────────────────────
+      - name: Rollback deploy (dev)
+        if: github.event.inputs.environment == 'dev'
+        run: bash scripts/deploy-api.sh --rollback
         env:
-          ENVIRONMENT: ${{ github.event.inputs.environment }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+
+      # ── staging/production: blue/green — flip traffic back to the other color ──
+      - name: Restore blue/green state
+        if: github.event.inputs.environment != 'dev'
+        uses: actions/cache/restore@v4
+        with:
+          path: deployments/blue-green-state.txt
+          key: blue-green-state-${{ github.event.inputs.environment }}
+          restore-keys: blue-green-state-${{ github.event.inputs.environment }}-
+
+      - name: Rollback deploy (blue/green)
+        if: github.event.inputs.environment != 'dev'
+        run: bash scripts/blue-green-deploy.sh
+        env:
+          BLUE_URL: ${{ vars.BLUE_APP_URL }}
+          GREEN_URL: ${{ vars.GREEN_APP_URL }}
+          BLUE_DEPLOY_HOST: ${{ secrets.BLUE_DEPLOY_HOST }}
+          GREEN_DEPLOY_HOST: ${{ secrets.GREEN_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          # Rolling back re-asserts each host's previously-running image
+          # rather than shipping IMAGE_TAG, then switches traffic to it.
+          DEPLOY_BLUE_COMMAND: DEPLOY_HOST="$BLUE_DEPLOY_HOST" bash scripts/deploy-api.sh --rollback
+          DEPLOY_GREEN_COMMAND: DEPLOY_HOST="$GREEN_DEPLOY_HOST" bash scripts/deploy-api.sh --rollback
+          SMOKE_TEST_SCRIPT: scripts/smoke-test.sh
+          SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
+          POST_SWITCH_CHECK_COMMAND: bash scripts/smoke-test.sh
+          SWITCH_TRAFFIC_COMMAND: ${{ vars.SWITCH_TRAFFIC_COMMAND }}
+          WARMUP_WINDOW_SECONDS: '0'
+
+      - name: Save blue/green state
+        if: always() && github.event.inputs.environment != 'dev'
+        uses: actions/cache/save@v4
+        with:
+          path: deployments/blue-green-state.txt
+          key: blue-green-state-${{ github.event.inputs.environment }}-${{ github.run_id }}
 
       - name: Rollback migrations
         run: npm run migrate:rollback -w api -- "${{ github.event.inputs.steps }}"
