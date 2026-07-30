@@ -1845,3 +1845,143 @@ fn test_fund_c_address_above_max_amount_panics() {
         &String::from_str(&env, "above max"),
     );
 }
+
+// ===========================================================================
+// Fee-token whitelist / rate coverage
+// ===========================================================================
+
+#[test]
+fn test_fee_token_whitelist_default_and_toggle() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    assert!(!bridge.is_fee_token_whitelisted(&token));
+
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenWhitelist(token.clone(), true),
+        &1000,
+    );
+    bridge.execute(&pid);
+    assert!(bridge.is_fee_token_whitelisted(&token));
+
+    let pid2 = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenWhitelist(token.clone(), false),
+        &1000,
+    );
+    bridge.execute(&pid2);
+    assert!(!bridge.is_fee_token_whitelisted(&token));
+}
+
+#[test]
+fn test_fee_token_rate_default_and_set() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    assert_eq!(bridge.fee_token_rate(&token), 10000);
+
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 5000),
+        &1000,
+    );
+    bridge.execute(&pid);
+    assert_eq!(bridge.fee_token_rate(&token), 5000);
+}
+
+#[test]
+fn test_fee_token_rate_accepts_bounds() {
+    let (_env, bridge, token, admin) = full_setup(100);
+
+    let pid_min = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 1000),
+        &1000,
+    );
+    bridge.execute(&pid_min);
+    assert_eq!(bridge.fee_token_rate(&token), 1000);
+
+    let pid_max = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 20000),
+        &1000,
+    );
+    bridge.execute(&pid_max);
+    assert_eq!(bridge.fee_token_rate(&token), 20000);
+}
+
+#[test]
+#[should_panic(expected = "rate must be >= 1000")]
+fn test_fee_token_rate_rejects_below_min() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 999),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+#[should_panic(expected = "rate must be <= 20000")]
+fn test_fee_token_rate_rejects_above_max() {
+    let (_env, bridge, token, admin) = full_setup(100);
+    let pid = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 20001),
+        &1000,
+    );
+    bridge.execute(&pid);
+}
+
+#[test]
+fn test_funding_with_whitelisted_fee_token_accrues_token_fees() {
+    let (env, bridge, token, admin) = full_setup(1000); // 10% fee
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    TestTokenClient::new(&env, &token).mint(&source, &10000);
+
+    let pid_wl = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenWhitelist(token.clone(), true),
+        &1000,
+    );
+    bridge.execute(&pid_wl);
+
+    let pid_rate = bridge.propose(
+        &admin,
+        &ProposalAction::SetFeeTokenRate(token.clone(), 5000), // 50% of the fee
+        &1000,
+    );
+    bridge.execute(&pid_rate);
+
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 0);
+
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token,
+        &1000,
+        &String::from_str(&env, "fee-token"),
+    );
+
+    // fee = 1000 * 1000bps / 10000 = 100; token_fee = 100 * 5000bps / 10000 = 50
+    assert_eq!(bridge.accumulated_fees(), 100);
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 50);
+}
+
+#[test]
+fn test_funding_with_non_whitelisted_token_does_not_accrue_token_fees() {
+    let (env, bridge, token, _admin) = full_setup(1000);
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    TestTokenClient::new(&env, &token).mint(&source, &10000);
+
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token,
+        &1000,
+        &String::from_str(&env, "no-whitelist"),
+    );
+
+    assert_eq!(bridge.accumulated_fees(), 100);
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 0);
+}
