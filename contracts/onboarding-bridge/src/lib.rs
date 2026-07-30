@@ -61,6 +61,15 @@ use soroban_sdk::{
 
 const TTL_THRESHOLD: u32 = 5000;
 const TTL_EXTEND: u32 = 50000;
+/// Minimum ledgers that must elapse between `propose` and `execute` for
+/// sensitive actions (WithdrawFees, SetFee, Pause). Prevents a single admin
+/// with threshold == 1 from proposing and immediately executing with no
+/// transparency window.
+const MIN_EXEC_DELAY: u32 = 10;
+/// Maximum amount that can be passed to fund_c_address. Ensures the fee
+/// multiplication `amount * effective_fee_bps` never overflows i128.
+/// i128::MAX / 10_000 ≈ 1.7 × 10^34, far above any realistic token amount.
+const MAX_SAFE_AMOUNT: i128 = i128::MAX / 10_000;
 /// Maximum number of rebate tiers an admin may register. `rebate_bps` scans
 /// every tier on each funding call, so this bounds that cost regardless of
 /// how many `set_rebate_tier` calls have ever been made.
@@ -164,6 +173,9 @@ pub struct Proposal {
     pub approval_count: u32,
     pub executed: bool,
     pub expiry: u32,
+    /// Ledger sequence at which the proposal was created. Used to enforce
+    /// the minimum execution delay for sensitive actions.
+    pub proposed_at: u32,
 }
 
 /// #20: Batch analytics view returned by `get_stats`.
@@ -568,6 +580,8 @@ impl OnboardingBridge {
             .unwrap_or(i128::MAX);
         assert!(amount >= min_amt, "amount below minimum");
         assert!(amount <= max_amt, "amount above maximum");
+        // Guard: amount must not overflow the fee multiplication.
+        assert!(amount <= MAX_SAFE_AMOUNT, "amount too large: would overflow fee calculation");
 
         let fee_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         let discount = rebate_bps(env, source);
@@ -897,6 +911,7 @@ impl OnboardingBridge {
             approval_count: 1,
             executed: false,
             expiry: current_block + expiry_blocks,
+            proposed_at: current_block,
         };
 
         env.storage()
@@ -976,6 +991,23 @@ impl OnboardingBridge {
             proposal.approval_count >= threshold,
             "insufficient approvals"
         );
+
+        // Enforce a minimum transparency window for sensitive actions.
+        // Prevents a single admin (threshold == 1) from proposing and
+        // immediately executing WithdrawFees, SetFee, or Pause in the same
+        // ledger with no observation window.
+        let sensitive = matches!(
+            proposal.action,
+            ProposalAction::WithdrawFees(_, _, _)
+                | ProposalAction::SetFee(_)
+                | ProposalAction::Pause
+        );
+        if sensitive {
+            assert!(
+                env.ledger().sequence() >= proposal.proposed_at + MIN_EXEC_DELAY,
+                "execution too soon: minimum delay not elapsed"
+            );
+        }
 
         let mut executed_proposal = proposal.clone();
         executed_proposal.executed = true;

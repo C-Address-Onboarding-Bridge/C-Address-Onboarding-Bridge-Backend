@@ -257,6 +257,13 @@ fn register_test_token(env: &Env) -> Address {
     env.register_contract(None, TestToken)
 }
 
+/// Advance the ledger by `n` sequences so MIN_EXEC_DELAY is satisfied
+/// before executing sensitive proposals (SetFee, Pause, WithdrawFees).
+fn advance_ledger(env: &Env, n: u32) {
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + n);
+}
+
 fn token_balance(env: &Env, token: &Address, who: &Address) -> i128 {
     env.invoke_contract(
         token,
@@ -748,10 +755,11 @@ fn test_is_paused_initial_state() {
 
 #[test]
 fn test_pause_and_unpause() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
 
     let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::Pause, &1000);
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
     assert!(bridge.is_paused());
 
@@ -768,6 +776,7 @@ fn test_fund_c_address_blocked_when_paused() {
 
     let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::Pause, &1000);
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     let source = Address::generate(&env);
@@ -784,6 +793,7 @@ fn test_route_from_exchange_blocked_when_paused() {
 
     let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::Pause, &1000);
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     let exchange = Address::generate(&env);
@@ -807,6 +817,7 @@ fn test_withdraw_fees_works_when_paused() {
 
     let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::Pause, &1000);
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     // Withdraw in the token that accrued the fees — the bridge holds no
@@ -818,6 +829,7 @@ fn test_withdraw_fees_works_when_paused() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &wpid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     let withdrawn = bridge.execute(&wpid);
     assert_eq!(withdrawn, 10);
     assert_eq!(bridge.accumulated_fees(), 0);
@@ -826,10 +838,11 @@ fn test_withdraw_fees_works_when_paused() {
 
 #[test]
 fn test_pause_event_emitted() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
 
     let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::Pause, &1000);
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     assert!(bridge.is_paused());
@@ -849,7 +862,7 @@ fn test_max_fee_bps_immutable_after_init() {
 #[test]
 #[should_panic(expected = "fee exceeds max_fee_bps")]
 fn test_set_fee_rejects_above_max() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 50, 500);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 50, 500);
 
     let pid = bridge.propose(
         &admins.get_unchecked(0),
@@ -857,12 +870,13 @@ fn test_set_fee_rejects_above_max() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 }
 
 #[test]
 fn test_set_fee_accepts_at_max() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 50, 500);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 50, 500);
 
     let pid = bridge.propose(
         &admins.get_unchecked(0),
@@ -870,13 +884,14 @@ fn test_set_fee_accepts_at_max() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
     assert_eq!(bridge.fee_bps(), 500);
 }
 
 #[test]
 fn test_set_fee_accepts_below_max() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 50, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 50, 1000);
 
     let pid = bridge.propose(
         &admins.get_unchecked(0),
@@ -884,13 +899,14 @@ fn test_set_fee_accepts_below_max() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
     assert_eq!(bridge.fee_bps(), 100);
 }
 
 #[test]
 fn test_initialization_params_stays_consistent_after_fee_change() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 50, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 50, 1000);
 
     // Right after init, both views must agree.
     assert_eq!(bridge.fee_bps(), 50);
@@ -902,6 +918,7 @@ fn test_initialization_params_stays_consistent_after_fee_change() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     // After a governance-approved fee change, initialization_params() must
@@ -943,11 +960,12 @@ fn test_approve_increases_count() {
 
 #[test]
 fn test_execute_with_threshold() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
     let proposer = admins.get_unchecked(0);
 
     let pid = bridge.propose(&proposer, &ProposalAction::SetFee(200), &1000);
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     assert_eq!(bridge.fee_bps(), 200);
@@ -1037,6 +1055,7 @@ fn test_get_active_proposals() {
 
     bridge.approve(&admins.get_unchecked(1), &pid1);
     bridge.approve(&admins.get_unchecked(2), &pid1);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid1);
 
     env.ledger()
@@ -1076,6 +1095,7 @@ fn test_prune_proposals_removes_executed_and_expired() {
 
     let pid1 = bridge.propose(&proposer, &ProposalAction::SetFee(200), &1000);
     bridge.approve(&approver, &pid1);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid1);
 
     let pid2 = bridge.propose(&proposer, &ProposalAction::SetFee(300), &10);
@@ -1103,6 +1123,7 @@ fn test_prune_proposals_stops_at_still_active_proposal() {
 
     let pid1 = bridge.propose(&proposer, &ProposalAction::SetFee(200), &1000);
     bridge.approve(&approver, &pid1);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid1);
 
     // pid2 is neither executed nor expired — pruning must not skip past it.
@@ -1115,6 +1136,7 @@ fn test_prune_proposals_stops_at_still_active_proposal() {
 
     // Once pid2 becomes terminal, a later prune call must still reach it.
     bridge.approve(&approver, &pid2);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid2);
     let pruned2 = bridge.prune_proposals(&10);
     assert_eq!(pruned2, 1);
@@ -1131,6 +1153,7 @@ fn test_prune_proposals_respects_max_scan() {
     for _ in 0..5 {
         let pid = bridge.propose(&proposer, &ProposalAction::SetFee(50), &1000);
         bridge.approve(&approver, &pid);
+        advance_ledger(&env, MIN_EXEC_DELAY);
         bridge.execute(&pid);
         ids.push(pid);
     }
@@ -1166,6 +1189,7 @@ fn test_instance_storage_does_not_grow_unboundedly_with_proposal_cycles() {
     for _ in 0..CYCLES {
         let pid = bridge.propose(&proposer, &ProposalAction::SetFee(50), &1000);
         bridge.approve(&approver, &pid);
+        advance_ledger(&env, MIN_EXEC_DELAY);
         bridge.execute(&pid);
 
         let pruned = bridge.prune_proposals(&10);
@@ -1201,6 +1225,7 @@ fn test_proposal_withdraw_fees_execution() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     assert_eq!(bridge.accumulated_fees(), 20);
@@ -1225,6 +1250,7 @@ fn test_proposal_withdraw_all_fees() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     assert_eq!(bridge.accumulated_fees(), 0);
@@ -1249,6 +1275,7 @@ fn test_proposal_withdraw_excessive_fees_rejected() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 }
 
@@ -1321,6 +1348,7 @@ fn test_rotate_admins_new_admin_can_govern() {
     // The newly added admin can now propose/approve/execute.
     let pid2 = bridge.propose(&new_admin, &ProposalAction::SetFee(250), &1000);
     bridge.approve(&admins.get_unchecked(0), &pid2);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid2);
     assert_eq!(bridge.fee_bps(), 250);
 }
@@ -1422,7 +1450,7 @@ fn test_set_threshold_rejects_above_admin_count() {
 /// proposal simply becomes immediately executable under the new threshold.
 #[test]
 fn test_set_threshold_below_active_proposal_approval_count() {
-    let (_env, bridge, admins) = setup_env_with_admins(3, 3, 100, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(3, 3, 100, 1000);
     let proposer = admins.get_unchecked(0);
 
     // fee-change proposal accrues 2 approvals under the original threshold of 3.
@@ -1440,6 +1468,7 @@ fn test_set_threshold_below_active_proposal_approval_count() {
 
     // fee_pid already had 2 approvals, which now meets the new threshold —
     // it must be executable without requiring a fresh approval.
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&fee_pid);
     assert_eq!(bridge.fee_bps(), 400);
 }
@@ -1466,11 +1495,12 @@ fn test_double_initialize_is_noop() {
 
 #[test]
 fn test_set_fee() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 30, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 30, 1000);
     assert_eq!(bridge.fee_bps(), 30);
 
     let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetFee(50), &1000);
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
     assert_eq!(bridge.fee_bps(), 50);
 }
@@ -1485,17 +1515,18 @@ fn test_initial_state() {
 
 #[test]
 fn test_set_fee_zero() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 30, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 30, 1000);
 
     let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetFee(0), &1000);
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
     assert_eq!(bridge.fee_bps(), 0);
 }
 
 #[test]
 fn test_set_fee_max_allowed() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 30, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 30, 1000);
 
     let pid = bridge.propose(
         &admins.get_unchecked(0),
@@ -1503,6 +1534,7 @@ fn test_set_fee_max_allowed() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
     assert_eq!(bridge.fee_bps(), 1000);
 }
