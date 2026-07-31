@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /app
 
 # Copy package files
@@ -12,7 +12,7 @@ RUN npm ci
 # Build workspaces
 RUN npm run build --workspaces
 
-FROM node:20-alpine
+FROM node:25-alpine
 
 # Install development tools
 RUN apk add --no-cache \
