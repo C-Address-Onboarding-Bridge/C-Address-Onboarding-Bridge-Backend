@@ -7,7 +7,22 @@ set -euo pipefail
 APP_URL="${APP_URL:?APP_URL is required}"
 SMOKE_API_KEY="${SMOKE_API_KEY:-}"
 MAX_WAIT="${MAX_WAIT:-60}"   # seconds to wait for the app to become healthy
-INTERVAL=
+INTERVAL=5
+
+log()  { echo "[smoke] $*"; }
+fail() { echo "[smoke] FAIL: $*" >&2; exit 1; }
+
+# ── 1. Wait for health endpoint ────────────────────────────────────────────
+log "Waiting for $APP_URL/health (up to ${MAX_WAIT}s)..."
+elapsed=0
+until curl -sf "$APP_URL/health" > /dev/null; do
+  if (( elapsed >= MAX_WAIT )); then
+    fail "/health did not respond within ${MAX_WAIT}s"
+  fi
+  sleep $INTERVAL
+  elapsed=$(( elapsed + INTERVAL ))
+done
+log "/health OK"
 
 # ── 2. Health response has expected shape ──────────────────────────────────
 body=$(curl -sf "$APP_URL/health")

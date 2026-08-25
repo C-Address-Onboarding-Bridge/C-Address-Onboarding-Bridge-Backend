@@ -54,7 +54,36 @@ DRY_RUN=false
 REINSTALL=false
 SKIP_INIT=false
 CONTRACT_DIR="contracts/onboarding-bridge"
-NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
+ARTIFACTS_DIR="deployments"
+REPORTS_DIR="reports"
+WASM_PATH=""
+CONTRACT_ID=""
+DEPLOY_TX=""
+WASM_HASH=""
+DEPLOY_START_TS=""
+
+# ── parse args ────────────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --network)     NETWORK="$2";      shift 2 ;;
+    --threshold)   THRESHOLD="$2";    shift 2 ;;
+    --fee-bps)     FEE_BPS="$2";      shift 2 ;;
+    --max-fee-bps) MAX_FEE_BPS="$2";  shift 2 ;;
+    --min-amount)  MIN_AMOUNT="$2";   shift 2 ;;
+    --max-amount)  MAX_AMOUNT="$2";   shift 2 ;;
+    --skip-build)  SKIP_BUILD=true;   shift   ;;
+    --dry-run)     DRY_RUN=true;      shift   ;;
+    --reinstall)   REINSTALL=true;    shift   ;;
+    --skip-init)   SKIP_INIT=true;    shift   ;;
+    *) echo "Unknown flag: $1" >&2; exit 1 ;;
+  esac
+done
+
+# ── network config ────────────────────────────────────────────────────────────
+case "$NETWORK" in
+  testnet)
+    RPC_URL="${SOROBAN_RPC_URL:-https://soroban-rpc.testnet.stellar.org}"
+    NETWORK_PASSPHRASE="${SOROBAN_NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
     EXPLORER_CONTRACT="https://stellar.expert/explorer/testnet/contract"
     EXPLORER_TX="https://stellar.expert/explorer/testnet/tx"
     ;;
