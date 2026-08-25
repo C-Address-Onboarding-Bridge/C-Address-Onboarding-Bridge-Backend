@@ -243,23 +243,6 @@ main() {
   # Compress backup
   COMPRESSED_FILE=$(compress_backup "$BACKUP_FILE")
   
-  # Generate checksum
-  CHECKSUM=$(generate_checksum "$COMPRESSED_FILE")
-  CHECKSUM_FILE="${COMPRESSED_FILE}.sha256"
-  
-  # Upload to S3
-  S3_PATH=$(upload_to_s3 "$COMPRESSED_FILE")
-  upload_checksum "$CHECKSUM_FILE"
-  
-  END_TIME=$(date +%s)
-  DURATION=$((END_TIME - START_TIME))
-  
-  # Get backup size
-  BACKUP_SIZE=$(stat -f%z "$COMPRESSED_FILE" 2>/dev/null || stat -c%s "$COMPRESSED_FILE")
-  BACKUP_SIZE_MB=$((BACKUP_SIZE / 1024 / 1024))
-  
-  log "Backup completed successfully"
-  log "Duration: ${DURATION}s"
   log "Size: ${BACKUP_SIZE_MB}MB"
   log "Checksum: $CHECKSUM"
   log "S3 Path: $S3_PATH"

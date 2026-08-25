@@ -214,32 +214,7 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
         status: 'pending',
         estimatedCompletion: '5-30 minutes',
       };
-    } catch (err) {
-      console.error('coinbase API error:', err);
-      return { success: false, withdrawalId: `cb-${Date.now()}`, status: 'failed' };
-    }
-  },
-
-  async kraken(req, config) {
-    const path = '/0/private/Withdraw';
-    try {
-      const nonce = String(Date.now());
-      const body = new URLSearchParams({
-        asset: req.asset,
-        key: req.destinationAddress,
-        amount: req.amount,
-        nonce,
-      }).toString();
-
-      const sha256Hash = crypto.createHash('sha256').update(nonce + body).digest();
-      const message = Buffer.concat([Buffer.from(path), sha256Hash]);
-      const signature = crypto
-        .createHmac('sha512', Buffer.from(config.apiSecret ?? '', 'base64'))
-        .update(message)
-        .digest('base64');
-
-      const res = await postToExchange(`${config.apiBaseUrl}${path}`, {
-        'Content-Type': 'application/x-www-form-urlencoded',
+    } catch (n/x-www-form-urlencoded',
         'API-Key': config.apiKey ?? '',
         'API-Sign': signature,
       }, body);

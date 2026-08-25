@@ -180,25 +180,7 @@ resource "aws_cloudfront_origin_request_policy" "api" {
         "X-Correlation-Id",
         "X-Forwarded-For",
         "Origin"
-      ]
-    }
-  }
-  query_strings_config {
-    query_string_behavior = "all"
-  }
-}
-
-# ─── Response Headers Policy (security headers) ───────────────────────────────
-
-resource "aws_cloudfront_response_headers_policy" "security" {
-  name    = "${var.project_name}-security-headers-${var.environment}"
-  comment = "Security and CORS headers for C-Address Bridge"
-
-  security_headers_config {
-    strict_transport_security {
-      access_control_max_age_sec = 63072000
-      include_subdomains         = true
-      preload                    = true
+      ]  = true
       override                   = true
     }
     content_type_options {

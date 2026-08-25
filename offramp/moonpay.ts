@@ -40,34 +40,6 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
   return `https://buy.moonpay.com?${query.toString()}`;
 }
 
-/**
- * Verifies a MoonPay webhook HMAC-SHA256 signature.
- *
- * @param config - MoonPay credentials (only `secretKey` is used).
- * @param rawBody - Raw request body string received from MoonPay.
- * @param signature - Value of the `x-moonpay-signature` header.
- * @returns `true` when the signature matches, `false` otherwise (including
- * when the signature has a different byte length than the computed HMAC).
- */
-export function verifyMoonpayWebhook(config: MoonpayConfig, rawBody: string, signature: string): boolean {
-  const hmac = crypto.createHmac('sha256', config.secretKey);
-  hmac.update(rawBody);
-  const expectedBuf = Buffer.from(hmac.digest('base64'));
-  const sigBuf = Buffer.from(signature);
-  if (sigBuf.length !== expectedBuf.length) return false;
-  return crypto.timingSafeEqual(sigBuf, expectedBuf);
-}
-
-/**
- * Fetches a real-time buy quote from the MoonPay API.
- *
- * @param config - MoonPay API credentials.
- * @param params - Base currency, amount, and quote currency.
- * @returns Quote amounts and fees from MoonPay.
- * @throws {Error} If the MoonPay API returns a non-2xx response.
- */
-export async function getMoonpayBuyQuote(config: MoonpayConfig, params: {
-  baseCurrency: string;
   baseCurrencyAmount: number;
   quoteCurrency: string;
 }): Promise<{
