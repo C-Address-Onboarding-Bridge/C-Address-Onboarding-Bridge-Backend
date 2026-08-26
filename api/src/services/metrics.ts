@@ -149,14 +149,7 @@ const funderTimestamps = new Map<string, number>();
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
 export function recordUniqueFunder(funderId: string): void {
-  const now = Date.now();
-  funderTimestamps.set(funderId, now);
-
-  const cutoff = now - TWENTY_FOUR_HOURS_MS;
-  for (const [id, ts] of funderTimestamps) {
-    if (ts < cutoff) funderTimestamps.delete(id);
-  }
-  uniqueFundersGauge.set(funderTimestamps.size);
+  throw new Error('Not implemented: recordUniqueFunder');
 }
 
 export interface FundingMetricInput {
@@ -169,41 +162,17 @@ export interface FundingMetricInput {
 }
 
 export function recordFundingMetrics(input: FundingMetricInput): void {
-  const currency = input.currency ?? 'XLM';
-  fundingCount.inc({ source: input.source, status: input.status });
-  transactionStatusCount.inc({ status: input.status, source: input.source });
-
-  if (input.amountStroops) {
-    const amount = parseInt(input.amountStroops, 10);
-    if (!Number.isNaN(amount) && amount > 0) {
-      fundingVolume.inc({ source: input.source, currency }, amount);
-      fundingAmountHistogram.observe({ source: input.source }, amount);
-    }
-  }
-
-  if (input.feeStroops) {
-    const fee = parseInt(input.feeStroops, 10);
-    if (!Number.isNaN(fee) && fee > 0) {
-      feeCollected.inc({ source: input.source, currency }, fee);
-    }
-  }
-
-  if (input.funderId) {
-    recordUniqueFunder(input.funderId);
-  }
+  throw new Error('Not implemented: recordFundingMetrics');
 }
 
 export function setFeeRateBps(bps: number): void {
-  feeRateGauge.set(bps);
+  throw new Error('Not implemented: setFeeRateBps');
 }
 
 const CB_STATE_MAP: Record<string, number> = { closed: 0, open: 1, 'half-open': 2 };
 
 export function updateCircuitBreakerMetrics(circuits: Map<string, { getState(): string }>): void {
-  for (const [name, cb] of circuits) {
-    const state = cb.getState().toLowerCase();
-    circuitBreakerState.set({ service: name }, CB_STATE_MAP[state] ?? 0);
-  }
+  throw new Error('Not implemented: updateCircuitBreakerMetrics');
 }
 
 // ─── Async Pipeline metrics ───────────────────────────────────────────────────

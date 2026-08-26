@@ -106,8 +106,7 @@ export const ipRateLimitMiddleware = (req: Request, res: Response, next: NextFun
 
 /** Per-API-key tier rate limit — applied after RBAC on protected routes. */
 export function tierRateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-  const tier = resolveTier(req);
-  tierLimiters[tier](req, res, next);
+  throw new Error('Not implemented: tierRateLimitMiddleware');
 }
 
 /** Fund endpoint rate limit — 10 req/min per API key or IP. */
@@ -117,112 +116,18 @@ export const fundEndpointRateLimit = fundLimiter;
 export const telemetryRateLimit = telemetryLimiter;
 
 export function applyRateLimitHeaders(_req: Request, res: Response, next: NextFunction) {
-  res.on('finish', () => {
-    if (!res.getHeader('X-RateLimit-Limit') && !res.getHeader('RateLimit-Limit')) {
-      res.set('X-RateLimit-Policy', 'standard');
-    }
-  });
-  next();
+  throw new Error('Not implemented: applyRateLimitHeaders');
 }
 
 export function trackRequestCost(apiKey: string, cost: number): boolean {
-  const key = `cost_${apiKey}`;
-  const current = requestCostCache.get<RequestCost>(key) || { totalCost: 0, requestCount: 0 };
-
-  current.totalCost += cost;
-  current.requestCount++;
-  requestCostCache.set(key, current);
-
-  if (current.totalCost > MAX_REQUEST_COST_PER_KEY) {
-    logger.warn({ apiKey, totalCost: current.totalCost }, 'API key exceeded cost limit');
-    void sendAbuseAlert({
-      type: 'cost_limit_exceeded',
-      ip: 'unknown',
-      apiKeyId: apiKey,
-      details: { totalCost: current.totalCost },
-    });
-    return false;
-  }
-  return true;
+  throw new Error('Not implemented: trackRequestCost');
 }
 
 /**
  * Abuse detection middleware — must run after express.json() so req.body is populated.
  */
 export function fundAbuseDetectionMiddleware(req: Request, res: Response, next: NextFunction) {
-  const ip = req.ip ?? 'unknown';
-  const apiKeyId = req.apiKeyRecord?.id ?? (req.headers['x-api-key'] as string) ?? 'anonymous';
-  const key = `${ip}_${apiKeyId}`;
-
-  if (isIPBanned(ip)) {
-    res.status(403).json({ error: 'forbidden', message: 'IP temporarily banned due to suspicious activity' });
-    return;
-  }
-
-  const activity = abuseCache.get<SuspiciousActivity>(key) || {
-    count: 0,
-    firstSeen: Date.now(),
-    patterns: [],
-    addresses: [],
-  };
-
-  activity.count++;
-  let detectedPattern: string | null = null;
-  const body = req.body as Record<string, unknown> | undefined;
-
-  if (body?.amount && parseInt(String(body.amount), 10) > LARGE_AMOUNT_THRESHOLD) {
-    detectedPattern = 'large_amount';
-  }
-
-  const targetAddress = body?.targetAddress as string | undefined;
-  if (targetAddress) {
-    if (!activity.addresses.includes(targetAddress)) {
-      activity.addresses.push(targetAddress);
-    }
-    if (activity.addresses.length > 10) {
-      detectedPattern = 'multiple_addresses';
-    }
-  }
-
-  const timeSinceFirst = Date.now() - activity.firstSeen;
-  if (timeSinceFirst < 60_000 && activity.count > 20) {
-    detectedPattern = 'rapid_requests';
-  }
-
-  if (detectedPattern) {
-    activity.patterns.push(detectedPattern);
-    abuseCache.set(key, activity);
-
-    if (activity.patterns.filter((p) => p === detectedPattern).length >= SUSPICIOUS_PATTERN_THRESHOLD) {
-      const banCount = (ipBanCache.get<number>(`ban_count_${ip}`) || 0) + 1;
-      ipBanCache.set(`ban_count_${ip}`, banCount);
-
-      if (banCount >= BAN_THRESHOLD) {
-        banIP(ip, detectedPattern);
-        res.status(403).json({ error: 'forbidden', message: 'IP temporarily banned due to suspicious activity' });
-        return;
-      }
-
-      logger.warn({ ip, pattern: detectedPattern, count: activity.count }, 'Suspicious activity detected');
-      void sendAbuseAlert({
-        type: 'suspicious_activity',
-        ip,
-        apiKeyId,
-        pattern: detectedPattern,
-        details: { count: activity.count },
-      });
-    }
-  } else {
-    abuseCache.set(key, activity);
-  }
-
-  const rawKey = req.headers['x-api-key'] as string | undefined;
-  if (rawKey && !trackRequestCost(rawKey, 100)) {
-    res.status(429).json({ error: 'rate_limit', message: 'API key cost limit exceeded' });
-    return;
-  }
-
-  next();
+  throw new Error('Not implemented: fundAbuseDetectionMiddleware');
 }
 
 /** @deprecated Use ipRateLimitMiddleware + fundEndpointRateLimit */

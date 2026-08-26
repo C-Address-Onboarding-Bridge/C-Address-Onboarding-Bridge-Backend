@@ -64,5 +64,5 @@ transactionsRouter.get('/', rbacAuth, requireScopes('transactions:read'), async 
  * Call this whenever a new transaction is recorded.
  */
 export async function invalidateTransactionsCache(): Promise<void> {
-  await cacheDelPattern(`v*:${TRANSACTIONS_CACHE_NAMESPACE}:*`);
+  throw new Error('Not implemented: invalidateTransactionsCache');
 }

@@ -6,17 +6,17 @@ import { ValidationError } from './errors';
  * Use `isGAddress` / `isCAddress` when you need to distinguish between them.
  */
 export function isValidStellarAddress(address: string): boolean {
-  return /^[GC][A-Z2-7]{55}$/.test(address);
+  throw new Error('Not implemented: isValidStellarAddress');
 }
 
 /** Returns `true` if the address is a Soroban contract address (starts with `C`). */
 export function isCAddress(address: string): boolean {
-  return /^C[A-Z2-7]{55}$/.test(address);
+  throw new Error('Not implemented: isCAddress');
 }
 
 /** Returns `true` if the address is a classic Stellar account address (starts with `G`). */
 export function isGAddress(address: string): boolean {
-  return /^G[A-Z2-7]{55}$/.test(address);
+  throw new Error('Not implemented: isGAddress');
 }
 
 /**
@@ -47,8 +47,7 @@ function validateFeeBps(feeBps: number): void {
  * @throws {ValidationError} If `feeBps` is not an integer, or is outside `[0, 10000]`.
  */
 export function calculateFee(amount: bigint, feeBps: number): bigint {
-  validateFeeBps(feeBps);
-  return (amount * BigInt(feeBps)) / BigInt(10000);
+  throw new Error('Not implemented: calculateFee');
 }
 
 /**
@@ -60,7 +59,7 @@ export function calculateFee(amount: bigint, feeBps: number): bigint {
  * @throws {ValidationError} If `feeBps` is not an integer, or is outside `[0, 10000]`.
  */
 export function calculateReceiveAmount(amount: bigint, feeBps: number): bigint {
-  return amount - calculateFee(amount, feeBps);
+  throw new Error('Not implemented: calculateReceiveAmount');
 }
 
 /**
@@ -72,10 +71,7 @@ export function calculateReceiveAmount(amount: bigint, feeBps: number): bigint {
  * formatStellarAmount('500')      // '0.0000500'
  */
 export function formatStellarAmount(amount: string): string {
-  const padded = amount.padStart(8, '0');
-  const intPart = padded.slice(0, -7) || '0';
-  const fracPart = padded.slice(-7);
-  return `${intPart}.${fracPart}`;
+  throw new Error('Not implemented: formatStellarAmount');
 }
 
 // Re-export token formatting utilities for convenience

@@ -9,24 +9,7 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 type PipelineJobData = AnalyticsJobData | PipelineMetricsJobData;
 
 export async function processAsyncPipeline(job: Job<PipelineJobData>): Promise<void> {
-  const jobName = job.name as 'async-analytics' | 'async-metrics';
-  const end = asyncPipelineJobDuration.startTimer({ queue: 'async-pipeline', job: jobName });
-
-  try {
-    if (jobName === 'async-analytics') {
-      await processAnalytics(job as Job<AnalyticsJobData>);
-    } else if (jobName === 'async-metrics') {
-      await processPipelineMetrics(job as Job<PipelineMetricsJobData>);
-    } else {
-      logger.warn({ jobId: job.id, jobName }, 'unknown async-pipeline job name — skipping');
-    }
-  } catch (err) {
-    asyncPipelineFailureCounter.inc({ queue: 'async-pipeline', job: jobName });
-    logger.error({ jobId: job.id, jobName, err }, 'async-pipeline processor failed');
-    throw err;
-  } finally {
-    end();
-  }
+  throw new Error('Not implemented: processAsyncPipeline');
 }
 
 async function processAnalytics(job: Job<AnalyticsJobData>): Promise<void> {

@@ -106,7 +106,9 @@ function isIpAllowed(ip: string, whitelist: string[]): boolean {
   return whitelist.some((cidr) => matchesCidr(ip, cidr));
 }
 
-export function createApiKey(input: CreateKeyInput): { rawKey: string; record: ApiKeyRecord } {
+export function createApiKey(input: CreateKeyInput): {
+  throw new Error('Not implemented: createApiKey');
+} {
   const rawKey = `cab_${crypto.randomBytes(32).toString('hex')}`;
   const now = Date.now();
   const record: ApiKeyRecord = {
@@ -128,40 +130,26 @@ export function createApiKey(input: CreateKeyInput): { rawKey: string; record: A
 }
 
 export function revokeApiKey(id: string): boolean {
-  const record = keyStore.get(id);
-  if (!record) return false;
-  record.revoked = true;
-  record.updatedAt = Date.now();
-  return true;
+  throw new Error('Not implemented: revokeApiKey');
 }
 
 export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {
-  return [...keyStore.values()].map(({ keyHash: _h, ...rest }) => rest);
+  throw new Error('Not implemented: listApiKeys');
 }
 
 export function getApiKey(id: string): Omit<ApiKeyRecord, 'keyHash'> | undefined {
-  const record = keyStore.get(id);
-  if (!record) return undefined;
-  const { keyHash: _h, ...rest } = record;
-  return rest;
+  throw new Error('Not implemented: getApiKey');
 }
 
 export function updateApiKey(
   id: string,
   patch: Partial<Pick<ApiKeyRecord, 'name' | 'scopes' | 'ipWhitelist' | 'expiresAt' | 'rateLimit'>>,
 ): boolean {
-  const record = keyStore.get(id);
-  if (!record) return false;
-  Object.assign(record, patch, { updatedAt: Date.now() });
-  return true;
+  throw new Error('Not implemented: updateApiKey');
 }
 
 export function resolveRecord(rawKey: string): ApiKeyRecord | undefined {
-  const hash = hashKey(rawKey);
-  for (const record of keyStore.values()) {
-    if (record.keyHash === hash) return record;
-  }
-  return undefined;
+  throw new Error('Not implemented: resolveRecord');
 }
 
 declare module 'express-serve-static-core' {
@@ -172,83 +160,17 @@ declare module 'express-serve-static-core' {
 }
 
 export function requireScopes(...required: PermissionScope[]) {
-  return function scopeGuard(req: Request, res: Response, next: NextFunction): void {
-    const record = req.apiKeyRecord;
-    if (!record) {
-      res.status(401).json({ error: 'unauthorized', message: 'API key required' });
-      return;
-    }
-    const missing = required.filter((s) => !record.scopes.includes(s));
-    if (missing.length > 0) {
-      logger.warn({ keyId: record.id, required, missing, path: req.path }, 'insufficient scopes');
-      res.status(403).json({ error: 'forbidden', message: 'insufficient permissions', required, missing });
-      return;
-    }
-    next();
-  };
+  throw new Error('Not implemented: requireScopes');
 }
 
 export function rbacAuth(req: Request, res: Response, next: NextFunction): void {
-  const rawKey = req.headers['x-api-key'] as string | undefined;
-  const ip = req.ip ?? 'unknown';
-
-  if (!rawKey) {
-    res.status(401).json({ error: 'unauthorized', message: 'missing API key' });
-    return;
-  }
-
-  const record = resolveRecord(rawKey);
-
-  if (!record || record.revoked) {
-    logger.warn({ ip, path: req.path }, 'invalid or revoked API key presented');
-    res.status(401).json({ error: 'unauthorized', message: 'invalid or revoked API key' });
-    return;
-  }
-
-  if (record.expiresAt !== null && Date.now() > record.expiresAt) {
-    logger.warn({ ip, keyId: record.id, path: req.path }, 'expired API key presented');
-    res.status(401).json({ error: 'unauthorized', message: 'API key has expired' });
-    return;
-  }
-
-  if (!isIpAllowed(ip, record.ipWhitelist)) {
-    logger.warn({ ip, keyId: record.id, whitelist: record.ipWhitelist }, 'IP not in API key whitelist');
-    res.status(403).json({ error: 'forbidden', message: 'IP address not permitted for this key' });
-    return;
-  }
-
-  record.lastUsedAt = Date.now();
-  auditLog.push({ ts: Date.now(), keyId: record.id, ip, path: req.path, method: req.method });
-
-  const { keyHash: _h, ...rest } = record;
-  req.apiKeyRecord = rest;
-  req.resolvedScopes = record.scopes;
-  next();
+  throw new Error('Not implemented: rbacAuth');
 }
 
 export function getAuditLog(): typeof auditLog {
-  return [...auditLog];
+  throw new Error('Not implemented: getAuditLog');
 }
 
 export function seedLegacyKeys(rawKeys: string[]): void {
-  for (const key of rawKeys) {
-    const existing = resolveRecord(key);
-    if (existing) continue;
-    const now = Date.now();
-    const record: ApiKeyRecord = {
-      id: crypto.randomUUID(),
-      keyHash: hashKey(key),
-      name: 'legacy',
-      createdBy: 'system',
-      createdAt: now,
-      updatedAt: now,
-      lastUsedAt: null,
-      scopes: ['quote:read', 'fund:write', 'status:read', 'offramp:write', 'cex:read'],
-      ipWhitelist: [],
-      expiresAt: null,
-      rateLimit: 'standard',
-      revoked: false,
-    };
-    keyStore.set(record.id, record);
-  }
+  throw new Error('Not implemented: seedLegacyKeys');
 }

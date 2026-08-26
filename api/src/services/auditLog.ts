@@ -74,60 +74,14 @@ function cloneCheckpoint(checkpoint: AuditCheckpoint): AuditCheckpoint {
 }
 
 export function hashPayload(payload: unknown): string {
-  return sha256(stableStringify(payload));
+  throw new Error('Not implemented: hashPayload');
 }
 
 export function verifyAuditChain(
   entries: AuditLogEntry[],
   checkpoints: AuditCheckpoint[] = [],
 ): AuditVerificationResult {
-  const errors: AuditVerificationResult['errors'] = [];
-  let previousHash = GENESIS_HASH;
-  const recomputedHashes = new Map<number, string>();
-
-  entries.forEach((entry, index) => {
-    const expectedSequence = index + 1;
-    if (entry.sequence !== expectedSequence) {
-      errors.push({ sequence: entry.sequence, message: `expected sequence ${expectedSequence}` });
-    }
-    if (entry.previousHash !== previousHash) {
-      errors.push({ sequence: entry.sequence, message: 'previousHash does not match prior entry hash' });
-    }
-    const expectedHash = sha256(entryHashMaterial({
-      sequence: entry.sequence,
-      id: entry.id,
-      timestamp: entry.timestamp,
-      type: entry.type,
-      actor: entry.actor,
-      payload: entry.payload,
-      previousHash: entry.previousHash,
-      retentionUntil: entry.retentionUntil,
-    }));
-    recomputedHashes.set(entry.sequence, expectedHash);
-    if (entry.hash !== expectedHash) {
-      errors.push({ sequence: entry.sequence, message: 'entry hash mismatch' });
-    }
-    previousHash = entry.hash;
-  });
-
-  for (const checkpoint of checkpoints) {
-    const entry = entries[checkpoint.sequence - 1];
-    if (!entry) {
-      errors.push({ sequence: checkpoint.sequence, message: 'checkpoint references missing entry' });
-      continue;
-    }
-    const recomputedHash = recomputedHashes.get(checkpoint.sequence);
-    if (entry.hash !== checkpoint.hash || recomputedHash !== checkpoint.hash) {
-      errors.push({ sequence: checkpoint.sequence, message: 'checkpoint hash does not match recomputed entry hash' });
-    }
-  }
-
-  return {
-    valid: errors.length === 0,
-    entryCount: entries.length,
-    checkpointCount: checkpoints.length,
-    errors,
-  };
+  throw new Error('Not implemented: verifyAuditChain');
 }
 
 export class IntegrityAuditLogService {

@@ -40,7 +40,7 @@ export const SWR_EXTENSION_SECONDS = 5;
  * Format: `v{version}:{namespace}:{discriminator}`
  */
 export function buildCacheKey(namespace: string, discriminator: string): string {
-  return `v${CACHE_VERSION}:${namespace}:${discriminator}`;
+  throw new Error('Not implemented: buildCacheKey');
 }
 
 // ─── Redis singleton ─────────────────────────────────────────────────────────
@@ -138,56 +138,19 @@ export interface CacheMetrics {
 }
 
 export async function cacheGet(key: string): Promise<string | null> {
-  const redis = getClient();
-  if (!redis) return null;
-
-  startMetricsSampler();
-
-  try {
-    const value = await redis.get(key);
-    if (value !== null) {
-      recordHit();
-    } else {
-      recordMiss();
-    }
-    return value;
-  } catch {
-    recordMiss();
-    return null;
-  }
+  throw new Error('Not implemented: cacheGet');
 }
 
 export async function cacheSet(key: string, value: string, ttlSeconds: number): Promise<void> {
-  const redis = getClient();
-  if (!redis) return;
-  try {
-    await redis.set(key, value, 'EX', ttlSeconds);
-  } catch {
-    // Graceful degradation
-  }
+  throw new Error('Not implemented: cacheSet');
 }
 
 export async function cacheDel(key: string): Promise<void> {
-  const redis = getClient();
-  if (!redis) return;
-  try {
-    await redis.del(key);
-  } catch {
-    // Graceful degradation
-  }
+  throw new Error('Not implemented: cacheDel');
 }
 
 export async function cacheDelPattern(pattern: string): Promise<void> {
-  const redis = getClient();
-  if (!redis) return;
-  try {
-    const keys = await redis.keys(pattern);
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
-  } catch {
-    // Graceful degradation
-  }
+  throw new Error('Not implemented: cacheDelPattern');
 }
 
 // ─── Stale-while-revalidate ──────────────────────────────────────────────────
@@ -209,7 +172,9 @@ export interface SWREntry<T = unknown> {
  * Returns `{ value, stale }` where `stale=true` means the entry is past its
  * primary TTL but still within the SWR extension window.
  */
-export async function swrGet<T>(key: string): Promise<{ value: T; stale: boolean } | null> {
+export async function swrGet<T>(key: string): Promise<{
+  throw new Error('Not implemented: swrGet');
+} | null> {
   const redis = getClient();
   if (!redis) return null;
 
@@ -238,17 +203,7 @@ export async function swrGet<T>(key: string): Promise<{ value: T; stale: boolean
  * data is still available during background revalidation.
  */
 export async function swrSet<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
-  const redis = getClient();
-  if (!redis) return;
-  try {
-    const entry: SWREntry<T> = {
-      value,
-      expiresAt: Date.now() + ttlSeconds * 1000,
-    };
-    await redis.set(key, JSON.stringify(entry), 'EX', ttlSeconds + SWR_EXTENSION_SECONDS);
-  } catch {
-    // Graceful degradation
-  }
+  throw new Error('Not implemented: swrSet');
 }
 
 // ─── Single-flight / stampede protection ─────────────────────────────────────
@@ -297,69 +252,8 @@ export async function withSingleFlight<T>(
   fn: () => Promise<T>,
   lockTtlMs = 5000,
 ): Promise<T> {
-  // 1 — In-process deduplication: check for an already-running computation first.
-  const existing = inFlightMap.get(key);
-  if (existing) {
-    return existing as Promise<T>;
-  }
-
-  // 2 — Register the work promise BEFORE any async boundary so that concurrent
-  //     callers that arrive while we're acquiring the Redis lock will see it.
-  const work = (async (): Promise<T> => {
-    // Acquire a Redis lock to protect against multi-instance stampede.
-    const lockKey = `lock:${key}`;
-    const locked = await acquireRedisLock(lockKey, lockTtlMs);
-    try {
-      const result = await fn();
-      return result;
-    } finally {
-      inFlightMap.delete(key);
-      if (locked) {
-        await releaseRedisLock(lockKey);
-      }
-    }
-  })();
-
-  inFlightMap.set(key, work as Promise<string | null>);
-  return work;
-}
-
-// ─── Combined get-or-compute (the main high-level helper) ─────────────────────
-
-/**
- * Attempt to read `key` from the cache using stale-while-revalidate semantics.
- *
- * - Cache HIT (fresh)  → return cached value immediately.
- * - Cache HIT (stale)  → return stale value immediately AND trigger background revalidation.
- * - Cache MISS         → use `withSingleFlight` to compute the value, cache it, and return it.
- *
- * @param key         Cache key.
- * @param ttlSeconds  Primary TTL for fresh data.
- * @param compute     Async factory invoked on cache miss (or background revalidation).
- */
-export async function getOrCompute<T>(
-  key: string,
-  ttlSeconds: number,
-  compute: () => Promise<T>,
-): Promise<T> {
-  const cached = await swrGet<T>(key);
-
-  if (cached !== null) {
-    if (!cached.stale) {
-      // Fresh hit – return immediately.
-      return cached.value;
-    }
-
-    // Stale hit – return immediately but kick off background revalidation.
-    // Fire-and-forget; errors are silently swallowed to avoid impacting the response.
-    setImmediate(() => {
-      withSingleFlight(key, async () => {
-        const fresh = await compute();
-        await swrSet(key, fresh, ttlSeconds);
-        return JSON.stringify(fresh);
-      }).catch(() => {
-        // Background revalidation errors don't affect the caller.
-      });
+  throw new Error('Not implemented: withSingleFlight');
+});
     });
 
     return cached.value;
@@ -376,19 +270,14 @@ export async function getOrCompute<T>(
 // ─── Metrics accessors ────────────────────────────────────────────────────────
 
 export function getCacheMetrics(): CacheMetrics {
-  const total = _hits + _misses;
-  return {
-    hits: _hits,
-    misses: _misses,
-    hitRatio: total > 0 ? _hits / total : 0,
-  };
+  throw new Error('Not implemented: getCacheMetrics');
 }
 
 export function isRedisEnabled(): boolean {
-  return config.redis.enabled;
+  throw new Error('Not implemented: isRedisEnabled');
 }
 
 /** Expose the internal Redis client for callers that need direct access (e.g. tests). */
 export function getCacheClient(): Redis | null {
-  return getClient();
+  throw new Error('Not implemented: getCacheClient');
 }

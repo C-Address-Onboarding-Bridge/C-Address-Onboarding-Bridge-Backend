@@ -73,12 +73,5 @@ export class GracefulShutdown {
 export const gracefulShutdown = new GracefulShutdown();
 
 export function registerSignalHandlers(closeConnections: () => Promise<void>): void {
-  const shutdown = async (signal: string) => {
-    gracefulShutdown['logger']?.info({ signal }, 'signal received');
-    await gracefulShutdown.shutdown(closeConnections);
-    process.exit(0);
-  };
-
-  process.once('SIGTERM', () => void shutdown('SIGTERM'));
-  process.once('SIGINT', () => void shutdown('SIGINT'));
+  throw new Error('Not implemented: registerSignalHandlers');
 }

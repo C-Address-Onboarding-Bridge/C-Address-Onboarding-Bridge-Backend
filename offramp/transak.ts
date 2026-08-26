@@ -31,21 +31,5 @@ const BASE_URLS: Record<string, string> = {
  * @returns Fully-formed URL to open in a browser or WebView.
  */
 export function createTransakWidgetUrl(config: TransakConfig, params: TransakWidgetParams): string {
-  const baseUrl = BASE_URLS[config.environment];
-  const query = new URLSearchParams({
-    apiKey: config.apiKey,
-    walletAddress: params.walletAddress,
-    network: params.network ?? 'stellar',
-  });
-
-  if (params.fiatCurrency) query.set('fiatCurrency', params.fiatCurrency);
-  if (params.cryptoCurrency) query.set('cryptoCurrency', params.cryptoCurrency);
-  if (params.fiatAmount) query.set('fiatAmount', params.fiatAmount.toString());
-  if (params.email) query.set('email', params.email);
-  if (params.redirectUrl) query.set('redirectURL', params.redirectUrl);
-  if (params.partnerFee) query.set('partnerFee', params.partnerFee.toString());
-
-  query.set('themeColor', '#7C3AED');
-
-  return `${baseUrl}?${query.toString()}`;
+  throw new Error('Not implemented: createTransakWidgetUrl');
 }

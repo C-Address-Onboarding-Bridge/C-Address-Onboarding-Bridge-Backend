@@ -44,41 +44,8 @@ function defaultKeyFn(req: Request): string {
 }
 
 export function cacheMiddleware(opts: CacheMiddlewareOptions): RequestHandler {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    if (!isRedisEnabled()) {
-      next();
-      return;
-    }
-
-    const discriminator = opts.key ? opts.key(req) : (opts.keyFn ?? defaultKeyFn)(req);
-
-    const hit = await swrGet<unknown>(discriminator);
-
-    if (hit !== null) {
-      res.setHeader('X-Cache', hit.stale ? 'STALE' : 'HIT');
-      // Instruct downstream caches how long to hold the response.
-      res.setHeader('Cache-Control', `public, max-age=${opts.ttl}`);
-
-      if (hit.stale) {
-        // Background revalidation: intercept the next handler's response and
-        // re-populate the cache, but serve the stale value right now.
-        setImmediate(() => {
-          withSingleFlight(discriminator, async () => {
-            // We can't re-run the handler here without re-creating the request
-            // context, so we mark the key as "needs refresh" by deleting it.
-            // The next real request will fill it again with a fresh value.
-            // For full background refresh, the route handler itself calls
-            // swrSet after computing the value.
-            return null;
-          }).catch(() => {
-            // Ignore background errors.
-          });
-        });
-      }
-
-      res.json(hit.value);
-      return;
-    }
+  throw new Error('Not implemented: cacheMiddleware');
+}
 
     // Cache miss – let the handler run, then intercept res.json to cache the body.
     res.setHeader('X-Cache', 'MISS');

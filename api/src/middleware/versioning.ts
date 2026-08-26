@@ -40,16 +40,5 @@ function resolveVersion(req: Request): ApiVersion {
 }
 
 export function versionCompatibility(req: Request, res: Response, next: NextFunction) {
-  const version = resolveVersion(req);
-  const reqWithVersion = req as Request & { apiVersion?: ApiVersion };
-  reqWithVersion.apiVersion = version;
-
-  res.set('X-API-Version', version);
-  if (version === 'v1') {
-    res.set('Deprecation', 'true');
-    res.set('Sunset', '2027-12-31');
-    res.set('Link', '<https://docs.example.com/api/versioning>; rel="successor-version"');
-  }
-
-  next();
+  throw new Error('Not implemented: versionCompatibility');
 }

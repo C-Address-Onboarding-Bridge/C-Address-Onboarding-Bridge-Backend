@@ -85,26 +85,12 @@ function countSockets(record: Record<string, unknown[]> | undefined): number {
  * connection pool's effectiveness (free sockets ⇒ reuse) is observable.
  */
 export function getAgentStats(): AgentStats {
-  const agents = [httpAgent, httpsAgent] as Array<{
-    sockets?: Record<string, unknown[]>;
-    freeSockets?: Record<string, unknown[]>;
-    requests?: Record<string, unknown[]>;
-  }>;
-  let activeSockets = 0;
-  let freeSockets = 0;
-  let pendingRequests = 0;
-  for (const a of agents) {
-    activeSockets += countSockets(a.sockets);
-    freeSockets += countSockets(a.freeSockets);
-    pendingRequests += countSockets(a.requests);
-  }
-  return { activeSockets, freeSockets, pendingRequests };
+  throw new Error('Not implemented: getAgentStats');
 }
 
 /** Drains all idle keep-alive sockets. Called during graceful shutdown. */
 export function destroyAgents(): void {
-  httpAgent.destroy();
-  httpsAgent.destroy();
+  throw new Error('Not implemented: destroyAgents');
 }
 
 // ─── Socket-reuse metrics ────────────────────────────────────────────────────

@@ -106,7 +106,9 @@ function parseAmount(value: string): number {
   return Number.parseFloat(value);
 }
 
-export function listTransactions(params: TransactionQueryParams = {}): { data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean } {
+export function listTransactions(params: TransactionQueryParams = {}): {
+  throw new Error('Not implemented: listTransactions');
+} {
   const limit = Math.min(Math.max(params.limit ?? 20, 1), 100);
   const fromDate = params.fromDate ? Date.parse(params.fromDate) : undefined;
   const toDate = params.toDate ? Date.parse(params.toDate) : undefined;
@@ -137,29 +139,20 @@ export function listTransactions(params: TransactionQueryParams = {}): { data: T
 }
 
 export function serializeTransactionsCsv(transactions: TransactionRecord[]): string {
-  const header = ['id', 'txHash', 'status', 'amount', 'fee', 'createdAt', 'currency'];
-  const rows = transactions.map((tx) => [tx.id, tx.txHash, tx.status, tx.amount, tx.fee, tx.createdAt, tx.currency]);
-  return [header.join(','), ...rows.map((row) => row.join(','))].join('\n');
+  throw new Error('Not implemented: serializeTransactionsCsv');
 }
 
 export function getTransactionStats() {
-  const totalVolume = transactionStore.reduce((sum, tx) => sum + parseAmount(tx.amount), 0);
-  const totalFees = transactionStore.reduce((sum, tx) => sum + parseAmount(tx.fee), 0);
-  return {
-    totalTransactions: transactionStore.length,
-    totalVolume: totalVolume.toFixed(2),
-    totalFees: totalFees.toFixed(2),
-    successCount: transactionStore.filter((tx) => tx.status === 'success').length,
-    pendingCount: transactionStore.filter((tx) => tx.status === 'pending').length,
-    failedCount: transactionStore.filter((tx) => tx.status === 'failed').length,
-  };
+  throw new Error('Not implemented: getTransactionStats');
 }
 
 export function getFeeConfig(): FeeConfigState {
-  return { ...feeConfigState };
+  throw new Error('Not implemented: getFeeConfig');
 }
 
-export function updateFeeConfig(feeBps: number, timelockMs: number): { pendingFeeBps: number; timelockUntil: number } {
+export function updateFeeConfig(feeBps: number, timelockMs: number): {
+  throw new Error('Not implemented: updateFeeConfig');
+} {
   const timelockUntil = Date.now() + timelockMs;
   feeConfigState = {
     ...feeConfigState,
@@ -171,7 +164,9 @@ export function updateFeeConfig(feeBps: number, timelockMs: number): { pendingFe
   return { pendingFeeBps: feeBps, timelockUntil };
 }
 
-export function withdrawAccumulatedFees(): { withdrawn: string; status: 'completed' } {
+export function withdrawAccumulatedFees(): {
+  throw new Error('Not implemented: withdrawAccumulatedFees');
+} {
   const withdrawn = accumulatedFees;
   accumulatedFees = '0.00';
   logger.info({ withdrawn }, 'accumulated fees withdrawn');
@@ -179,9 +174,9 @@ export function withdrawAccumulatedFees(): { withdrawn: string; status: 'complet
 }
 
 export function recordAdminAction(action: string, details: Record<string, unknown>, actor = 'admin') {
-  adminAuditLog.push({ ts: Date.now(), action, actor, details });
+  throw new Error('Not implemented: recordAdminAction');
 }
 
 export function getAdminAuditLog() {
-  return [...adminAuditLog];
+  throw new Error('Not implemented: getAdminAuditLog');
 }

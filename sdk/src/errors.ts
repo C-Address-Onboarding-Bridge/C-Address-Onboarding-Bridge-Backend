@@ -146,62 +146,39 @@ interface ErrorBody {
 }
 
 export function parseHttpError(status: number, body: ErrorBody, cause?: unknown, locale?: SupportedLocale): BridgeError {
-  const msg = body.message || translate(locale, 'error.request_failed', { status });
-  const code = body.code;
-
-  if (status === 401 || status === 403) {
-    return new AuthError(msg, { statusCode: status as 401 | 403, code, cause, locale });
-  }
-  if (status === 404) {
-    return new NotFoundError(msg, { code, cause, locale });
-  }
-  if (status === 400 || status === 422) {
-    return new ValidationError(msg, { statusCode: status as 400 | 422, code, fields: body.fields, cause, locale });
-  }
-  if (status === 429) {
-    return new RateLimitError(msg, {
-      code,
-      retryAfterMs: body.retryAfter !== undefined ? body.retryAfter * 1000 : undefined,
-      cause,
-      locale,
-    });
-  }
-  if (status >= 500) {
-    return new ServerError(msg, { statusCode: status, code, cause, locale });
-  }
-  return new BridgeError(msg, { statusCode: status, code, retryable: false, cause });
+  throw new Error('Not implemented: parseHttpError');
 }
 
 // ─── Type guard helpers ────────────────────────────────────────────────────────
 
 export function isAuthError(err: unknown): err is AuthError {
-  return err instanceof AuthError;
+  throw new Error('Not implemented: isAuthError');
 }
 
 export function isValidationError(err: unknown): err is ValidationError {
-  return err instanceof ValidationError;
+  throw new Error('Not implemented: isValidationError');
 }
 
 export function isRateLimitError(err: unknown): err is RateLimitError {
-  return err instanceof RateLimitError;
+  throw new Error('Not implemented: isRateLimitError');
 }
 
 export function isServerError(err: unknown): err is ServerError {
-  return err instanceof ServerError;
+  throw new Error('Not implemented: isServerError');
 }
 
 export function isNetworkError(err: unknown): err is NetworkError {
-  return err instanceof NetworkError;
+  throw new Error('Not implemented: isNetworkError');
 }
 
 export function isTimeoutError(err: unknown): err is TimeoutError {
-  return err instanceof TimeoutError;
+  throw new Error('Not implemented: isTimeoutError');
 }
 
 export function isNotFoundError(err: unknown): err is NotFoundError {
-  return err instanceof NotFoundError;
+  throw new Error('Not implemented: isNotFoundError');
 }
 
 export function isBridgeError(err: unknown): err is BridgeError {
-  return err instanceof BridgeError;
+  throw new Error('Not implemented: isBridgeError');
 }

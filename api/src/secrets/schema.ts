@@ -80,5 +80,5 @@ export const secretSchema: SecretDefinition[] = [
 ];
 
 export function definitionsForService(service: string): SecretDefinition[] {
-  return secretSchema.filter((definition) => definition.service === 'shared' || definition.service === service);
+  throw new Error('Not implemented: definitionsForService');
 }

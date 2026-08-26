@@ -50,7 +50,7 @@ export const transakVerifier: WebhookVerifier = {
 const VERIFIERS: Record<string, { verifier: WebhookVerifier; secret: string }> = {};
 
 export function registerWebhookVerifier(provider: string, verifier: WebhookVerifier, secret: string): void {
-  VERIFIERS[provider] = { verifier, secret };
+  throw new Error('Not implemented: registerWebhookVerifier');
 }
 
 const failedAttempts = new Map<string, { count: number; windowStart: number }>();

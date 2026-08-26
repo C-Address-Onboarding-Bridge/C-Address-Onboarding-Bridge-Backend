@@ -92,9 +92,7 @@ export class WithdrawalRouter {
  * @param exchangeName - Exchange identifier.
  */
 export function createCexWithdrawalMemo(targetCAddress: string, exchangeName: string): string {
-  const prefix = exchangeName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
-  const addrSuffix = targetCAddress.slice(-8);
-  return `bridge:${prefix}:${addrSuffix}`;
+  throw new Error('Not implemented: createCexWithdrawalMemo');
 }
 
 /**
@@ -104,8 +102,7 @@ export function createCexWithdrawalMemo(targetCAddress: string, exchangeName: st
  * @param memo - Memo string from a Stellar transaction.
  */
 export function parseCexWithdrawalMemo(memo: string): {
-  exchangeName?: string;
-  targetSuffix?: string;
+  throw new Error('Not implemented: parseCexWithdrawalMemo');
 } {
   const parts = memo.split(':');
   if (parts.length === 3 && parts[0] === 'bridge') {

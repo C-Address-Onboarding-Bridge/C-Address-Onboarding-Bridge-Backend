@@ -55,7 +55,7 @@ async function refreshBackpressure(): Promise<void> {
 }
 
 export function isBackpressured(): boolean {
-  return _backpressured;
+  throw new Error('Not implemented: isBackpressured');
 }
 
 // ─── In-process analytics buffer ─────────────────────────────────────────────
@@ -106,11 +106,7 @@ async function flushAnalyticsBuffer(): Promise<void> {
 
 /** Flush remaining buffer immediately; intended for graceful shutdown. */
 export async function drainAnalyticsBuffer(): Promise<void> {
-  if (_flushTimer !== null) {
-    clearTimeout(_flushTimer);
-    _flushTimer = null;
-  }
-  await flushAnalyticsBuffer();
+  throw new Error('Not implemented: drainAnalyticsBuffer');
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -134,25 +130,7 @@ export function enqueueAudit(
   actor: string,
   syncFallback?: () => void,
 ): void {
-  if (!config.asyncPipeline.enabled) {
-    syncFallback?.();
-    return;
-  }
-
-  const job: AuditLogJobData = { type, payload, actor, triggeredAt: Date.now() };
-
-  // Fire-and-forget — never await this on the response path.
-  enqueueAuditLog(job).then(() => {
-    asyncPipelineEnqueueCounter.inc({ queue: 'async-critical', job: 'async-audit-log' });
-    asyncPipelineQueueDepth.set(
-      { queue: 'async-critical' },
-      0, // depth is sampled separately; here we just ensure the gauge is live
-    );
-  }).catch(() => {
-    // Redis is unavailable — fall back to synchronous execution so the
-    // audit entry is never silently lost.
-    syncFallback?.();
-  });
+  throw new Error('Not implemented: enqueueAudit');
 }
 
 /**
@@ -170,28 +148,7 @@ export function bufferAnalytics(
   labels: Record<string, string>,
   syncFallback?: () => void,
 ): void {
-  if (!config.asyncPipeline.enabled) {
-    syncFallback?.();
-    return;
-  }
-
-  // Refresh backpressure asynchronously — never block on it.
-  void refreshBackpressure();
-
-  if (_backpressured) {
-    asyncPipelineDroppedCounter.inc({ job: event });
-    return; // drop silently; analytics are best-effort
-  }
-
-  const key = bufferKey(event, labels);
-  const existing = analyticsBuffer.get(key);
-  if (existing) {
-    existing.value++;
-  } else {
-    analyticsBuffer.set(key, { event, labels, value: 1 });
-  }
-
-  scheduleFlush();
+  throw new Error('Not implemented: bufferAnalytics');
 }
 
 /**
@@ -207,27 +164,7 @@ export function enqueueFundingMetrics(
   input: FundingMetricInput,
   syncFallback?: () => void,
 ): void {
-  if (!config.asyncPipeline.enabled) {
-    syncFallback?.();
-    return;
-  }
-
-  void refreshBackpressure();
-
-  if (_backpressured) {
-    // For funding metrics we prefer accuracy over dropping — run sync.
-    syncFallback?.();
-    return;
-  }
-
-  const job: PipelineMetricsJobData = { operation: 'funding', data: input as unknown as Record<string, unknown> };
-
-  enqueuePipelineMetrics(job).then(() => {
-    asyncPipelineEnqueueCounter.inc({ queue: 'async-pipeline', job: 'async-metrics' });
-  }).catch(() => {
-    // Redis down — fall back to sync.
-    syncFallback?.();
-  });
+  throw new Error('Not implemented: enqueueFundingMetrics');
 }
 
 /**
@@ -241,17 +178,17 @@ export function enqueueCounterIncrement(
   labels: Record<string, string>,
   syncFallback?: () => void,
 ): void {
-  bufferAnalytics(event, labels, syncFallback);
+  throw new Error('Not implemented: enqueueCounterIncrement');
 }
 
 // ─── Exported test helpers ────────────────────────────────────────────────────
 
 /** Force-set the backpressure state. For tests only. */
 export function _setBackpressuredForTest(value: boolean): void {
-  _backpressured = value;
+  throw new Error('Not implemented: _setBackpressuredForTest');
 }
 
 /** Expose current buffer size. For tests only. */
 export function _getBufferSizeForTest(): number {
-  return analyticsBuffer.size;
+  throw new Error('Not implemented: _getBufferSizeForTest');
 }

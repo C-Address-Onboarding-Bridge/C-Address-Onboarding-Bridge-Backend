@@ -58,44 +58,9 @@ async function checkRedis(): Promise<DependencyCheck> {
 }
 
 export async function getHealthStatus(force = false): Promise<HealthResult> {
-  const now = Date.now();
-  if (!force && cachedResult && now < cacheExpiresAt) {
-    return cachedResult;
-  }
-
-  const version = process.env.npm_package_version ?? (config.logging as { version?: string }).version ?? '0.1.0';
-
-  const [soroban, database, redis] = await Promise.allSettled([
-    checkSoroban(),
-    dbHealthCheck(),
-    checkRedis(),
-  ]);
-
-  const resolve = (r: PromiseSettledResult<DependencyCheck>): DependencyCheck =>
-    r.status === 'fulfilled' ? r.value : { ok: false, error: String(r.reason) };
-
-  const deps = {
-    soroban: { ...resolve(soroban), critical: true },
-    database: { ...resolve(database), critical: false },
-    redis: { ...resolve(redis), critical: false },
-  };
-
-  const criticalFailed = Object.values(deps).some((d) => d.critical && !d.ok);
-  const anyFailed = Object.values(deps).some((d) => d.critical && !d.ok || (!d.critical && !d.ok && d.error !== undefined));
-
-  const result: HealthResult = {
-    status: criticalFailed ? 'unhealthy' : anyFailed ? 'degraded' : 'ok',
-    timestamp: now,
-    version,
-    dependencies: deps,
-  };
-
-  cachedResult = result;
-  cacheExpiresAt = now + CACHE_TTL_MS;
-  return result;
+  throw new Error('Not implemented: getHealthStatus');
 }
 
 export function invalidateHealthCache(): void {
-  cachedResult = null;
-  cacheExpiresAt = 0;
+  throw new Error('Not implemented: invalidateHealthCache');
 }

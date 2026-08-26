@@ -61,73 +61,19 @@ function sanitizeErrorMessage(msg: string): string {
 }
 
 export function contentTypeEnforcement(req: Request, res: Response, next: NextFunction): void {
-  const methods = ['POST', 'PUT', 'PATCH'];
-  if (!methods.includes(req.method)) {
-    next();
-    return;
-  }
-
-  const ct = req.headers['content-type'] || '';
-  if (!ct.includes('application/json') && !ct.includes('text/')) {
-    logger.warn({ ip: req.ip, path: req.path, contentType: ct }, 'rejected non-JSON content-type on mutation endpoint');
-    res.status(415).json({ error: 'unsupported_media_type', message: 'Content-Type must be application/json' });
-    return;
-  }
-
-  next();
+  throw new Error('Not implemented: contentTypeEnforcement');
 }
 
 export function requestSizeLimiting(req: Request, res: Response, next: NextFunction): void {
-  const ct = req.headers['content-type'] || '';
-  const contentLength = parseInt(req.headers['content-length'] || '0', 10);
-  const key = Object.keys(SIZE_LIMITS).find((k) => ct.includes(k));
-  const limit = key ? SIZE_LIMITS[key] : DEFAULT_LIMIT;
-
-  if (contentLength > limit) {
-    logger.warn({ ip: req.ip, path: req.path, contentLength, limit }, 'request body too large');
-    res.status(413).json({ error: 'payload_too_large', message: `request body exceeds ${limit} bytes` });
-    return;
-  }
-
-  next();
+  throw new Error('Not implemented: requestSizeLimiting');
 }
 
 export function injectionProtection(req: Request, res: Response, next: NextFunction): void {
-  const candidates = [
-    ...flattenValue(req.body),
-    ...flattenValue(req.query),
-    ...flattenValue(req.params),
-  ];
-
-  if (detectPatterns(candidates, SQL_PATTERNS)) {
-    logger.warn({ ip: req.ip, path: req.path }, 'SQL injection pattern detected');
-    res.status(400).json({ error: 'invalid_input', message: 'request contains disallowed patterns' });
-    return;
-  }
-
-  if (detectPatterns(candidates, NOSQL_PATTERNS)) {
-    logger.warn({ ip: req.ip, path: req.path }, 'NoSQL injection pattern detected');
-    res.status(400).json({ error: 'invalid_input', message: 'request contains disallowed patterns' });
-    return;
-  }
-
-  if (detectPatterns(candidates, XSS_PATTERNS)) {
-    logger.warn({ ip: req.ip, path: req.path }, 'XSS pattern detected');
-    res.status(400).json({ error: 'invalid_input', message: 'request contains disallowed patterns' });
-    return;
-  }
-
-  next();
+  throw new Error('Not implemented: injectionProtection');
 }
 
 export function parameterPollutionProtection(req: Request, res: Response, next: NextFunction): void {
-  if (hasParameterPollution(req.query as Record<string, unknown>)) {
-    logger.warn({ ip: req.ip, path: req.path }, 'parameter pollution detected');
-    res.status(400).json({ error: 'invalid_input', message: 'duplicate query parameters are not allowed' });
-    return;
-  }
-
-  next();
+  throw new Error('Not implemented: parameterPollutionProtection');
 }
 
 const suspiciousIpCounts = new Map<string, { count: number; windowStart: number }>();
@@ -135,43 +81,19 @@ const SUSPICIOUS_WINDOW_MS = 60_000;
 const SUSPICIOUS_THRESHOLD = 10;
 
 export function suspiciousRateLimiting(req: Request, res: Response, next: NextFunction): void {
-  const ip = req.ip ?? 'unknown';
-  if (flagSuspiciousRequest(ip)) {
-    res.status(429).json({ error: 'rate_limited', message: 'too many suspicious requests from this client' });
-    return;
-  }
-  next();
+  throw new Error('Not implemented: suspiciousRateLimiting');
 }
 
 export function flagSuspiciousRequest(ip: string): boolean {
-  const now = Date.now();
-  const entry = suspiciousIpCounts.get(ip);
-
-  if (!entry || now - entry.windowStart > SUSPICIOUS_WINDOW_MS) {
-    suspiciousIpCounts.set(ip, { count: 1, windowStart: now });
-    return false;
-  }
-
-  entry.count++;
-  if (entry.count > SUSPICIOUS_THRESHOLD) {
-    logger.warn({ ip, count: entry.count }, 'IP exceeded suspicious request threshold');
-    return true;
-  }
-
-  return false;
+  throw new Error('Not implemented: flagSuspiciousRequest');
 }
 
 export function xssErrorSanitizer(err: Error, _req: Request, _res: Response, next: NextFunction): void {
-  err.message = sanitizeErrorMessage(err.message);
-  next(err);
+  throw new Error('Not implemented: xssErrorSanitizer');
 }
 
 export { sanitizeErrorMessage };
 
 export function securityMiddleware(req: Request, res: Response, next: NextFunction): void {
-  requestSizeLimiting(req, res, () => {
-    parameterPollutionProtection(req, res, () => {
-      injectionProtection(req, res, next);
-    });
-  });
+  throw new Error('Not implemented: securityMiddleware');
 }

@@ -145,42 +145,34 @@ function getQueues() {
 }
 
 export function getAllQueues(): Queue[] {
-  return getQueues().all;
+  throw new Error('Not implemented: getAllQueues');
 }
 
 export async function closeQueues(): Promise<void> {
-  if (_queues) {
-    await Promise.all(_queues.all.map((q) => q.close()));
-    _queues = null;
-  }
+  throw new Error('Not implemented: closeQueues');
 }
 
 export async function scheduleRecurringJobs(): Promise<void> {
-  const q = getQueues();
-  await q.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { every: config.jobs.metricsIntervalMs } });
-  await q.cleanup.add('cleanup', { olderThanMs: 7 * 24 * 60 * 60 * 1000 }, { repeat: { every: config.jobs.cleanupIntervalMs } });
-  await q.cacheWarmup.add('cache-warmup', { assets: ['XLM', 'USDC'] }, { repeat: { every: 5 * 60 * 1000 } });
+  throw new Error('Not implemented: scheduleRecurringJobs');
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
-  await getQueues().asyncCritical.add('async-audit-log', data);
+  throw new Error('Not implemented: enqueueAuditLog');
 }
 
 export async function enqueueAnalytics(data: AnalyticsJobData): Promise<void> {
-  await getQueues().asyncPipeline.add('async-analytics', data);
+  throw new Error('Not implemented: enqueueAnalytics');
 }
 
 export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Promise<void> {
-  await getQueues().asyncPipeline.add('async-metrics', data);
+  throw new Error('Not implemented: enqueuePipelineMetrics');
 }
 
 export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void> {
-  await getQueues().webhookRetry.add('webhook-retry', data);
+  throw new Error('Not implemented: enqueueWebhookRetry');
 }
 
 /** Returns the number of waiting (not yet picked up) jobs in a queue. */
 export async function getQueueWaitingCount(queueName: 'async-critical' | 'async-pipeline'): Promise<number> {
-  const q = getQueues();
-  const queue = queueName === 'async-critical' ? q.asyncCritical : q.asyncPipeline;
-  return queue.getWaitingCount();
+  throw new Error('Not implemented: getQueueWaitingCount');
 }

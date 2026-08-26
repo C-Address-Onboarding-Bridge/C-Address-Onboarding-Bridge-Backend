@@ -9,6 +9,30 @@
 
 ---
 
+## 📚 This repository is a learning exercise set
+
+Function bodies across this repository have been **intentionally replaced with
+`throw new Error('Not implemented: …')` stubs** so that contributors can implement
+them as guided exercises. Signatures, type definitions, doc comments, and the test
+suite are all intact.
+
+**This is deliberate — the repository is not broken.** If you clone it and find
+that most functions throw, that is the exercise.
+
+Each stub has a corresponding issue describing what to implement. Pick one from the
+[issue tracker](../../issues), implement that single function, and open a PR.
+Because many functions are stubbed at once, the full test suite will not be green —
+run only the tests covering your function:
+
+```bash
+npm test -- -t 'yourFunctionName'
+```
+
+The original implementations remain in git history if you need to check your work
+after submitting.
+
+---
+
 ## The Problem
 
 The shift to C-addresses (Soroban smart accounts) is critical for next-generation dApps on Stellar, but two major adoption blockers persist:

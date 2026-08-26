@@ -105,7 +105,7 @@ const seenHashes = new NodeCache({ stdTTL: SEEN_HASH_TTL_SECONDS, checkperiod: 6
 
 /** Exposed for testing — allows clearing the seen-hash store between tests. */
 export function clearSeenHashes(): void {
-  seenHashes.flushAll();
+  throw new Error('Not implemented: clearSeenHashes');
 }
 
 /** Returns true if the hash has been seen before; records it if not. */
@@ -332,54 +332,5 @@ export function validateXdr(
   xdrString: string,
   opts: XdrValidationOptions = {},
 ): XdrValidationResult {
-  const networkPassphrase = opts.networkPassphrase ?? config.soroban.networkPassphrase;
-  const contractId = opts.contractId ?? config.soroban.bridgeContractId;
-  const maxByteLength = opts.maxByteLength ?? MAX_XDR_BYTE_LENGTH;
-  const skipContractCheck = opts.skipContractCheck ?? false;
-
-  // Rule 1: size guard
-  checkSize(xdrString, maxByteLength);
-
-  // Rule 2: base64 decode
-  const rawBuf = decodeBase64(xdrString);
-
-  // Rule 3: XDR parse
-  const tx = parseEnvelope(rawBuf, networkPassphrase);
-
-  // Rule 4: network passphrase (re-verify with original string for belt-and-suspenders)
-  checkNetworkPassphrase(tx, networkPassphrase);
-
-  // Rule 5: fee range
-  checkFee(tx);
-
-  // Rule 6: time bounds
-  checkTimeBounds(tx);
-
-  // Rule 7: source account
-  checkSourceAccount(tx);
-
-  // Rule 8 + 9: operation type and contract ID
-  checkOperations(tx, contractId, skipContractCheck);
-
-  // Rule 10: duplicate hash
-  const txHash = tx.hash().toString('hex');
-  checkDuplicate(txHash);
-
-  logger.debug(
-    {
-      txHash,
-      source: tx.source,
-      fee: tx.fee,
-      opCount: tx.operations.length,
-    },
-    'xdr-validator: transaction passed all validation rules',
-  );
-
-  return {
-    valid: true,
-    txHash,
-    sourceAccount: tx.source,
-    fee: parseInt(tx.fee, 10),
-    operationCount: tx.operations.length,
-  };
+  throw new Error('Not implemented: validateXdr');
 }

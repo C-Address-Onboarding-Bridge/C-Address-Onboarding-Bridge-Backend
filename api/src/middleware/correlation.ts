@@ -15,32 +15,5 @@ declare global {
 }
 
 export function correlationMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const requestId = (req.headers['x-request-id'] as string) || randomUUID();
-  const correlationId = (req.headers['x-correlation-id'] as string) || requestId;
-  const span = trace.getSpan(context.active());
-  const traceId = span?.spanContext().traceId;
-
-  req.requestId = requestId;
-  req.correlationId = correlationId;
-  req.log = logger.child({ requestId, correlationId, trace_id: traceId });
-
-  res.setHeader('X-Request-ID', requestId);
-  res.setHeader('X-Correlation-ID', correlationId);
-  if (traceId) {
-    res.setHeader('X-Trace-ID', traceId);
-  }
-
-  const start = Date.now();
-
-  res.on('finish', () => {
-    req.log.info({
-      method: req.method,
-      path: req.path,
-      status: res.statusCode,
-      duration_ms: Date.now() - start,
-    }, 'request completed');
-  });
-
-  req.log.info({ method: req.method, path: req.path }, 'request received');
-  next();
+  throw new Error('Not implemented: correlationMiddleware');
 }

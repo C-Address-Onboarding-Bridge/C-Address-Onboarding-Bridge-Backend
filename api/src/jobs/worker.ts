@@ -26,36 +26,11 @@ function makeWorkerOptions(concurrency: number): WorkerOptions {
 }
 
 export function startWorkers(): Worker[] {
-  const workers: Worker[] = [
-    new Worker('cache-warmup', processCacheWarmup, makeWorkerOptions(config.jobs.concurrency.cacheWarmup)),
-    new Worker('metrics-compute', processMetrics, makeWorkerOptions(config.jobs.concurrency.metrics)),
-    new Worker('cleanup', processCleanup, makeWorkerOptions(config.jobs.concurrency.cleanup)),
-    new Worker('async-critical', processAuditLog, makeWorkerOptions(config.jobs.concurrency.asyncAudit)),
-    new Worker('async-pipeline', processAsyncPipeline, makeWorkerOptions(config.jobs.concurrency.asyncPipeline)),
-    new Worker('webhook-retry', processWebhookRetry, makeWorkerOptions(config.jobs.concurrency.webhookRetry)),
-  ];
-
-  for (const worker of workers) {
-    worker.on('completed', (job) => {
-      logger.info({ jobId: job.id, queue: job.queueName }, 'job completed');
-    });
-    worker.on('failed', (job, err) => {
-      logger.error({ jobId: job?.id, queue: job?.queueName, err }, 'job failed');
-    });
-    worker.on('error', (err) => {
-      logger.error({ err }, 'worker error');
-    });
-  }
-
-  logger.info({ count: workers.length }, 'workers started');
-  return workers;
+  throw new Error('Not implemented: startWorkers');
 }
 
 export async function stopWorkers(workers: Worker[]): Promise<void> {
-  logger.info('stopping workers');
-  await Promise.all(workers.map((w) => w.close()));
-  await closeQueues();
-  logger.info('workers stopped');
+  throw new Error('Not implemented: stopWorkers');
 }
 
 // Standalone worker entry point

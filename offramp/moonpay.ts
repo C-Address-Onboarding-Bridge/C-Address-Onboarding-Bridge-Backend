@@ -25,19 +25,7 @@ export interface MoonpayPurchaseParams {
  * @returns Fully-formed URL to open in a browser or WebView.
  */
 export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPurchaseParams): string {
-  const query = new URLSearchParams({
-    apiKey: config.apiKey,
-    walletAddress: params.walletAddress,
-    walletNetwork: params.walletNetwork,
-    currencyCode: params.currencyCode ?? 'xlm',
-  });
-
-  if (params.baseCurrency) query.set('baseCurrency', params.baseCurrency);
-  if (params.baseCurrencyAmount) query.set('baseCurrencyAmount', params.baseCurrencyAmount.toString());
-  if (params.email) query.set('email', params.email);
-  if (params.redirectUrl) query.set('redirectURL', params.redirectUrl);
-
-  return `https://buy.moonpay.com?${query.toString()}`;
+  throw new Error('Not implemented: createMoonpayWidgetUrl');
 }
 
 /**
@@ -50,12 +38,7 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
  * when the signature has a different byte length than the computed HMAC).
  */
 export function verifyMoonpayWebhook(config: MoonpayConfig, rawBody: string, signature: string): boolean {
-  const hmac = crypto.createHmac('sha256', config.secretKey);
-  hmac.update(rawBody);
-  const expectedBuf = Buffer.from(hmac.digest('base64'));
-  const sigBuf = Buffer.from(signature);
-  if (sigBuf.length !== expectedBuf.length) return false;
-  return crypto.timingSafeEqual(sigBuf, expectedBuf);
+  throw new Error('Not implemented: verifyMoonpayWebhook');
 }
 
 /**
@@ -71,9 +54,7 @@ export async function getMoonpayBuyQuote(config: MoonpayConfig, params: {
   baseCurrencyAmount: number;
   quoteCurrency: string;
 }): Promise<{
-  quoteCurrencyAmount: number;
-  feeAmount: number;
-  totalAmount: number;
+  throw new Error('Not implemented: getMoonpayBuyQuote');
 }> {
   const url = `https://api.moonpay.com/v3/currencies/${params.quoteCurrency}/buy_quote`;
   const query = new URLSearchParams({

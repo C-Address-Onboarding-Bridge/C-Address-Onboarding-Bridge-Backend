@@ -8,24 +8,13 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 const idempotencyKeys = new Map<string, { usedAt: number }>();
 
 export function registerIdempotencyKey(key: string): void {
-  idempotencyKeys.set(key, { usedAt: Date.now() });
+  throw new Error('Not implemented: registerIdempotencyKey');
 }
 
 export function isIdempotencyKeyUsed(key: string): boolean {
-  return idempotencyKeys.has(key);
+  throw new Error('Not implemented: isIdempotencyKeyUsed');
 }
 
 export async function processCleanup(job: Job<CleanupData>): Promise<void> {
-  const { olderThanMs } = job.data;
-  const cutoff = Date.now() - olderThanMs;
-  let removed = 0;
-
-  for (const [key, meta] of idempotencyKeys.entries()) {
-    if (meta.usedAt < cutoff) {
-      idempotencyKeys.delete(key);
-      removed++;
-    }
-  }
-
-  logger.info({ removed, cutoffMs: olderThanMs }, 'cleanup complete');
+  throw new Error('Not implemented: processCleanup');
 }
