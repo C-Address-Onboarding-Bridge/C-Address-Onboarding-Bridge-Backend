@@ -46,21 +46,3 @@ function defaultKeyFn(req: Request): string {
 export function cacheMiddleware(opts: CacheMiddlewareOptions): RequestHandler {
   throw new Error('Not implemented: cacheMiddleware');
 }
-
-    // Cache miss – let the handler run, then intercept res.json to cache the body.
-    res.setHeader('X-Cache', 'MISS');
-
-    const originalJson = res.json.bind(res);
-    res.json = (body: unknown): Response => {
-      // Only cache successful responses.
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        swrSet(discriminator, body, opts.ttl).catch(() => {
-          // Don't break the response if caching fails.
-        });
-      }
-      return originalJson(body);
-    };
-
-    next();
-  };
-}
