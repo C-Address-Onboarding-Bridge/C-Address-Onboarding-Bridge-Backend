@@ -24,7 +24,7 @@
     "deploy:blue-green": "bash scripts/blue-green-deploy.sh"
   },
   "dependencies": {
-    "ioredis": "^5.11.1"
+    "ioredis": "^6.0.0"
   },
   "devDependencies": {
     "husky": "^9.1.7",
