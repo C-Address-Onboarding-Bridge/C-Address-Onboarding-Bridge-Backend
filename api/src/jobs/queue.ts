@@ -172,7 +172,8 @@ export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Prom
 }
 
 export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void> {
-  throw new Error('Not implemented: enqueueWebhookRetry');
+  const queues = getQueues();
+  await queues.webhookRetry.add('webhook-retry', data);
 }
 
 /** Returns the number of waiting (not yet picked up) jobs in a queue. */
