@@ -172,9 +172,7 @@ export interface SWREntry<T = unknown> {
  * Returns `{ value, stale }` where `stale=true` means the entry is past its
  * primary TTL but still within the SWR extension window.
  */
-export async function swrGet<T>(key: string): Promise<{
-  throw new Error('Not implemented: swrGet');
-} | null> {
+export async function swrGet<T>(key: string): Promise<{ value: T; stale: boolean } | null> {
   const redis = getClient();
   if (!redis) return null;
 
@@ -253,7 +251,44 @@ export async function withSingleFlight<T>(
   lockTtlMs = 5000,
 ): Promise<T> {
   throw new Error('Not implemented: withSingleFlight');
-});
+}
+
+// ─── Combined get-or-compute (the main high-level helper) ─────────────────────
+
+/**
+ * Attempt to read `key` from the cache using stale-while-revalidate semantics.
+ *
+ * - Cache HIT (fresh)  → return cached value immediately.
+ * - Cache HIT (stale)  → return stale value immediately AND trigger background revalidation.
+ * - Cache MISS         → use `withSingleFlight` to compute the value, cache it, and return it.
+ *
+ * @param key         Cache key.
+ * @param ttlSeconds  Primary TTL for fresh data.
+ * @param compute     Async factory invoked on cache miss (or background revalidation).
+ */
+export async function getOrCompute<T>(
+  key: string,
+  ttlSeconds: number,
+  compute: () => Promise<T>,
+): Promise<T> {
+  const cached = await swrGet<T>(key);
+
+  if (cached !== null) {
+    if (!cached.stale) {
+      // Fresh hit – return immediately.
+      return cached.value;
+    }
+
+    // Stale hit – return immediately but kick off background revalidation.
+    // Fire-and-forget; errors are silently swallowed to avoid impacting the response.
+    setImmediate(() => {
+      withSingleFlight(key, async () => {
+        const fresh = await compute();
+        await swrSet(key, fresh, ttlSeconds);
+        return JSON.stringify(fresh);
+      }).catch(() => {
+        // Background revalidation errors don't affect the caller.
+      });
     });
 
     return cached.value;
@@ -270,14 +305,19 @@ export async function withSingleFlight<T>(
 // ─── Metrics accessors ────────────────────────────────────────────────────────
 
 export function getCacheMetrics(): CacheMetrics {
-  throw new Error('Not implemented: getCacheMetrics');
+  const total = _hits + _misses;
+  return {
+    hits: _hits,
+    misses: _misses,
+    hitRatio: total > 0 ? _hits / total : 0,
+  };
 }
 
 export function isRedisEnabled(): boolean {
-  throw new Error('Not implemented: isRedisEnabled');
+  return config.redis.enabled;
 }
 
 /** Expose the internal Redis client for callers that need direct access (e.g. tests). */
 export function getCacheClient(): Redis | null {
-  throw new Error('Not implemented: getCacheClient');
+  return getClient();
 }
