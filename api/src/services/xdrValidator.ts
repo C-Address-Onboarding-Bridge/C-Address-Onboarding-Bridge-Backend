@@ -105,7 +105,7 @@ const seenHashes = new NodeCache({ stdTTL: SEEN_HASH_TTL_SECONDS, checkperiod: 6
 
 /** Exposed for testing — allows clearing the seen-hash store between tests. */
 export function clearSeenHashes(): void {
-  throw new Error('Not implemented: clearSeenHashes');
+  seenHashes.flushAll();
 }
 
 /** Returns true if the hash has been seen before; records it if not. */

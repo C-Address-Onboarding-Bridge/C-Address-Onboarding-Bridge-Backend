@@ -162,9 +162,57 @@ function handleMessage(client: ClientState, raw: string): void {
 }
 
 export function createWebSocketServer(): WebSocketServer {
-  throw new Error('Not implemented: createWebSocketServer');
+  const wss = new WebSocketServer({ noServer: true });
+
+  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+    const { query } = parseUrl(req.url ?? '', true);
+    const token = typeof query.token === 'string' ? query.token : null;
+
+    if (!validateToken(token)) {
+      ws.close(4401, 'Unauthorized');
+      return;
+    }
+
+    const client: ClientState = {
+      ws,
+      subscriptions: new Map(),
+      isAlive: true,
+      heartbeatId: setInterval(() => {
+        if (!client.isAlive) {
+          cleanup(client);
+          ws.terminate();
+          return;
+        }
+        client.isAlive = false;
+        ws.ping();
+      }, HEARTBEAT_INTERVAL_MS),
+    };
+
+    ws.on('pong', () => {
+      client.isAlive = true;
+    });
+
+    ws.on('message', (data) => {
+      handleMessage(client, data.toString());
+    });
+
+    ws.on('close', () => {
+      cleanup(client);
+    });
+
+    ws.on('error', (err) => {
+      logger.debug({ err }, 'ws client error');
+      cleanup(client);
+    });
+
+    send(ws, { type: 'connected', timestamp: Date.now() });
+  });
+
+  return wss;
 }
 
 export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket: import('net').Socket, head: Buffer): void {
-  throw new Error('Not implemented: handleUpgrade');
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req);
+  });
 }

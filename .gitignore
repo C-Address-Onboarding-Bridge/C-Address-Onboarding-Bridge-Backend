@@ -15,11 +15,7 @@ coverage/
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
-__snapshots__/
-*.snap
 test_snapshots/
-__snapshots__/
-*.snap
 .vitest-cache/
 *.tsbuildinfo
 deployments/*.json
@@ -48,8 +44,6 @@ contracts/onboarding-bridge/fuzz/target/
 examples/java/target/
 
 # Test output / snapshots
-*.snap
-**/__snapshots__/
 vitest-results/
 junit-*.xml
 test-results/
@@ -64,3 +58,9 @@ test-results/
 *.tmp
 *.bak
 .nyc_output/
+
+# Reports
+reports/
+
+# Logs
+logs/
