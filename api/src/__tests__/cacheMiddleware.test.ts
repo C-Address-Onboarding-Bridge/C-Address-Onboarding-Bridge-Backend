@@ -214,4 +214,51 @@ describe('cacheMiddleware', () => {
     // The callback should be invoked to trigger revalidation
     expect(withSingleFlight).toHaveBeenCalled();
   });
+
+  it('does not share cache between different authenticated API keys', async () => {
+    const key = 'shared-cache-key';
+    mockSwrStore.set(key, { value: { data: 'cached-for-key1' }, expiresAt: Date.now() + 30_000 });
+
+    const middleware = cacheMiddleware({ ttl: 30, key: () => key });
+
+    // First request with key1
+    const req1 = makeMockReq({ apiKeyId: 'key-1' });
+    const { res: res1, jsonSpy: jsonSpy1 } = makeMockRes();
+    const next1: NextFunction = vi.fn();
+
+    await middleware(req1, res1, next1);
+    expect(jsonSpy1).toHaveBeenCalledWith({ data: 'cached-for-key1' });
+
+    // Second request with different key2 should not get cached value from key1
+    const req2 = makeMockReq({ apiKeyId: 'key-2' });
+    const { res: res2, jsonSpy: jsonSpy2 } = makeMockRes();
+    const next2: NextFunction = vi.fn();
+
+    // When keys are different, middleware should call next() to recompute
+    // This tests that the default keyFn includes the authenticated caller
+    await middleware(req2, res2, next2);
+
+    // If the bug is present, both would share the same cache entry
+    // The fix would ensure different API keys generate different cache keys
+    expect(next2).toHaveBeenCalledOnce();
+  });
+
+  it('uses Cache-Control: private for authenticated requests', async () => {
+    const key = 'auth-cache-control-key';
+    mockSwrStore.set(key, { value: { x: 1 }, expiresAt: Date.now() + 30_000 });
+
+    const middleware = cacheMiddleware({ ttl: 30, key: () => key });
+    const req = makeMockReq({ apiKeyId: 'secret-key' });
+    const { res, setHeaderSpy } = makeMockRes();
+    const next: NextFunction = vi.fn();
+
+    await middleware(req, res, next);
+
+    // For authenticated requests with per-tenant data, should use Cache-Control: private
+    // to prevent CDNs from caching and sharing between tenants
+    expect(setHeaderSpy).toHaveBeenCalledWith(
+      'Cache-Control',
+      expect.stringContaining('private'),
+    );
+  });
 });
