@@ -149,7 +149,16 @@ const funderTimestamps = new Map<string, number>();
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
 export function recordUniqueFunder(funderId: string): void {
-  throw new Error('Not implemented: recordUniqueFunder');
+  const now = Date.now();
+  funderTimestamps.set(funderId, now);
+
+  for (const [id, ts] of funderTimestamps) {
+    if (now - ts > TWENTY_FOUR_HOURS_MS) {
+      funderTimestamps.delete(id);
+    }
+  }
+
+  uniqueFundersGauge.set(funderTimestamps.size);
 }
 
 export interface FundingMetricInput {
