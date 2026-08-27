@@ -106,4 +106,21 @@ describe('integrity audit admin API', () => {
       global.fetch = globalFetch;
     }
   });
+
+  it('chain verifies across simulated restart using persisted entries', () => {
+    const service1 = new IntegrityAuditLogService({ checkpointInterval: 2 });
+    service1.append('transaction_submission', { hash: 'tx-1' }, 'submitter-1');
+    service1.append('transaction_submission_result', { status: 'submitted' }, 'system');
+    service1.append('fee_withdrawal', { amount: '100' }, 'admin-1');
+
+    const exported = service1.exportJson();
+    expect(exported.entries).toHaveLength(3);
+    expect(exported.checkpoints).toHaveLength(1);
+
+    const service2 = new IntegrityAuditLogService({ checkpointInterval: 2 });
+    const restored = verifyAuditChain(exported.entries, exported.checkpoints);
+    expect(restored.valid).toBe(true);
+    expect(restored.entryCount).toBe(3);
+    expect(restored.checkpointCount).toBe(1);
+  });
 });
