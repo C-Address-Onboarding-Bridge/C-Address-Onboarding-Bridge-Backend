@@ -1,7 +1,7 @@
 import { Worker, WorkerOptions } from 'bullmq';
 import pino from 'pino';
 import { config } from '../config';
-import { getAllQueues, closeQueues } from './queue';
+import { closeQueues } from './queue';
 import { processCacheWarmup } from './processors/cacheWarmup';
 import { processMetrics } from './processors/metrics';
 import { processCleanup } from './processors/cleanup';
@@ -26,11 +26,32 @@ function makeWorkerOptions(concurrency: number): WorkerOptions {
 }
 
 export function startWorkers(): Worker[] {
-  throw new Error('Not implemented: startWorkers');
+  const workers: Worker[] = [];
+
+  workers.push(
+    new Worker('cache-warmup', processCacheWarmup, makeWorkerOptions(2)),
+    new Worker('metrics-compute', processMetrics, makeWorkerOptions(1)),
+    new Worker('cleanup', processCleanup, makeWorkerOptions(1)),
+    new Worker('async-critical', processAuditLog, makeWorkerOptions(5)),
+    new Worker('async-pipeline', processAsyncPipeline, makeWorkerOptions(10)),
+    new Worker('webhook-retry', processWebhookRetry, makeWorkerOptions(3)),
+  );
+
+  workers.forEach(worker => {
+    worker.on('completed', (job) => {
+      logger.debug({ jobId: job.id, queueName: job.queueName }, 'Job completed');
+    });
+    worker.on('failed', (job, err) => {
+      logger.error({ jobId: job?.id, queueName: job?.queueName, error: err.message }, 'Job failed');
+    });
+  });
+
+  return workers;
 }
 
 export async function stopWorkers(workers: Worker[]): Promise<void> {
-  throw new Error('Not implemented: stopWorkers');
+  await Promise.all(workers.map(worker => worker.close()));
+  await closeQueues();
 }
 
 // Standalone worker entry point
