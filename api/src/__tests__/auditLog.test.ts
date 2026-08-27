@@ -83,4 +83,27 @@ describe('integrity audit admin API', () => {
     expect(exported.body.format).toBe('c-address-bridge.audit.v1');
     expect(exported.body.retentionPolicy).toBe('7 years');
   });
+
+  it('falls back to local publisher when checkpoint service returns non-2xx status', async () => {
+    const mockFetch = async () => {
+      return { ok: false, status: 500 } as Response;
+    };
+    const globalFetch = global.fetch;
+    global.fetch = mockFetch as any;
+
+    try {
+      const service = new IntegrityAuditLogService({
+        checkpointInterval: 1,
+        checkpointUrl: 'https://example.com/checkpoint',
+      });
+      service.append('admin_operation', { operation: 'test' }, 'test-actor');
+
+      const checkpoints = service.listCheckpoints();
+      expect(checkpoints).toHaveLength(1);
+      expect(checkpoints[0].publisher).toBe('local');
+      expect(checkpoints[0].publicationRef).toContain('local-fallback');
+    } finally {
+      global.fetch = globalFetch;
+    }
+  });
 });
