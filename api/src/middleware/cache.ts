@@ -44,37 +44,5 @@ function defaultKeyFn(req: Request): string {
 }
 
 export function cacheMiddleware(opts: CacheMiddlewareOptions): RequestHandler {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    if (!isRedisEnabled()) {
-      next();
-      return;
-    }
-
-    const discriminator = opts.key ? opts.key(req) : (opts.keyFn || defaultKeyFn)(req);
-    const cached = await swrGet(discriminator);
-
-    if (cached) {
-      const cacheStatus = cached.stale ? 'STALE' : 'HIT';
-      res.setHeader('X-Cache', cacheStatus);
-      res.setHeader('Cache-Control', `public, max-age=${opts.ttl}`);
-      res.json(cached.value);
-      return;
-    }
-
-    // Cache miss – let the handler run, then intercept res.json to cache the body.
-    res.setHeader('X-Cache', 'MISS');
-
-    const originalJson = res.json.bind(res);
-    res.json = (body: unknown): Response => {
-      // Only cache successful responses.
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        swrSet(discriminator, body, opts.ttl).catch(() => {
-          // Don't break the response if caching fails.
-        });
-      }
-      return originalJson(body);
-    };
-
-    next();
-  };
+  throw new Error('Not implemented: cacheMiddleware');
 }
