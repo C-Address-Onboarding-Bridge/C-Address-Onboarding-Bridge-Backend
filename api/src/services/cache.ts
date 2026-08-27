@@ -40,7 +40,7 @@ export const SWR_EXTENSION_SECONDS = 5;
  * Format: `v{version}:{namespace}:{discriminator}`
  */
 export function buildCacheKey(namespace: string, discriminator: string): string {
-  throw new Error('Not implemented: buildCacheKey');
+  return `v${CACHE_VERSION}:${namespace}:${discriminator}`;
 }
 
 // ─── Redis singleton ─────────────────────────────────────────────────────────
@@ -172,9 +172,7 @@ export interface SWREntry<T = unknown> {
  * Returns `{ value, stale }` where `stale=true` means the entry is past its
  * primary TTL but still within the SWR extension window.
  */
-export async function swrGet<T>(key: string): Promise<{
-  throw new Error('Not implemented: swrGet');
-} | null> {
+export async function swrGet<T>(key: string): Promise<{ value: T; stale: boolean } | null> {
   const redis = getClient();
   if (!redis) return null;
 
@@ -253,18 +251,6 @@ export async function withSingleFlight<T>(
   lockTtlMs = 5000,
 ): Promise<T> {
   throw new Error('Not implemented: withSingleFlight');
-});
-    });
-
-    return cached.value;
-  }
-
-  // Miss – single-flight compute.
-  return withSingleFlight(key, async () => {
-    const value = await compute();
-    await swrSet(key, value, ttlSeconds);
-    return value;
-  });
 }
 
 // ─── Metrics accessors ────────────────────────────────────────────────────────

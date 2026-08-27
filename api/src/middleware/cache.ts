@@ -13,7 +13,7 @@
  */
 
 import { Request, Response, NextFunction, RequestHandler } from 'express';
-import { swrGet, swrSet, withSingleFlight, isRedisEnabled } from '../services/cache';
+import { swrGet, swrSet, isRedisEnabled } from '../services/cache';
 
 export interface CacheMiddlewareOptions {
   /** Primary TTL in seconds (stale entries live for TTL + SWR_EXTENSION_SECONDS). */
@@ -44,15 +44,27 @@ function defaultKeyFn(req: Request): string {
 }
 
 export function cacheMiddleware(opts: CacheMiddlewareOptions): RequestHandler {
-  throw new Error('Not implemented: cacheMiddleware');
-}
+  return async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    if (!isRedisEnabled()) {
+      next();
+      return;
+    }
 
-    // Cache miss – let the handler run, then intercept res.json to cache the body.
+    const discriminator = opts.key ? opts.key(_req) : opts.keyFn ? opts.keyFn(_req) : defaultKeyFn(_req);
+    const cached = await swrGet(discriminator);
+
+    if (cached) {
+      const isStale = cached.stale;
+      res.setHeader('X-Cache', isStale ? 'STALE' : 'HIT');
+      res.setHeader('Cache-Control', `public, max-age=${opts.ttl}`);
+      res.json(cached.value);
+      return;
+    }
+
     res.setHeader('X-Cache', 'MISS');
 
     const originalJson = res.json.bind(res);
     res.json = (body: unknown): Response => {
-      // Only cache successful responses.
       if (res.statusCode >= 200 && res.statusCode < 300) {
         swrSet(discriminator, body, opts.ttl).catch(() => {
           // Don't break the response if caching fails.
