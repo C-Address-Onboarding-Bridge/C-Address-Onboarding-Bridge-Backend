@@ -145,7 +145,7 @@ function getQueues() {
 }
 
 export function getAllQueues(): Queue[] {
-  throw new Error('Not implemented: getAllQueues');
+  return getQueues().all;
 }
 
 export async function closeQueues(): Promise<void> {
