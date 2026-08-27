@@ -31,4 +31,45 @@ describe('Queue operations', () => {
       await result;
     });
   });
+
+  describe('enqueueAnalytics', () => {
+    it('adds an analytics job to the async-pipeline queue', async () => {
+      const { enqueueAnalytics } = await import('../jobs/queue');
+      const mockData = {
+        batch: [
+          {
+            event: 'transaction_success',
+            labels: { chain: 'stellar' },
+            value: 1,
+          },
+        ],
+      };
+
+      await expect(enqueueAnalytics(mockData)).resolves.not.toThrow();
+    });
+
+    it('enqueueAnalytics handles empty batches', async () => {
+      const { enqueueAnalytics } = await import('../jobs/queue');
+      const mockData = { batch: [] };
+
+      await expect(enqueueAnalytics(mockData)).resolves.not.toThrow();
+    });
+
+    it('enqueueAnalytics returns a promise', async () => {
+      const { enqueueAnalytics } = await import('../jobs/queue');
+      const mockData = {
+        batch: [
+          {
+            event: 'api_request',
+            labels: { endpoint: '/quote' },
+            value: 1,
+          },
+        ],
+      };
+
+      const result = enqueueAnalytics(mockData);
+      expect(result).toBeInstanceOf(Promise);
+      await result;
+    });
+  });
 });

@@ -162,7 +162,8 @@ export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
 }
 
 export async function enqueueAnalytics(data: AnalyticsJobData): Promise<void> {
-  throw new Error('Not implemented: enqueueAnalytics');
+  const queues = getQueues();
+  await queues.asyncPipeline.add('async-analytics', data);
 }
 
 export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Promise<void> {
