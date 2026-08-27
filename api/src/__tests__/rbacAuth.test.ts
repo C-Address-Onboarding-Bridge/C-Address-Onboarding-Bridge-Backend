@@ -15,6 +15,7 @@ import {
   rbacAuth,
   requireScopes,
   seedLegacyKeys,
+  getApiKey,
 } from '../middleware/rbacAuth';
 
 function mockReq(overrides: Partial<Request> = {}): Request {
@@ -217,5 +218,52 @@ describe('seedLegacyKeys', () => {
     const countBefore = listApiKeys().length;
     seedLegacyKeys([legacyKey]);
     expect(listApiKeys().length).toBe(countBefore);
+  });
+});
+
+describe('API key persistence across restart', () => {
+  it('created key resolves after simulated restart', () => {
+    const { rawKey, record } = createApiKey({
+      name: 'persistent-key',
+      createdBy: 'test',
+      scopes: ['quote:read'],
+    });
+    const keyId = record.id;
+
+    const req = mockReq({ headers: { 'x-api-key': rawKey } });
+    const { res } = mockRes();
+    const next = vi.fn();
+
+    rbacAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+
+    const key = getApiKey(keyId);
+    expect(key?.name).toBe('persistent-key');
+    expect(key?.scopes).toContain('quote:read');
+  });
+
+  it('revocation is visible across service instances', () => {
+    const { rawKey, record } = createApiKey({
+      name: 'to-revoke',
+      createdBy: 'test',
+      scopes: ['fund:write'],
+    });
+
+    let req = mockReq({ headers: { 'x-api-key': rawKey } });
+    let { res } = mockRes();
+    let next = vi.fn();
+
+    rbacAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+
+    revokeApiKey(record.id);
+
+    req = mockReq({ headers: { 'x-api-key': rawKey } });
+    ({ res } = mockRes());
+    next = vi.fn();
+
+    rbacAuth(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
   });
 });
