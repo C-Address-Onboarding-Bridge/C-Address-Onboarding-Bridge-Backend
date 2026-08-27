@@ -8,7 +8,7 @@ process.env.NODE_ENV = 'test';
 
 // ─── Mock cache service ────────────────────────────────────────────────────────
 
-let mockSwrStore: Map<string, { value: unknown; expiresAt: number }> = new Map();
+const mockSwrStore: Map<string, { value: unknown; expiresAt: number }> = new Map();
 
 vi.mock('../services/cache', () => ({
   isRedisEnabled: vi.fn(() => true),
@@ -191,5 +191,27 @@ describe('cacheMiddleware', () => {
     await middleware(req, res, next);
 
     expect(swrSet).not.toHaveBeenCalled();
+  });
+
+  it('triggers background revalidation on stale hit', async () => {
+    const { withSingleFlight } = await import('../services/cache');
+    const key = 'stale-revalidate-key';
+    // Stale: expiresAt in the past
+    mockSwrStore.set(key, { value: { data: 'old' }, expiresAt: Date.now() - 1000 });
+
+    const middleware = cacheMiddleware({ ttl: 30, key: () => key });
+    const req = makeMockReq();
+    const { res, jsonSpy, setHeaderSpy } = makeMockRes();
+    const next: NextFunction = vi.fn();
+
+    await middleware(req, res, next);
+
+    // Verify stale response is served
+    expect(setHeaderSpy).toHaveBeenCalledWith('X-Cache', 'STALE');
+    expect(jsonSpy).toHaveBeenCalledWith({ data: 'old' });
+
+    // Verify background revalidation was triggered via withSingleFlight
+    // The callback should be invoked to trigger revalidation
+    expect(withSingleFlight).toHaveBeenCalled();
   });
 });
