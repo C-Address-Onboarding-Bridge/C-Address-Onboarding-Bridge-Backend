@@ -53,9 +53,7 @@ export async function getMoonpayBuyQuote(config: MoonpayConfig, params: {
   baseCurrency: string;
   baseCurrencyAmount: number;
   quoteCurrency: string;
-}): Promise<{
-  throw new Error('Not implemented: getMoonpayBuyQuote');
-}> {
+}): Promise<{ quoteCurrencyAmount: number; feeAmount: number; totalAmount: number }> {
   const url = `https://api.moonpay.com/v3/currencies/${params.quoteCurrency}/buy_quote`;
   const query = new URLSearchParams({
     apiKey: config.apiKey,
