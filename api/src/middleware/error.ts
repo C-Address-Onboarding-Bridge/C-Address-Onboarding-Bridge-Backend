@@ -29,5 +29,25 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ) {
-  throw new Error('Not implemented: errorHandler');
+  if (err instanceof ZodError) {
+    logger.error({ err, message: 'Validation error' });
+    res.status(400).json({
+      error: 'validation_error',
+      details: err.errors,
+    });
+    return;
+  }
+
+  if (err instanceof AppError) {
+    logger.error({ err, message: err.message });
+    res.status(err.statusCode).json({
+      error: err.message,
+    });
+    return;
+  }
+
+  logger.error({ err, message: 'Unexpected error' });
+  res.status(500).json({
+    error: 'internal_server_error',
+  });
 }

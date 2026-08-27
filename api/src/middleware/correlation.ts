@@ -15,5 +15,9 @@ declare global {
 }
 
 export function correlationMiddleware(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: correlationMiddleware');
+  req.requestId = (req.headers['x-request-id'] as string) || randomUUID();
+  req.correlationId = (req.headers['x-correlation-id'] as string) || req.requestId;
+  res.setHeader('X-Correlation-ID', req.correlationId);
+  req.log = logger.child({ requestId: req.requestId, correlationId: req.correlationId });
+  next();
 }
