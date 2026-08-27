@@ -146,7 +146,36 @@ interface ErrorBody {
 }
 
 export function parseHttpError(status: number, body: ErrorBody, cause?: unknown, locale?: SupportedLocale): BridgeError {
-  throw new Error('Not implemented: parseHttpError');
+  switch (status) {
+    case 401:
+    case 403:
+      return new AuthError(body.message, { statusCode: status, code: body.code, cause, locale });
+    case 400:
+    case 422:
+      return new ValidationError(
+        body.message ?? translate(locale, 'error.validation.generic', { detail: body.code ?? 'invalid request' }),
+        { statusCode: status, code: body.code, fields: body.fields, cause, locale },
+      );
+    case 404:
+      return new NotFoundError(body.message, { code: body.code, cause, locale });
+    case 429:
+      return new RateLimitError(body.message, {
+        retryAfterMs: body.retryAfter !== undefined ? body.retryAfter * 1000 : undefined,
+        code: body.code,
+        cause,
+        locale,
+      });
+    default:
+      if (status >= 500) {
+        return new ServerError(body.message, { statusCode: status, code: body.code, cause, locale });
+      }
+      return new BridgeError(body.message ?? translate(locale, 'error.request_failed', { status }), {
+        statusCode: status,
+        code: body.code,
+        retryable: false,
+        cause,
+      });
+  }
 }
 
 // ─── Type guard helpers ────────────────────────────────────────────────────────
