@@ -145,7 +145,7 @@ function getQueues() {
 }
 
 export function getAllQueues(): Queue[] {
-  throw new Error('Not implemented: getAllQueues');
+  return getQueues().all;
 }
 
 export async function closeQueues(): Promise<void> {
@@ -154,7 +154,10 @@ export async function closeQueues(): Promise<void> {
 }
 
 export async function scheduleRecurringJobs(): Promise<void> {
-  throw new Error('Not implemented: scheduleRecurringJobs');
+  const queues = getQueues();
+  await queues.cacheWarmup.add('cache-warmup', { assets: [] }, { repeat: { pattern: '*/30 * * * * *' } });
+  await queues.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { pattern: '0 * * * * *' } });
+  await queues.cleanup.add('cleanup', { olderThanMs: 7 * 24 * 60 * 60 * 1000 }, { repeat: { pattern: '0 0 * * * *' } });
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {

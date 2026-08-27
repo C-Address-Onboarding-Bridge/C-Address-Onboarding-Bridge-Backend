@@ -86,4 +86,35 @@ describe('Queue operations', () => {
       await result;
     });
   });
+
+  describe('scheduleRecurringJobs', () => {
+    it('schedules recurring jobs without throwing', async () => {
+      const { scheduleRecurringJobs } = await import('../jobs/queue');
+      await expect(scheduleRecurringJobs()).resolves.not.toThrow();
+    });
+
+    it('scheduleRecurringJobs returns a promise', async () => {
+      const { scheduleRecurringJobs } = await import('../jobs/queue');
+      const result = scheduleRecurringJobs();
+      expect(result).toBeInstanceOf(Promise);
+      await result;
+    });
+  });
+
+  describe('getAllQueues', () => {
+    it('returns an array of queues', async () => {
+      const { getAllQueues } = await import('../jobs/queue');
+      const queues = getAllQueues();
+      expect(Array.isArray(queues)).toBe(true);
+      expect(queues.length).toBeGreaterThan(0);
+      expect(queues.every((q) => q instanceof Queue)).toBe(true);
+    });
+
+    it('getAllQueues returns the same queue instances on multiple calls', async () => {
+      const { getAllQueues } = await import('../jobs/queue');
+      const queues1 = getAllQueues();
+      const queues2 = getAllQueues();
+      expect(queues1).toBe(queues2);
+    });
+  });
 });
