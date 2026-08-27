@@ -145,11 +145,13 @@ function getQueues() {
 }
 
 export function getAllQueues(): Queue[] {
-  throw new Error('Not implemented: getAllQueues');
+  return getQueues().all;
 }
 
 export async function closeQueues(): Promise<void> {
-  throw new Error('Not implemented: closeQueues');
+  const queues = getQueues();
+  await Promise.all(queues.all.map(q => q.close()));
+  _queues = null;
 }
 
 export async function scheduleRecurringJobs(): Promise<void> {
@@ -165,7 +167,8 @@ export async function enqueueAnalytics(data: AnalyticsJobData): Promise<void> {
 }
 
 export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Promise<void> {
-  throw new Error('Not implemented: enqueuePipelineMetrics');
+  const queues = getQueues();
+  await queues.asyncPipeline.add('pipeline-metrics', data);
 }
 
 export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void> {
