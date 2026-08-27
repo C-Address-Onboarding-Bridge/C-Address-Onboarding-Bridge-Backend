@@ -50,7 +50,12 @@ export const transakVerifier: WebhookVerifier = {
 const VERIFIERS: Record<string, { verifier: WebhookVerifier; secret: string }> = {};
 
 export function registerWebhookVerifier(provider: string, verifier: WebhookVerifier, secret: string): void {
-  throw new Error('Not implemented: registerWebhookVerifier');
+  // Re-registering a provider replaces its entry, which is what secret rotation
+  // needs: the new secret takes effect without a restart. buildWebhookVerifier
+  // reads VERIFIERS per request rather than closing over the entry, so the
+  // exported verifyMoonpayWebhook / verifyTransakWebhook handlers pick this up
+  // even though they were created at module load.
+  VERIFIERS[provider] = { verifier, secret };
 }
 
 const failedAttempts = new Map<string, { count: number; windowStart: number }>();

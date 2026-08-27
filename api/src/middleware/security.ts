@@ -34,6 +34,10 @@ const SIZE_LIMITS: Record<string, number> = {
 
 const DEFAULT_LIMIT = 64 * 1024;
 
+const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH']);
+
+const ALLOWED_BODY_CONTENT_TYPES = new Set(['application/json']);
+
 function flattenValue(v: unknown): string[] {
   if (typeof v === 'string') return [v];
   if (Array.isArray(v)) return v.flatMap((item) => flattenValue(item));
@@ -61,7 +65,33 @@ function sanitizeErrorMessage(msg: string): string {
 }
 
 export function contentTypeEnforcement(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: contentTypeEnforcement');
+  // Only methods that carry a body are worth gating. GET/HEAD/DELETE/OPTIONS
+  // are allowed through even when a client sends a stray Content-Type.
+  if (!BODY_METHODS.has(req.method.toUpperCase())) {
+    next();
+    return;
+  }
+
+  const header = req.headers['content-type'];
+  const raw = Array.isArray(header) ? header[0] : header;
+
+  // Strip parameters ('application/json; charset=utf-8') and compare only the
+  // media type, case-insensitively — RFC 9110 makes both case-insensitive.
+  const mediaType = (raw ?? '').split(';')[0].trim().toLowerCase();
+
+  if (!ALLOWED_BODY_CONTENT_TYPES.has(mediaType)) {
+    logger.warn(
+      { ip: req.ip, path: req.path, method: req.method, contentType: raw },
+      'rejected request with unsupported content-type',
+    );
+    res.status(415).json({
+      error: 'unsupported_media_type',
+      message: 'Content-Type must be application/json',
+    });
+    return;
+  }
+
+  next();
 }
 
 export function requestSizeLimiting(req: Request, res: Response, next: NextFunction): void {

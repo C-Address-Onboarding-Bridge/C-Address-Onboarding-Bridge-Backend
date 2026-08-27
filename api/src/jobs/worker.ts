@@ -50,7 +50,7 @@ export function startWorkers(): Worker[] {
 }
 
 export async function stopWorkers(workers: Worker[]): Promise<void> {
-  await Promise.all(workers.map(worker => worker.close()));
+  await Promise.all(workers.map((worker) => worker.close()));
   await closeQueues();
 }
 

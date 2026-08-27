@@ -144,21 +144,30 @@ if (process.env.LOGTAIL_TOKEN) {
   aggregationHeaders.authorization = `Bearer ${process.env.LOGTAIL_TOKEN}`;
 }
 
+// pino only accepts bare identifiers as redact path segments, so configured
+// field names such as `x-api-key` have to be quoted with bracket notation.
+function toRedactPath(field: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(field) ? field : `["${field}"]`;
+}
+
 const sensitivePaths = [
-  'req.headers.authorization',
-  'req.headers["x-api-key"]',
-  'authorization',
-  'password',
-  'token',
-  'apiKey',
-  'signedXdr',
-  'privateKey',
-  'mnemonic',
-  'secret',
-  'secretKey',
-  ...config.logging.sensitiveFields
-    .map((f) => f.trim())
-    .filter(Boolean),
+  ...new Set([
+    'req.headers.authorization',
+    'req.headers["x-api-key"]',
+    'authorization',
+    'password',
+    'token',
+    'apiKey',
+    'signedXdr',
+    'privateKey',
+    'mnemonic',
+    'secret',
+    'secretKey',
+    ...config.logging.sensitiveFields
+      .map((f) => f.trim())
+      .filter(Boolean)
+      .map(toRedactPath),
+  ]),
 ];
 
 const stream = new AggregationStream(

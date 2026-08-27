@@ -4,17 +4,13 @@ import { ValidationError } from './errors';
 // ─── Token Type Guards ────────────────────────────────────────────────────────
 
 /** Returns `true` if the token is the native XLM asset. */
-export function isNativeToken(token: Token): token is {
+export function isNativeToken(token: Token): token is { type: 'native' } {
   throw new Error('Not implemented: isNativeToken');
-} {
-  return token.type === 'native';
 }
 
 /** Returns `true` if the token is a SAC (Stellar Asset Converter) token. */
-export function isSacToken(token: Token): token is {
+export function isSacToken(token: Token): token is { type: 'sac'; contractId: string } {
   throw new Error('Not implemented: isSacToken');
-} {
-  return token.type === 'sac';
 }
 
 // ─── Address Validation ───────────────────────────────────────────────────────
