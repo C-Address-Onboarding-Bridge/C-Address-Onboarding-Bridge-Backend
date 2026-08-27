@@ -92,7 +92,7 @@ export class WithdrawalRouter {
  * @param exchangeName - Exchange identifier.
  */
 export function createCexWithdrawalMemo(targetCAddress: string, exchangeName: string): string {
-  throw new Error('Not implemented: createCexWithdrawalMemo');
+  return `bridge:${exchangeName}:${targetCAddress.slice(-8)}`;
 }
 
 /**
