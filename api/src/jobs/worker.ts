@@ -30,7 +30,8 @@ export function startWorkers(): Worker[] {
 }
 
 export async function stopWorkers(workers: Worker[]): Promise<void> {
-  throw new Error('Not implemented: stopWorkers');
+  await Promise.all(workers.map((worker) => worker.close()));
+  await closeQueues();
 }
 
 // Standalone worker entry point
