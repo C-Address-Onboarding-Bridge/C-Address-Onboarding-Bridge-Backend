@@ -178,5 +178,7 @@ export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void>
 
 /** Returns the number of waiting (not yet picked up) jobs in a queue. */
 export async function getQueueWaitingCount(queueName: 'async-critical' | 'async-pipeline'): Promise<number> {
-  throw new Error('Not implemented: getQueueWaitingCount');
+  const queues = getQueues();
+  const queue = queueName === 'async-critical' ? queues.asyncCritical : queues.asyncPipeline;
+  return queue.count();
 }
