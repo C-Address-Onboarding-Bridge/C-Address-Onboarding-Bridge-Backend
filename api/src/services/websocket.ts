@@ -162,9 +162,57 @@ function handleMessage(client: ClientState, raw: string): void {
 }
 
 export function createWebSocketServer(): WebSocketServer {
-  throw new Error('Not implemented: createWebSocketServer');
+  const wss = new WebSocketServer({ noServer: true });
+
+  wss.on('connection', (ws: WebSocket) => {
+    const client: ClientState = {
+      ws,
+      subscriptions: new Map(),
+      isAlive: true,
+      heartbeatId: setInterval(() => {
+        if (!client.isAlive) {
+          ws.terminate();
+          return;
+        }
+        client.isAlive = false;
+        ws.ping();
+      }, HEARTBEAT_INTERVAL_MS),
+    };
+
+    send(ws, { type: 'connected', timestamp: Date.now() });
+
+    ws.on('pong', () => {
+      client.isAlive = true;
+    });
+
+    ws.on('message', (data: Buffer | string) => {
+      handleMessage(client, data.toString());
+    });
+
+    ws.on('close', () => {
+      cleanup(client);
+    });
+
+    ws.on('error', (err) => {
+      logger.debug({ err }, 'ws client error');
+      cleanup(client);
+    });
+  });
+
+  return wss;
 }
 
 export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket: import('net').Socket, head: Buffer): void {
-  throw new Error('Not implemented: handleUpgrade');
+  const parsed = parseUrl(req.url ?? '', true);
+  const token = typeof parsed.query.token === 'string' ? parsed.query.token : null;
+
+  if (!validateToken(token)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nUnauthorized');
+    socket.destroy();
+    return;
+  }
+
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req);
+  });
 }
