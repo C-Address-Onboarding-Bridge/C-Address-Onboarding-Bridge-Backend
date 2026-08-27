@@ -145,11 +145,13 @@ function getQueues() {
 }
 
 export function getAllQueues(): Queue[] {
-  throw new Error('Not implemented: getAllQueues');
+  return getQueues().all;
 }
 
 export async function closeQueues(): Promise<void> {
-  throw new Error('Not implemented: closeQueues');
+  const queues = getQueues();
+  await Promise.all(queues.all.map(q => q.close()));
+  _queues = null;
 }
 
 export async function scheduleRecurringJobs(): Promise<void> {
@@ -165,14 +167,18 @@ export async function enqueueAnalytics(data: AnalyticsJobData): Promise<void> {
 }
 
 export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Promise<void> {
-  throw new Error('Not implemented: enqueuePipelineMetrics');
+  const queues = getQueues();
+  await queues.asyncPipeline.add('pipeline-metrics', data);
 }
 
 export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void> {
-  throw new Error('Not implemented: enqueueWebhookRetry');
+  const queues = getQueues();
+  await queues.webhookRetry.add('webhook-retry', data);
 }
 
 /** Returns the number of waiting (not yet picked up) jobs in a queue. */
 export async function getQueueWaitingCount(queueName: 'async-critical' | 'async-pipeline'): Promise<number> {
-  throw new Error('Not implemented: getQueueWaitingCount');
+  const queues = getQueues();
+  const queue = queueName === 'async-critical' ? queues.asyncCritical : queues.asyncPipeline;
+  return queue.count();
 }
