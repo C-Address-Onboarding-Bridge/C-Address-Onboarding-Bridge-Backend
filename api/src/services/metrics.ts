@@ -147,9 +147,17 @@ export const transactionStatusCount = new Counter({
 
 const funderTimestamps = new Map<string, number>();
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const fundingMetrics: Record<string, number> = {};
+let feeRateBps = 0;
 
 export function recordUniqueFunder(funderId: string): void {
-  throw new Error('Not implemented: recordUniqueFunder');
+  const now = Date.now();
+  funderTimestamps.set(funderId, now);
+  const cutoff = now - TWENTY_FOUR_HOURS_MS;
+  const recentFunders = Array.from(funderTimestamps.entries())
+    .filter(([, ts]) => ts >= cutoff)
+    .length;
+  uniqueFundersGauge.set(recentFunders);
 }
 
 export interface FundingMetricInput {
@@ -162,17 +170,21 @@ export interface FundingMetricInput {
 }
 
 export function recordFundingMetrics(input: FundingMetricInput): void {
-  throw new Error('Not implemented: recordFundingMetrics');
+  fundingMetrics[`${input.source}_${input.status}`] = (fundingMetrics[`${input.source}_${input.status}`] || 0) + 1;
 }
 
 export function setFeeRateBps(bps: number): void {
-  throw new Error('Not implemented: setFeeRateBps');
+  feeRateBps = bps;
 }
 
 const CB_STATE_MAP: Record<string, number> = { closed: 0, open: 1, 'half-open': 2 };
 
 export function updateCircuitBreakerMetrics(circuits: Map<string, { getState(): string }>): void {
-  throw new Error('Not implemented: updateCircuitBreakerMetrics');
+  for (const [name, circuit] of circuits) {
+    const state = circuit.getState();
+    const value = CB_STATE_MAP[state] ?? -1;
+    circuitBreakerState.labels(name).set(value);
+  }
 }
 
 // ─── Async Pipeline metrics ───────────────────────────────────────────────────
