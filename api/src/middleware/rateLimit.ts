@@ -106,7 +106,8 @@ export const ipRateLimitMiddleware = (req: Request, res: Response, next: NextFun
 
 /** Per-API-key tier rate limit — applied after RBAC on protected routes. */
 export function tierRateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-  throw new Error('Not implemented: tierRateLimitMiddleware');
+  const tier = resolveTier(req);
+  tierLimiters[tier](req, res, next);
 }
 
 /** Fund endpoint rate limit — 10 req/min per API key or IP. */

@@ -11,7 +11,7 @@ export function isValidStellarAddress(address: string): boolean {
 
 /** Returns `true` if the address is a Soroban contract address (starts with `C`). */
 export function isCAddress(address: string): boolean {
-  throw new Error('Not implemented: isCAddress');
+  return typeof address === 'string' && address.startsWith('C');
 }
 
 /** Returns `true` if the address is a classic Stellar account address (starts with `G`). */

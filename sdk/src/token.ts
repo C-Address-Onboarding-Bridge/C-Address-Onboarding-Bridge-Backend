@@ -10,7 +10,7 @@ export function isNativeToken(token: Token): token is { type: 'native' } {
 
 /** Returns `true` if the token is a SAC (Stellar Asset Converter) token. */
 export function isSacToken(token: Token): token is { type: 'sac'; contractId: string } {
-  throw new Error('Not implemented: isSacToken');
+  return token.type === 'sac';
 }
 
 // ─── Address Validation ───────────────────────────────────────────────────────
