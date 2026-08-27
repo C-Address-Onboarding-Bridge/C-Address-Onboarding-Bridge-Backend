@@ -8,7 +8,10 @@ const SENSITIVE_HEADER_NAMES = new Set([
 const sensitiveBodyFields = new Set(config.logging.sensitiveFields);
 
 export function maskValue(val: string): string {
-  throw new Error('Not implemented: maskValue');
+  // Values of 4 chars or fewer are masked whole: keeping a 4-char suffix of a
+  // 4-char secret would leak the entire value.
+  if (val.length <= 4) return '***';
+  return `***${val.slice(-4)}`;
 }
 
 export function maskHeaders(
