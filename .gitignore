@@ -1,36 +1,55 @@
 node_modules/
 dist/
 build/
+coverage/
+.nyc_output/
 target/
+
+# Environment / secrets
 .env
 .env.local
 .env.*.local
-*.log
-.DS_Store
-Thumbs.db
-coverage/
-*.wasm
-.claude/
-.idea/
-.vscode/*
-!.vscode/settings.json
-!.vscode/extensions.json
-__snapshots__/
-*.snap
-test_snapshots/
-__snapshots__/
-*.snap
-.vitest-cache/
-*.tsbuildinfo
-deployments/*.json
-deployments/blue-green-state.txt
 .secrets.local.json
 .secrets.local.enc
 logs/secrets-audit.jsonl
 
-# Test snapshots
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Editor artefacts
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+.editorconfig.bak
+
+# Tooling / caches
+.claude/
+.vitest-cache/
+*.tsbuildinfo
+
+# Test output / snapshots
 **/__snapshots__/
 **/*.snap
+vitest-results/
+junit-*.xml
+test-results/
+
+# Deployment artifacts
+deployments/*.json
+deployments/blue-green-state.txt
+
+# Build artifacts
+*.wasm
 
 # Python bytecode
 __pycache__/
@@ -46,21 +65,3 @@ contracts/onboarding-bridge/fuzz/target/
 
 # Java / Maven build artifacts
 examples/java/target/
-
-# Test output / snapshots
-*.snap
-**/__snapshots__/
-vitest-results/
-junit-*.xml
-test-results/
-
-# OS / editor artefacts
-*.swp
-*.swo
-*~
-.editorconfig.bak
-
-# Temporary files
-*.tmp
-*.bak
-.nyc_output/
