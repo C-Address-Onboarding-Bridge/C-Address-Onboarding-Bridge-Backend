@@ -55,7 +55,8 @@ async function refreshBackpressure(): Promise<void> {
 }
 
 export function isBackpressured(): boolean {
-  throw new Error('Not implemented: isBackpressured');
+  void refreshBackpressure();
+  return _backpressured;
 }
 
 // ─── In-process analytics buffer ─────────────────────────────────────────────
