@@ -31,6 +31,19 @@ const fundDirectSchema = z.object({
   memo: z.string().max(64).default(''),
 });
 
+const batchFundSchema = z.object({
+  signedXdr: z
+    .string()
+    .min(1, 'signed transaction XDR is required')
+    .max(MAX_XDR_BYTE_LENGTH, `signedXdr must not exceed ${MAX_XDR_BYTE_LENGTH} characters`),
+  recipients: z.array(
+    z.object({
+      target: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
+      amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
+    }),
+  ).min(1, 'at least one recipient is required').max(100, 'maximum 100 recipients per batch'),
+});
+
 fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
     req.log?.info({ path: req.path }, 'fund transaction submission started');
@@ -65,6 +78,59 @@ fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req
 
     res.status(201).json({
       ...result,
+      explorerUrl: explorerService.txUrl(result.hash),
+      explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
+    });
+  } catch (err) {
+    if (err instanceof XdrValidationError) {
+      res.status(400).json({ error: err.code, message: err.detail });
+      return;
+    }
+    next(err);
+  }
+});
+
+fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    req.log?.info({ path: req.path }, 'batch fund transaction submission started');
+    const body = batchFundSchema.parse(req.body);
+    const result = await sorobanService.submitBatchFundingTransaction(body.signedXdr);
+
+    const actor = req.apiKeyRecord?.id ?? 'api-key';
+
+    // Audit log: critical — enqueued async but falls back to sync if Redis is down.
+    enqueueAudit(
+      'batch_transaction_submission_result',
+      {
+        txHash: result.hash,
+        status: result.status,
+        recipientCount: body.recipients.length,
+        signedXdrHash: hashPayload(body.signedXdr),
+        error: result.error,
+      },
+      actor,
+      () => integrityAuditLog.append(
+        'batch_transaction_submission_result',
+        { txHash: result.hash, status: result.status, recipientCount: body.recipients.length, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
+        actor,
+      ),
+    );
+
+    req.log?.info({ txHash: result.hash, status: result.status, recipientCount: body.recipients.length }, 'batch fund transaction submitted');
+
+    // Funding metrics: best-effort async, falls back to sync.
+    const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
+    enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
+
+    res.status(201).json({
+      transactionHash: result.hash,
+      status: result.status,
+      error: result.error,
+      recipients: body.recipients.map((r) => ({
+        target: r.target,
+        amount: r.amount,
+        status: result.status,
+      })),
       explorerUrl: explorerService.txUrl(result.hash),
       explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
     });
