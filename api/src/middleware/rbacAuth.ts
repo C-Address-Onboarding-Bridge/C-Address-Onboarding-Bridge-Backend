@@ -106,9 +106,7 @@ function isIpAllowed(ip: string, whitelist: string[]): boolean {
   return whitelist.some((cidr) => matchesCidr(ip, cidr));
 }
 
-export function createApiKey(input: CreateKeyInput): {
-  throw new Error('Not implemented: createApiKey');
-} {
+export function createApiKey(input: CreateKeyInput): { rawKey: string; record: ApiKeyRecord } {
   const rawKey = `cab_${crypto.randomBytes(32).toString('hex')}`;
   const now = Date.now();
   const record: ApiKeyRecord = {
@@ -149,7 +147,12 @@ export function updateApiKey(
 }
 
 export function resolveRecord(rawKey: string): ApiKeyRecord | undefined {
-  throw new Error('Not implemented: resolveRecord');
+  for (const record of keyStore.values()) {
+    if (record.keyHash === hashKey(rawKey)) {
+      return record;
+    }
+  }
+  return undefined;
 }
 
 declare module 'express-serve-static-core' {
@@ -160,17 +163,69 @@ declare module 'express-serve-static-core' {
 }
 
 export function requireScopes(...required: PermissionScope[]) {
-  throw new Error('Not implemented: requireScopes');
+  return (req: Request, res: Response, next: NextFunction) => {
+    const resolved = req.resolvedScopes || [];
+    const hasRequired = required.every((scope) => resolved.includes(scope));
+    if (!hasRequired) {
+      return res.status(403).json({ error: 'insufficient_scopes' });
+    }
+    next();
+  };
 }
 
 export function rbacAuth(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: rbacAuth');
+  const apiKey = req.get('X-API-Key');
+  if (!apiKey) {
+    return res.status(401).json({ error: 'missing_api_key' }) as unknown as void;
+  }
+
+  const record = resolveRecord(apiKey);
+  if (!record) {
+    return res.status(401).json({ error: 'invalid_api_key' }) as unknown as void;
+  }
+
+  if (record.revoked) {
+    return res.status(401).json({ error: 'revoked_api_key' }) as unknown as void;
+  }
+
+  if (record.expiresAt && Date.now() > record.expiresAt) {
+    return res.status(401).json({ error: 'expired_api_key' }) as unknown as void;
+  }
+
+  if (record.ipWhitelist.length > 0) {
+    const clientIp = req.ip || '';
+    if (!isIpAllowed(clientIp, record.ipWhitelist)) {
+      return res.status(403).json({ error: 'ip_not_whitelisted' }) as unknown as void;
+    }
+  }
+
+  req.apiKeyRecord = record;
+  req.resolvedScopes = record.scopes;
+  record.lastUsedAt = Date.now();
+
+  next();
 }
 
 export function getAuditLog(): typeof auditLog {
-  throw new Error('Not implemented: getAuditLog');
+  return auditLog;
 }
 
 export function seedLegacyKeys(rawKeys: string[]): void {
-  throw new Error('Not implemented: seedLegacyKeys');
+  for (const rawKey of rawKeys) {
+    const record: ApiKeyRecord = {
+      id: crypto.randomUUID(),
+      keyHash: hashKey(rawKey),
+      name: `legacy-${rawKey.substring(0, 8)}`,
+      createdBy: 'system',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastUsedAt: null,
+      scopes: ['quote:read', 'fund:write', 'status:read'],
+      ipWhitelist: [],
+      expiresAt: null,
+      rateLimit: 'standard',
+      revoked: false,
+    };
+    keyStore.set(record.id, record);
+  }
 }
