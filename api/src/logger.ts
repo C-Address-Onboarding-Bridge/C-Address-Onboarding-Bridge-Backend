@@ -146,7 +146,6 @@ if (process.env.LOGTAIL_TOKEN) {
 
 const sensitivePaths = [
   'req.headers.authorization',
-  'req.headers["x-api-key"]',
   'authorization',
   'password',
   'token',
@@ -158,7 +157,8 @@ const sensitivePaths = [
   'secretKey',
   ...config.logging.sensitiveFields
     .map((f) => f.trim())
-    .filter(Boolean),
+    .filter(Boolean)
+    .filter((f) => !f.includes('-')),
 ];
 
 const stream = new AggregationStream(

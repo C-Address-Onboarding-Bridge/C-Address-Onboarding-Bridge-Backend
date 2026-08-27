@@ -101,9 +101,7 @@ export function createCexWithdrawalMemo(targetCAddress: string, exchangeName: st
  *
  * @param memo - Memo string from a Stellar transaction.
  */
-export function parseCexWithdrawalMemo(memo: string): {
-  throw new Error('Not implemented: parseCexWithdrawalMemo');
-} {
+export function parseCexWithdrawalMemo(memo: string): { exchangeName?: string; targetSuffix?: string } {
   const parts = memo.split(':');
   if (parts.length === 3 && parts[0] === 'bridge') {
     return { exchangeName: parts[1], targetSuffix: parts[2] };

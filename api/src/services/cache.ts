@@ -172,9 +172,7 @@ export interface SWREntry<T = unknown> {
  * Returns `{ value, stale }` where `stale=true` means the entry is past its
  * primary TTL but still within the SWR extension window.
  */
-export async function swrGet<T>(key: string): Promise<{
-  throw new Error('Not implemented: swrGet');
-} | null> {
+export async function swrGet<T>(key: string): Promise<{ value: T; stale: boolean } | null> {
   const redis = getClient();
   if (!redis) return null;
 
@@ -203,7 +201,21 @@ export async function swrGet<T>(key: string): Promise<{
  * data is still available during background revalidation.
  */
 export async function swrSet<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
-  throw new Error('Not implemented: swrSet');
+  const redis = getClient();
+  if (!redis) return;
+
+  const entry: SWREntry<T> = {
+    value,
+    expiresAt: Date.now() + ttlSeconds * 1000,
+  };
+
+  const staleTtlSeconds = ttlSeconds + SWR_EXTENSION_SECONDS;
+  try {
+    await redis.setex(key, staleTtlSeconds, JSON.stringify(entry));
+    recordSet();
+  } catch {
+    // Don't break if caching fails
+  }
 }
 
 // ─── Single-flight / stampede protection ─────────────────────────────────────
@@ -247,37 +259,57 @@ async function releaseRedisLock(lockKey: string): Promise<void> {
  * @param fn           Async factory that computes and stores the fresh value.
  * @param lockTtlMs    How long the Redis lock is held (default 5 s).
  */
+const inFlightPromises = new Map<string, Promise<unknown>>();
+
 export async function withSingleFlight<T>(
   key: string,
   fn: () => Promise<T>,
   lockTtlMs = 5000,
 ): Promise<T> {
-  throw new Error('Not implemented: withSingleFlight');
-});
-    });
-
-    return cached.value;
+  // Check in-process in-flight cache.
+  if (inFlightPromises.has(key)) {
+    return inFlightPromises.get(key) as Promise<T>;
   }
 
-  // Miss – single-flight compute.
-  return withSingleFlight(key, async () => {
-    const value = await compute();
-    await swrSet(key, value, ttlSeconds);
-    return value;
-  });
+  const lockKey = `lock:${key}`;
+  const acquiredLock = await acquireRedisLock(lockKey, lockTtlMs);
+
+  if (!acquiredLock) {
+    // Another instance is computing – wait a short time for it to finish, then retry cache lookup.
+    await new Promise((r) => setTimeout(r, 100));
+    const hit = await swrGet<T>(key);
+    return hit?.value || (await withSingleFlight(key, fn, lockTtlMs));
+  }
+
+  try {
+    const promise = fn();
+    inFlightPromises.set(key, promise);
+    const result = await promise;
+    return result;
+  } finally {
+    inFlightPromises.delete(key);
+    await releaseRedisLock(lockKey);
+  }
 }
 
 // ─── Metrics accessors ────────────────────────────────────────────────────────
 
 export function getCacheMetrics(): CacheMetrics {
-  throw new Error('Not implemented: getCacheMetrics');
+  const { hits, misses, sets, errors } = metrics;
+  return {
+    hits,
+    misses,
+    sets,
+    errors,
+    ratio: hits + misses === 0 ? 0 : hits / (hits + misses),
+  };
 }
 
 export function isRedisEnabled(): boolean {
-  throw new Error('Not implemented: isRedisEnabled');
+  return getClient() !== null;
 }
 
 /** Expose the internal Redis client for callers that need direct access (e.g. tests). */
 export function getCacheClient(): Redis | null {
-  throw new Error('Not implemented: getCacheClient');
+  return getClient();
 }

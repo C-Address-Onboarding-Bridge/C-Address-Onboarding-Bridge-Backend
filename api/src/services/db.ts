@@ -7,7 +7,7 @@ import { register } from './metrics';
 let pool: Pool | null = null;
 
 export function getPool(): Pool | null {
-  throw new Error('Not implemented: getPool');
+  return pool;
 }
 
 export interface PoolMetrics {
@@ -23,7 +23,13 @@ export interface PoolMetrics {
 
 /** Live snapshot of the PostgreSQL pool, or null when the DB is not configured. */
 export function getPoolMetrics(): PoolMetrics | null {
-  throw new Error('Not implemented: getPoolMetrics');
+  if (!pool) return null;
+  return {
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    active: pool.totalCount - pool.idleCount,
+    waiting: (pool as any).waitingCount || 0,
+  };
 }
 
 // ─── Pool metrics ──────────────────────────────────────────────────────────────
@@ -62,9 +68,7 @@ new Gauge({
   },
 });
 
-export async function dbHealthCheck(): Promise<{
-  throw new Error('Not implemented: dbHealthCheck');
-}> {
+export async function dbHealthCheck(): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
   const p = getPool();
   if (!p) return { ok: true };
 
@@ -82,5 +86,8 @@ export async function dbHealthCheck(): Promise<{
 }
 
 export async function closePool(): Promise<void> {
-  throw new Error('Not implemented: closePool');
+  if (pool) {
+    await pool.end();
+    pool = null;
+  }
 }

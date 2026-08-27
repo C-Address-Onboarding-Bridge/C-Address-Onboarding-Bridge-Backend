@@ -83,9 +83,52 @@ function readSecret(provider: SecretsProviderName, definition: SecretDefinition,
 }
 
 export function initializeSecrets(): void {
-  throw new Error('Not implemented: initializeSecrets');
+  if (initialized) return;
+  initialized = true;
+
+  const provider = providerName();
+  const localSecrets = provider === 'local-encrypted' ? decryptLocalFile() : {};
+
+  for (const definitions of Object.values(definitionsForService)) {
+    for (const definition of definitions) {
+      try {
+        const value = readSecret(provider, definition, localSecrets);
+        if (value) {
+          process.env[definition.env] = value;
+          audit({
+            ts: new Date().toISOString(),
+            provider,
+            service: definition.service,
+            env: definition.env,
+            path: definition.path,
+            result: 'loaded',
+          });
+        } else {
+          audit({
+            ts: new Date().toISOString(),
+            provider,
+            service: definition.service,
+            env: definition.env,
+            path: definition.path,
+            result: 'missing',
+            message: 'Secret value is empty',
+          });
+        }
+      } catch (err) {
+        audit({
+          ts: new Date().toISOString(),
+          provider,
+          service: definition.service,
+          env: definition.env,
+          path: definition.path,
+          result: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
 }
 
 export function localSecretFilePath(): string {
-  throw new Error('Not implemented: localSecretFilePath');
+  return process.env.LOCAL_SECRETS_FILE || '.secrets.local.enc';
 }
