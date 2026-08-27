@@ -148,7 +148,7 @@ export function rbacAuth(req: Request, res: Response, next: NextFunction): void 
   throw new Error('Not implemented: rbacAuth');
 }
 
-export function getAuditLog(): typeof auditLog {
+export function getAuditLog(limit?: number): Array<{ ts: number; keyId: string; ip: string; path: string; method: string }> {
   throw new Error('Not implemented: getAuditLog');
 }
 
