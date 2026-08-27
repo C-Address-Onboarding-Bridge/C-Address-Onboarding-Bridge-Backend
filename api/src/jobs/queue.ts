@@ -149,7 +149,8 @@ export function getAllQueues(): Queue[] {
 }
 
 export async function closeQueues(): Promise<void> {
-  throw new Error('Not implemented: closeQueues');
+  const queues = getQueues();
+  await Promise.all(queues.all.map((q) => q.close()));
 }
 
 export async function scheduleRecurringJobs(): Promise<void> {

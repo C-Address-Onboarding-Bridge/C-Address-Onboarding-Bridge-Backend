@@ -72,4 +72,18 @@ describe('Queue operations', () => {
       await result;
     });
   });
+
+  describe('closeQueues', () => {
+    it('closes all queues without throwing', async () => {
+      const { closeQueues } = await import('../jobs/queue');
+      await expect(closeQueues()).resolves.not.toThrow();
+    });
+
+    it('closeQueues returns a promise', async () => {
+      const { closeQueues } = await import('../jobs/queue');
+      const result = closeQueues();
+      expect(result).toBeInstanceOf(Promise);
+      await result;
+    });
+  });
 });
