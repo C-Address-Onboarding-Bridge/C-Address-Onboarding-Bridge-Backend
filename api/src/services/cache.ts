@@ -40,7 +40,7 @@ export const SWR_EXTENSION_SECONDS = 5;
  * Format: `v{version}:{namespace}:{discriminator}`
  */
 export function buildCacheKey(namespace: string, discriminator: string): string {
-  throw new Error('Not implemented: buildCacheKey');
+  return `v${CACHE_VERSION}:${namespace}:${discriminator}`;
 }
 
 // ─── Redis singleton ─────────────────────────────────────────────────────────
@@ -138,19 +138,59 @@ export interface CacheMetrics {
 }
 
 export async function cacheGet(key: string): Promise<string | null> {
-  throw new Error('Not implemented: cacheGet');
+  const redis = getClient();
+  if (!redis) return null;
+
+  startMetricsSampler();
+
+  try {
+    const value = await redis.get(key);
+    if (value === null) {
+      recordMiss();
+      return null;
+    }
+    recordHit();
+    return value;
+  } catch {
+    recordMiss();
+    return null;
+  }
 }
 
 export async function cacheSet(key: string, value: string, ttlSeconds: number): Promise<void> {
-  throw new Error('Not implemented: cacheSet');
+  const redis = getClient();
+  if (!redis) return;
+
+  try {
+    await redis.set(key, value, 'EX', ttlSeconds);
+  } catch {
+    // Gracefully degrade — callers fall back to live queries.
+  }
 }
 
 export async function cacheDel(key: string): Promise<void> {
-  throw new Error('Not implemented: cacheDel');
+  const redis = getClient();
+  if (!redis) return;
+
+  try {
+    await redis.del(key);
+  } catch {
+    // Gracefully degrade.
+  }
 }
 
 export async function cacheDelPattern(pattern: string): Promise<void> {
-  throw new Error('Not implemented: cacheDelPattern');
+  const redis = getClient();
+  if (!redis) return;
+
+  try {
+    const keys = await redis.keys(pattern);
+    if (keys.length > 0) {
+      await redis.del(...keys);
+    }
+  } catch {
+    // Gracefully degrade.
+  }
 }
 
 // ─── Stale-while-revalidate ──────────────────────────────────────────────────
@@ -201,7 +241,19 @@ export async function swrGet<T>(key: string): Promise<{ value: T; stale: boolean
  * data is still available during background revalidation.
  */
 export async function swrSet<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
-  throw new Error('Not implemented: swrSet');
+  const redis = getClient();
+  if (!redis) return;
+
+  const entry: SWREntry<T> = {
+    value,
+    expiresAt: Date.now() + ttlSeconds * 1000,
+  };
+
+  try {
+    await redis.set(key, JSON.stringify(entry), 'EX', ttlSeconds + SWR_EXTENSION_SECONDS);
+  } catch {
+    // Gracefully degrade.
+  }
 }
 
 // ─── Single-flight / stampede protection ─────────────────────────────────────
@@ -250,7 +302,29 @@ export async function withSingleFlight<T>(
   fn: () => Promise<T>,
   lockTtlMs = 5000,
 ): Promise<T> {
-  throw new Error('Not implemented: withSingleFlight');
+  // Layer 1: in-process deduplication — check before storing
+  const existing = inFlightMap.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+
+  // Create the promise immediately (synchronously) and store it before
+  // yielding control, so concurrent callers see it in the map.
+  const lockKey = `lock:${key}`;
+
+  const promise = (async () => {
+    // Layer 2: acquire Redis lock (best-effort; falls through if Redis unavailable)
+    await acquireRedisLock(lockKey, lockTtlMs);
+    try {
+      return await fn();
+    } finally {
+      inFlightMap.delete(key);
+      void releaseRedisLock(lockKey);
+    }
+  })();
+
+  inFlightMap.set(key, promise as Promise<string | null>);
+  return promise;
 }
 
 // ─── Combined get-or-compute (the main high-level helper) ─────────────────────
