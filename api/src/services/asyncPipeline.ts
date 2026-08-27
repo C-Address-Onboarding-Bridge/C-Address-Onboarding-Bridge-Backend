@@ -106,7 +106,11 @@ async function flushAnalyticsBuffer(): Promise<void> {
 
 /** Flush remaining buffer immediately; intended for graceful shutdown. */
 export async function drainAnalyticsBuffer(): Promise<void> {
-  throw new Error('Not implemented: drainAnalyticsBuffer');
+  if (_flushTimer !== null) {
+    clearTimeout(_flushTimer);
+    _flushTimer = null;
+  }
+  await flushAnalyticsBuffer();
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────

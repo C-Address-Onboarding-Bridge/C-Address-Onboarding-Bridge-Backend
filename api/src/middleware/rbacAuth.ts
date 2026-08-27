@@ -111,7 +111,11 @@ export function createApiKey(input: CreateKeyInput): { rawKey: string; record: A
 }
 
 export function revokeApiKey(id: string): boolean {
-  throw new Error('Not implemented: revokeApiKey');
+  const record = keyStore.get(id);
+  if (!record) return false;
+  record.revoked = true;
+  record.updatedAt = Date.now();
+  return true;
 }
 
 export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {

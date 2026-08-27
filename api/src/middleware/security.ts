@@ -95,7 +95,27 @@ export function contentTypeEnforcement(req: Request, res: Response, next: NextFu
 }
 
 export function requestSizeLimiting(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: requestSizeLimiting');
+  const contentLengthHeader = req.headers['content-length'];
+  if (contentLengthHeader === undefined) {
+    next();
+    return;
+  }
+  const contentLength = parseInt(contentLengthHeader, 10);
+  const rawContentType = req.headers['content-type'];
+  const contentType = (Array.isArray(rawContentType) ? rawContentType[0] : rawContentType ?? '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  const limit = SIZE_LIMITS[contentType] ?? DEFAULT_LIMIT;
+  if (contentLength > limit) {
+    logger.warn(
+      { ip: req.ip, path: req.path, method: req.method, contentLength, limit, contentType },
+      'request body exceeds size limit',
+    );
+    res.status(413).json({ error: 'payload_too_large', message: 'Request body exceeds the size limit' });
+    return;
+  }
+  next();
 }
 
 export function injectionProtection(req: Request, res: Response, next: NextFunction): void {
