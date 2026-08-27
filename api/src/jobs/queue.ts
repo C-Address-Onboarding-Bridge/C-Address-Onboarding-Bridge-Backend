@@ -157,7 +157,8 @@ export async function scheduleRecurringJobs(): Promise<void> {
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
-  throw new Error('Not implemented: enqueueAuditLog');
+  const queues = getQueues();
+  await queues.asyncCritical.add('async-audit-log', data);
 }
 
 export async function enqueueAnalytics(data: AnalyticsJobData): Promise<void> {
