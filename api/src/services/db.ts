@@ -4,7 +4,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { register } from './metrics';
 
-let pool: Pool | null = null;
+const pool: Pool | null = null;
 
 export function getPool(): Pool | null {
   throw new Error('Not implemented: getPool');
@@ -62,9 +62,7 @@ new Gauge({
   },
 });
 
-export async function dbHealthCheck(): Promise<{
-  throw new Error('Not implemented: dbHealthCheck');
-}> {
+export async function dbHealthCheck(): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
   const p = getPool();
   if (!p) return { ok: true };
 

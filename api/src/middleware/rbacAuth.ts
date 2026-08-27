@@ -106,27 +106,8 @@ function isIpAllowed(ip: string, whitelist: string[]): boolean {
   return whitelist.some((cidr) => matchesCidr(ip, cidr));
 }
 
-export function createApiKey(input: CreateKeyInput): {
+export function createApiKey(input: CreateKeyInput): { rawKey: string; record: ApiKeyRecord } {
   throw new Error('Not implemented: createApiKey');
-} {
-  const rawKey = `cab_${crypto.randomBytes(32).toString('hex')}`;
-  const now = Date.now();
-  const record: ApiKeyRecord = {
-    id: crypto.randomUUID(),
-    keyHash: hashKey(rawKey),
-    name: input.name,
-    createdBy: input.createdBy,
-    createdAt: now,
-    updatedAt: now,
-    lastUsedAt: null,
-    scopes: input.scopes,
-    ipWhitelist: input.ipWhitelist ?? [],
-    expiresAt: input.expiresAt ?? null,
-    rateLimit: input.rateLimit ?? 'standard',
-    revoked: false,
-  };
-  keyStore.set(record.id, record);
-  return { rawKey, record };
 }
 
 export function revokeApiKey(id: string): boolean {

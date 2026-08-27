@@ -11,5 +11,24 @@ export interface AbuseAlertPayload {
 }
 
 export async function sendAbuseAlert(payload: AbuseAlertPayload): Promise<void> {
-  throw new Error('Not implemented: sendAbuseAlert');
+  logger.error(
+    { alert: true, abuse: payload },
+    `abuse detected: ${payload.type}`,
+  );
+
+  if (!ADMIN_ALERT_URL) return;
+
+  try {
+    await fetch(ADMIN_ALERT_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        service: 'bridge-api',
+        timestamp: new Date().toISOString(),
+      }),
+    });
+  } catch (err) {
+    logger.warn({ err, payload }, 'failed to deliver admin abuse alert');
+  }
 }
