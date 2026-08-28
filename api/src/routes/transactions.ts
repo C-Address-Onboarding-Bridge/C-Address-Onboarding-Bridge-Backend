@@ -6,7 +6,7 @@ import {
   type TransactionQueryParams,
   type TransactionStatus,
 } from '../services/transactions';
-import { buildCacheKey, CACHE_TTL, getOrCompute, cacheDelPattern } from '../services/cache';
+import { buildCacheKey, CACHE_TTL, CACHE_VERSION, getOrCompute, cacheDelPattern } from '../services/cache';
 
 export const transactionsRouter = Router();
 
@@ -64,5 +64,5 @@ transactionsRouter.get('/', rbacAuth, requireScopes('transactions:read'), async 
  * Call this whenever a new transaction is recorded.
  */
 export async function invalidateTransactionsCache(): Promise<void> {
-  throw new Error('Not implemented: invalidateTransactionsCache');
+  await cacheDelPattern(`v${CACHE_VERSION}:${TRANSACTIONS_CACHE_NAMESPACE}:*`);
 }

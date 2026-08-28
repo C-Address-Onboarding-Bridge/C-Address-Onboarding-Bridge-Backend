@@ -94,13 +94,13 @@ export function getAgentStats(): AgentStats {
   const pendingRequests =
     countSockets(httpAgent.requests as Record<string, unknown[]>) +
     countSockets(httpsAgent.requests as Record<string, unknown[]>);
-
   return { activeSockets, freeSockets, pendingRequests };
 }
 
 /** Drains all idle keep-alive sockets. Called during graceful shutdown. */
 export function destroyAgents(): void {
-  throw new Error('Not implemented: destroyAgents');
+  httpAgent.destroy();
+  httpsAgent.destroy();
 }
 
 // ─── Socket-reuse metrics ────────────────────────────────────────────────────

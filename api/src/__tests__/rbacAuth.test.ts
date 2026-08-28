@@ -15,6 +15,7 @@ import {
   rbacAuth,
   requireScopes,
   seedLegacyKeys,
+  resolveRecord,
 } from '../middleware/rbacAuth';
 
 function mockReq(overrides: Partial<Request> = {}): Request {
@@ -217,5 +218,31 @@ describe('seedLegacyKeys', () => {
     const countBefore = listApiKeys().length;
     seedLegacyKeys([legacyKey]);
     expect(listApiKeys().length).toBe(countBefore);
+  });
+});
+
+describe('resolveRecord performance', () => {
+  it('resolves keys in constant time regardless of store size', () => {
+    // Create 1000 keys to simulate a large store
+    const keys = [];
+    for (let i = 0; i < 1000; i++) {
+      const { rawKey } = createApiKey({
+        name: `perf-test-${i}`,
+        createdBy: 'test',
+        scopes: ['quote:read'],
+      });
+      keys.push(rawKey);
+    }
+
+    // Measure resolution time for the last key (worst case for linear scan)
+    const lastKey = keys[keys.length - 1];
+    const start = performance.now();
+    const resolved = resolveRecord(lastKey);
+    const duration = performance.now() - start;
+
+    expect(resolved).toBeDefined();
+    expect(resolved?.name).toBe('perf-test-999');
+    // Should complete in less than 5ms (hash lookup is O(1), even with JIT overhead)
+    expect(duration).toBeLessThan(5);
   });
 });

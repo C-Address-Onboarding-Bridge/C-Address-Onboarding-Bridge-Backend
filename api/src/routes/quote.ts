@@ -43,5 +43,9 @@ quoteRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
  * Called when a new ledger / block is detected.
  */
 export async function invalidateQuoteCache(sourceAsset?: string): Promise<void> {
-  throw new Error('Not implemented: invalidateQuoteCache');
+  if (sourceAsset) {
+    await cacheDelPattern(buildCacheKey('quote', `${sourceAsset}:*`));
+  } else {
+    await cacheDelPattern(buildCacheKey('quote', '*'));
+  }
 }
