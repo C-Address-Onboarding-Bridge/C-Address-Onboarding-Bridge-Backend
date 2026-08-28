@@ -59,49 +59,32 @@ async function checkRedis(): Promise<DependencyCheck> {
 
 export async function getHealthStatus(force = false): Promise<HealthResult> {
   const now = Date.now();
-
-  // Return cached result if still valid and not forced
-  if (!force && cachedResult !== null && now < cacheExpiresAt) {
+  if (!force && cachedResult && now < cacheExpiresAt) {
     return cachedResult;
   }
 
-  // Run all dependency checks in parallel
-  const [sorobanResult, redisResult, dbResult] = await Promise.all([
-    checkSoroban(),
-    checkRedis(),
-    dbHealthCheck(),
-  ]);
+  const [dbCheck, sorobanCheck, redisCheck] = await Promise.all([dbHealthCheck(), checkSoroban(), checkRedis()]);
 
   const dependencies: HealthResult['dependencies'] = {
-    soroban: { ...sorobanResult, critical: true },
-    redis: { ...redisResult, critical: false },
-    database: { ...dbResult, critical: false },
+    database: { ...dbCheck, critical: true },
+    soroban: { ...sorobanCheck, critical: true },
+    redis: { ...redisCheck, critical: false },
   };
 
-  // Determine overall status
-  let status: HealthResult['status'] = 'ok';
-  for (const [, dep] of Object.entries(dependencies)) {
-    if (!dep.ok) {
-      if (dep.critical) {
-        status = 'unhealthy';
-        break;
-      } else {
-        status = 'degraded';
-      }
-    }
-  }
+  const checks = Object.values(dependencies);
+  const criticalFailing = checks.some((d) => d.critical && !d.ok);
+  const anyFailing = checks.some((d) => !d.ok);
+  const status: HealthResult['status'] = criticalFailing ? 'unhealthy' : anyFailing ? 'degraded' : 'ok';
 
-  const result: HealthResult = {
+  cachedResult = {
     status,
     timestamp: now,
     version: config.logging.version,
     dependencies,
   };
-
-  cachedResult = result;
   cacheExpiresAt = now + CACHE_TTL_MS;
 
-  return result;
+  return cachedResult;
 }
 
 export function invalidateHealthCache(): void {

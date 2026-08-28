@@ -4,25 +4,23 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { register } from './metrics';
 
-let _pool: Pool | null = null;
+let pool: Pool | null = null;
 
 export function getPool(): Pool | null {
   if (!config.database.url) return null;
-  if (_pool) return _pool;
+  if (pool) return pool;
 
-  _pool = new Pool({
+  pool = new Pool({
     connectionString: config.database.url,
+    min: config.database.poolMin,
     max: config.database.poolMax,
     idleTimeoutMillis: config.database.idleTimeoutMs,
     connectionTimeoutMillis: config.database.connectionTimeoutMs,
-    ssl: config.database.ssl ? { rejectUnauthorized: false } : false,
+    statement_timeout: config.database.statementTimeoutMs,
+    ssl: config.database.ssl,
   });
 
-  _pool.on('error', (err) => {
-    logger.error({ err }, 'Unexpected error on idle PostgreSQL client');
-  });
-
-  return _pool;
+  return pool;
 }
 
 export interface PoolMetrics {

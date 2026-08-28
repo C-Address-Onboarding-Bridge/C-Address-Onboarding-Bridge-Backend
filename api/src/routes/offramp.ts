@@ -86,3 +86,106 @@ offrampRouter.post('/transak', async (req: Request, res: Response, next: NextFun
     next(err);
   }
 });
+
+const quoteRequestSchema = z.object({
+  fiatAmount: z.coerce.number().positive(),
+  fiatCurrency: z.string().min(1),
+  cryptoCurrency: z.string().min(1).default('xlm'),
+  cAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
+});
+
+interface ProviderQuote {
+  provider: 'moonpay' | 'transak';
+  fiatAmount: number;
+  cryptoAmount: number;
+  feeAmount: number;
+  netAmount: number;
+  estimatedRate: number;
+}
+
+offrampRouter.get('/quote', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const params = quoteRequestSchema.parse(req.query);
+
+    const [moonpayResult, transakResult] = await Promise.allSettled([
+      (async () => {
+        const quote = await moonpayService.getBuyQuote({
+          baseCurrency: params.fiatCurrency,
+          baseCurrencyAmount: params.fiatAmount,
+          quoteCurrency: params.cryptoCurrency,
+        });
+        return {
+          provider: 'moonpay' as const,
+          fiatAmount: params.fiatAmount,
+          cryptoAmount: quote.quoteCurrencyAmount,
+          feeAmount: quote.feeAmount,
+          netAmount: quote.quoteCurrencyAmount,
+          estimatedRate: quote.quoteCurrencyAmount / params.fiatAmount,
+        };
+      })(),
+      (async () => {
+        const quote = await transakService.getBuyQuote({
+          fiatCurrency: params.fiatCurrency,
+          fiatAmount: params.fiatAmount,
+          cryptoCurrency: params.cryptoCurrency,
+        });
+        return {
+          provider: 'transak' as const,
+          fiatAmount: params.fiatAmount,
+          cryptoAmount: quote.cryptoAmount,
+          feeAmount: quote.feeAmount,
+          netAmount: quote.cryptoAmount - quote.feeAmount,
+          estimatedRate: quote.cryptoAmount / params.fiatAmount,
+        };
+      })(),
+    ]);
+
+    const quotes: ProviderQuote[] = [];
+    const errors: Array<{ provider: string; error: string }> = [];
+
+    if (moonpayResult.status === 'fulfilled') {
+      quotes.push(moonpayResult.value);
+    } else if (moonpayResult.reason instanceof Error) {
+      errors.push({ provider: 'moonpay', error: moonpayResult.reason.message });
+    }
+
+    if (transakResult.status === 'fulfilled') {
+      quotes.push(transakResult.value);
+    } else if (transakResult.reason instanceof Error) {
+      errors.push({ provider: 'transak', error: transakResult.reason.message });
+    }
+
+    if (quotes.length === 0) {
+      res.status(503).json({
+        error: 'no_quotes_available',
+        message: 'Unable to fetch quotes from any provider',
+        errors,
+      });
+      return;
+    }
+
+    // Sort by net amount in descending order (best first)
+    const sorted = quotes.sort((a, b) => b.netAmount - a.netAmount);
+    const best = sorted[0];
+
+    enqueueCounterIncrement(
+      'onramp_quote',
+      { provider: best.provider, status: 'success' },
+      () => onrampRequestCount.inc({ provider: best.provider, status: 'success' }),
+    );
+
+    res.json({
+      best,
+      alternatives: sorted.slice(1),
+      comparison: sorted,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (err) {
+    enqueueCounterIncrement(
+      'onramp_quote',
+      { provider: 'unknown', status: 'failed' },
+      () => onrampRequestCount.inc({ provider: 'unknown', status: 'failed' }),
+    );
+    next(err);
+  }
+});

@@ -31,6 +31,36 @@ const fundDirectSchema = z.object({
   memo: z.string().max(64).default(''),
 });
 
+const batchFundSchema = z.object({
+  signedXdr: z
+    .string()
+    .min(1, 'signed transaction XDR is required')
+    .max(MAX_XDR_BYTE_LENGTH, `signedXdr must not exceed ${MAX_XDR_BYTE_LENGTH} characters`),
+  recipients: z.array(
+    z.object({
+      target: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
+      amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
+    }),
+  ).min(1, 'at least one recipient is required').max(100, 'maximum 100 recipients per batch'),
+});
+
+const timelockedFundSchema = z.object({
+  signedXdr: z
+    .string()
+    .min(1, 'signed transaction XDR is required')
+    .max(MAX_XDR_BYTE_LENGTH, `signedXdr must not exceed ${MAX_XDR_BYTE_LENGTH} characters`),
+  targetAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
+  amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
+  unlocksAt: z.number().int().positive('unlock time must be a future Unix timestamp'),
+});
+
+const timelockedClaimSchema = z.object({
+  signedXdr: z
+    .string()
+    .min(1, 'signed transaction XDR is required')
+    .max(MAX_XDR_BYTE_LENGTH, `signedXdr must not exceed ${MAX_XDR_BYTE_LENGTH} characters`),
+});
+
 fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
     req.log?.info({ path: req.path }, 'fund transaction submission started');
@@ -65,6 +95,198 @@ fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req
 
     res.status(201).json({
       ...result,
+      explorerUrl: explorerService.txUrl(result.hash),
+      explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
+    });
+  } catch (err) {
+    if (err instanceof XdrValidationError) {
+      res.status(400).json({ error: err.code, message: err.detail });
+      return;
+    }
+    next(err);
+  }
+});
+
+fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    req.log?.info({ path: req.path }, 'batch fund transaction submission started');
+    const body = batchFundSchema.parse(req.body);
+    const result = await sorobanService.submitBatchFundingTransaction(body.signedXdr);
+
+    const actor = req.apiKeyRecord?.id ?? 'api-key';
+
+    // Audit log: critical — enqueued async but falls back to sync if Redis is down.
+    enqueueAudit(
+      'batch_transaction_submission_result',
+      {
+        txHash: result.hash,
+        status: result.status,
+        recipientCount: body.recipients.length,
+        signedXdrHash: hashPayload(body.signedXdr),
+        error: result.error,
+      },
+      actor,
+      () => integrityAuditLog.append(
+        'batch_transaction_submission_result',
+        { txHash: result.hash, status: result.status, recipientCount: body.recipients.length, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
+        actor,
+      ),
+    );
+
+    req.log?.info({ txHash: result.hash, status: result.status, recipientCount: body.recipients.length }, 'batch fund transaction submitted');
+
+    // Funding metrics: best-effort async, falls back to sync.
+    const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
+    enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
+
+    res.status(201).json({
+      transactionHash: result.hash,
+      status: result.status,
+      error: result.error,
+      recipients: body.recipients.map((r) => ({
+        target: r.target,
+        amount: r.amount,
+        status: result.status,
+      })),
+      explorerUrl: explorerService.txUrl(result.hash),
+      explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
+    });
+  } catch (err) {
+    if (err instanceof XdrValidationError) {
+      res.status(400).json({ error: err.code, message: err.detail });
+      return;
+    }
+    next(err);
+  }
+});
+
+fundingRouter.post('/timelocked', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    req.log?.info({ path: req.path }, 'timelocked fund transaction submission started');
+    const body = timelockedFundSchema.parse(req.body);
+    const result = await sorobanService.submitFundingTransaction(body.signedXdr);
+
+    const actor = req.apiKeyRecord?.id ?? 'api-key';
+
+    // Audit log: critical — enqueued async but falls back to sync if Redis is down.
+    enqueueAudit(
+      'timelocked_transaction_submission_result',
+      {
+        txHash: result.hash,
+        status: result.status,
+        target: body.targetAddress,
+        amount: body.amount,
+        unlocksAt: body.unlocksAt,
+        signedXdrHash: hashPayload(body.signedXdr),
+        error: result.error,
+      },
+      actor,
+      () => integrityAuditLog.append(
+        'timelocked_transaction_submission_result',
+        { txHash: result.hash, status: result.status, target: body.targetAddress, amount: body.amount, unlocksAt: body.unlocksAt, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
+        actor,
+      ),
+    );
+
+    req.log?.info({ txHash: result.hash, status: result.status }, 'timelocked fund transaction submitted');
+
+    // Funding metrics: best-effort async, falls back to sync.
+    const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
+    enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
+
+    res.status(201).json({
+      transactionHash: result.hash,
+      status: result.status,
+      error: result.error,
+      lockId: `${result.hash}-${body.targetAddress}`,
+      target: body.targetAddress,
+      amount: body.amount,
+      unlocksAt: body.unlocksAt,
+      timeRemaining: Math.max(0, body.unlocksAt - Math.floor(Date.now() / 1000)),
+      explorerUrl: explorerService.txUrl(result.hash),
+      explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
+    });
+  } catch (err) {
+    if (err instanceof XdrValidationError) {
+      res.status(400).json({ error: err.code, message: err.detail });
+      return;
+    }
+    next(err);
+  }
+});
+
+fundingRouter.get('/timelocked/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    req.log?.info({ lockId: id }, 'querying timelocked fund state');
+
+    const currentTime = Math.floor(Date.now() / 1000);
+
+    // Parse the lock ID to get transaction hash and target address
+    const [txHash, targetAddress] = id.split('-');
+    if (!txHash || !targetAddress) {
+      res.status(400).json({
+        error: 'invalid_lock_id',
+        message: 'lock ID must be in format {txHash}-{targetAddress}',
+      });
+      return;
+    }
+
+    const txStatus = await sorobanService.getTransactionStatus(txHash);
+
+    res.json({
+      lockId: id,
+      target: targetAddress,
+      transactionHash: txHash,
+      status: txStatus.status,
+      isClaimable: false, // In real implementation, check contract state
+      timeRemaining: 0, // In real implementation, get from contract
+      claimError: txStatus.error,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+fundingRouter.post('/timelocked/:id/claim', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    req.log?.info({ lockId: id }, 'claiming timelocked fund');
+
+    const body = timelockedClaimSchema.parse(req.body);
+    const result = await sorobanService.submitFundingTransaction(body.signedXdr);
+
+    const actor = req.apiKeyRecord?.id ?? 'api-key';
+
+    // Audit log: critical — enqueued async but falls back to sync if Redis is down.
+    enqueueAudit(
+      'timelocked_claim_result',
+      {
+        lockId: id,
+        txHash: result.hash,
+        status: result.status,
+        signedXdrHash: hashPayload(body.signedXdr),
+        error: result.error,
+      },
+      actor,
+      () => integrityAuditLog.append(
+        'timelocked_claim_result',
+        { lockId: id, txHash: result.hash, status: result.status, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
+        actor,
+      ),
+    );
+
+    req.log?.info({ lockId: id, txHash: result.hash, status: result.status }, 'timelocked fund claimed');
+
+    // Funding metrics: best-effort async, falls back to sync.
+    const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
+    enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
+
+    res.status(201).json({
+      lockId: id,
+      claimTransactionHash: result.hash,
+      status: result.status,
+      error: result.error,
       explorerUrl: explorerService.txUrl(result.hash),
       explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
     });
