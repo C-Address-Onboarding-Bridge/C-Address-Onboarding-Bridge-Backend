@@ -17,7 +17,23 @@ export function maskValue(val: string): string {
 export function maskHeaders(
   headers: Record<string, string | string[] | undefined>,
 ): Record<string, unknown> {
-  throw new Error('Not implemented: maskHeaders');
+  const result: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined) {
+      result[name] = undefined;
+      continue;
+    }
+    if (SENSITIVE_HEADER_NAMES.has(name.toLowerCase())) {
+      if (Array.isArray(value)) {
+        result[name] = value.map((v) => maskValue(v));
+      } else {
+        result[name] = maskValue(value);
+      }
+    } else {
+      result[name] = value;
+    }
+  }
+  return result;
 }
 
 export function maskBody(body: unknown, depth = 0): unknown {

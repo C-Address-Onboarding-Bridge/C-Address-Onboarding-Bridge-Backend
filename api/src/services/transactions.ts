@@ -111,7 +111,21 @@ export function listTransactions(params: TransactionQueryParams = {}): { data: T
 }
 
 export function serializeTransactionsCsv(transactions: TransactionRecord[]): string {
-  throw new Error('Not implemented: serializeTransactionsCsv');
+  const headers = ['id', 'txHash', 'sourceAddr', 'targetAddr', 'status', 'amount', 'fee', 'createdAt', 'currency'];
+
+  const escapeField = (value: string): string => {
+    // Wrap in quotes if the value contains a comma, double-quote, or newline
+    if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  };
+
+  const rows = transactions.map((tx) =>
+    headers.map((key) => escapeField(String(tx[key as keyof TransactionRecord]))).join(','),
+  );
+
+  return [headers.join(','), ...rows].join('\n');
 }
 
 export function getTransactionStats() {

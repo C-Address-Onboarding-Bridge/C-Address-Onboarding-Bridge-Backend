@@ -1,32 +1,56 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 build/
+coverage/
+.nyc_output/
 target/
+
+# Environment / secrets
 .env
 .env.local
 .env.*.local
+*.local
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 .DS_Store
 Thumbs.db
-coverage/
-*.wasm
-.claude/
+
+# Editor artefacts
 .idea/
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# Test snapshots
+__snapshots__/
+**/__snapshots__/
+*.snap
 test_snapshots/
-.vitest-cache/
+vitest-results/
+junit-*.xml
+test-results/
+
+# Build artifacts
 *.tsbuildinfo
+.vitest-cache/
+.turbo/
+
+# Deployment artifacts
 deployments/*.json
 deployments/blue-green-state.txt
+
+# Reports
+reports/
+
+# Secrets
 .secrets.local.json
 .secrets.local.enc
 logs/secrets-audit.jsonl
-
-# Test snapshots
-**/__snapshots__/
-**/*.snap
 
 # Python bytecode
 __pycache__/
@@ -43,11 +67,6 @@ contracts/onboarding-bridge/fuzz/target/
 # Java / Maven build artifacts
 examples/java/target/
 
-# Test output / snapshots
-vitest-results/
-junit-*.xml
-test-results/
-
 # OS / editor artefacts
 *.swp
 *.swo
@@ -57,10 +76,3 @@ test-results/
 # Temporary files
 *.tmp
 *.bak
-.nyc_output/
-
-# Reports
-reports/
-
-# Logs
-logs/

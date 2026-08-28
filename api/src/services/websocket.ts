@@ -164,22 +164,13 @@ function handleMessage(client: ClientState, raw: string): void {
 export function createWebSocketServer(): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
 
-  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    const { query } = parseUrl(req.url ?? '', true);
-    const token = typeof query.token === 'string' ? query.token : null;
-
-    if (!validateToken(token)) {
-      ws.close(4401, 'Unauthorized');
-      return;
-    }
-
+  wss.on('connection', (ws: WebSocket) => {
     const client: ClientState = {
       ws,
       subscriptions: new Map(),
       isAlive: true,
       heartbeatId: setInterval(() => {
         if (!client.isAlive) {
-          cleanup(client);
           ws.terminate();
           return;
         }
@@ -188,11 +179,13 @@ export function createWebSocketServer(): WebSocketServer {
       }, HEARTBEAT_INTERVAL_MS),
     };
 
+    send(ws, { type: 'connected', timestamp: Date.now() });
+
     ws.on('pong', () => {
       client.isAlive = true;
     });
 
-    ws.on('message', (data) => {
+    ws.on('message', (data: Buffer | string) => {
       handleMessage(client, data.toString());
     });
 
@@ -204,14 +197,21 @@ export function createWebSocketServer(): WebSocketServer {
       logger.debug({ err }, 'ws client error');
       cleanup(client);
     });
-
-    send(ws, { type: 'connected', timestamp: Date.now() });
   });
 
   return wss;
 }
 
 export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket: import('net').Socket, head: Buffer): void {
+  const parsed = parseUrl(req.url ?? '', true);
+  const token = typeof parsed.query.token === 'string' ? parsed.query.token : null;
+
+  if (!validateToken(token)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nUnauthorized');
+    socket.destroy();
+    return;
+  }
+
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit('connection', ws, req);
   });
