@@ -1,7 +1,11 @@
 node_modules/
 dist/
 build/
+coverage/
+.nyc_output/
 target/
+
+# Environment / secrets
 .env
 .env.local
 .env.*.local
@@ -12,9 +16,8 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 Thumbs.db
-coverage/
-*.wasm
-.claude/
+
+# Editor artefacts
 .idea/
 .vscode/*
 !.vscode/settings.json
