@@ -55,7 +55,8 @@ async function refreshBackpressure(): Promise<void> {
 }
 
 export function isBackpressured(): boolean {
-  throw new Error('Not implemented: isBackpressured');
+  void refreshBackpressure();
+  return _backpressured;
 }
 
 // ─── In-process analytics buffer ─────────────────────────────────────────────
@@ -106,7 +107,11 @@ async function flushAnalyticsBuffer(): Promise<void> {
 
 /** Flush remaining buffer immediately; intended for graceful shutdown. */
 export async function drainAnalyticsBuffer(): Promise<void> {
-  throw new Error('Not implemented: drainAnalyticsBuffer');
+  if (_flushTimer !== null) {
+    clearTimeout(_flushTimer);
+    _flushTimer = null;
+  }
+  await flushAnalyticsBuffer();
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
