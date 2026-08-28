@@ -4,10 +4,23 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { register } from './metrics';
 
-const pool: Pool | null = null;
+let pool: Pool | null = null;
 
 export function getPool(): Pool | null {
-  throw new Error('Not implemented: getPool');
+  if (!config.database.url) return null;
+  if (pool) return pool;
+
+  pool = new Pool({
+    connectionString: config.database.url,
+    min: config.database.poolMin,
+    max: config.database.poolMax,
+    idleTimeoutMillis: config.database.idleTimeoutMs,
+    connectionTimeoutMillis: config.database.connectionTimeoutMs,
+    statement_timeout: config.database.statementTimeoutMs,
+    ssl: config.database.ssl,
+  });
+
+  return pool;
 }
 
 export interface PoolMetrics {
@@ -23,7 +36,17 @@ export interface PoolMetrics {
 
 /** Live snapshot of the PostgreSQL pool, or null when the DB is not configured. */
 export function getPoolMetrics(): PoolMetrics | null {
-  throw new Error('Not implemented: getPoolMetrics');
+  const p = getPool();
+  if (!p) return null;
+
+  const idle = p.idleCount;
+  const active = p.totalCount - p.idleCount;
+  return {
+    total: p.totalCount,
+    idle,
+    active,
+    waiting: p.waitingCount,
+  };
 }
 
 // ─── Pool metrics ──────────────────────────────────────────────────────────────
@@ -80,5 +103,8 @@ export async function dbHealthCheck(): Promise<{ ok: boolean; latencyMs?: number
 }
 
 export async function closePool(): Promise<void> {
-  throw new Error('Not implemented: closePool');
+  if (_pool) {
+    await _pool.end();
+    _pool = null;
+  }
 }

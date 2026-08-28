@@ -44,5 +44,6 @@ statusRouter.get('/:txHash', async (req: Request, res: Response, next: NextFunct
  * Called by webhook handlers when a transaction status changes.
  */
 export async function invalidateStatusCache(txHash: string): Promise<void> {
-  throw new Error('Not implemented: invalidateStatusCache');
+  const cacheKey = buildCacheKey(STATUS_CACHE_NAMESPACE, txHash);
+  await cacheDel(cacheKey);
 }
