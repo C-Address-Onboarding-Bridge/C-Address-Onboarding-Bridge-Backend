@@ -40,7 +40,7 @@ export const SWR_EXTENSION_SECONDS = 5;
  * Format: `v{version}:{namespace}:{discriminator}`
  */
 export function buildCacheKey(namespace: string, discriminator: string): string {
-  throw new Error('Not implemented: buildCacheKey');
+  return `v${CACHE_VERSION}:${namespace}:${discriminator}`;
 }
 
 // ─── Redis singleton ─────────────────────────────────────────────────────────
