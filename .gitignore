@@ -9,16 +9,11 @@ target/
 .env
 .env.local
 .env.*.local
-.secrets.local.json
-.secrets.local.enc
-logs/secrets-audit.jsonl
-
-# Logs and temp files
+*.local
 *.log
-*.tmp
-*.bak
-
-# OS artefacts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 .DS_Store
 Thumbs.db
 
@@ -27,29 +22,32 @@ Thumbs.db
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
-*.swp
-*.swo
-*~
-.editorconfig.bak
 
-# Tooling / caches
-.claude/
-.vitest-cache/
-*.tsbuildinfo
-
-# Test output / snapshots
+# Test snapshots
+__snapshots__/
 **/__snapshots__/
-**/*.snap
+*.snap
+test_snapshots/
 vitest-results/
 junit-*.xml
 test-results/
+
+# Build artifacts
+*.tsbuildinfo
+.vitest-cache/
+.turbo/
 
 # Deployment artifacts
 deployments/*.json
 deployments/blue-green-state.txt
 
-# Build artifacts
-*.wasm
+# Reports
+reports/
+
+# Secrets
+.secrets.local.json
+.secrets.local.enc
+logs/secrets-audit.jsonl
 
 # Python bytecode
 __pycache__/
@@ -65,3 +63,14 @@ contracts/onboarding-bridge/fuzz/target/
 
 # Java / Maven build artifacts
 examples/java/target/
+
+# OS / editor artefacts
+*.swp
+*.swo
+*~
+.editorconfig.bak
+
+# Temporary files
+*.tmp
+*.bak
+.nyc_output/
