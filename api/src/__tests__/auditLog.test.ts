@@ -83,4 +83,44 @@ describe('integrity audit admin API', () => {
     expect(exported.body.format).toBe('c-address-bridge.audit.v1');
     expect(exported.body.retentionPolicy).toBe('7 years');
   });
+
+  it('falls back to local publisher when checkpoint service returns non-2xx status', async () => {
+    const mockFetch = async () => {
+      return { ok: false, status: 500 } as Response;
+    };
+    const globalFetch = global.fetch;
+    global.fetch = mockFetch as any;
+
+    try {
+      const service = new IntegrityAuditLogService({
+        checkpointInterval: 1,
+        checkpointUrl: 'https://example.com/checkpoint',
+      });
+      service.append('admin_operation', { operation: 'test' }, 'test-actor');
+
+      const checkpoints = service.listCheckpoints();
+      expect(checkpoints).toHaveLength(1);
+      expect(checkpoints[0].publisher).toBe('local');
+      expect(checkpoints[0].publicationRef).toContain('local-fallback');
+    } finally {
+      global.fetch = globalFetch;
+    }
+  });
+
+  it('chain verifies across simulated restart using persisted entries', () => {
+    const service1 = new IntegrityAuditLogService({ checkpointInterval: 2 });
+    service1.append('transaction_submission', { hash: 'tx-1' }, 'submitter-1');
+    service1.append('transaction_submission_result', { status: 'submitted' }, 'system');
+    service1.append('fee_withdrawal', { amount: '100' }, 'admin-1');
+
+    const exported = service1.exportJson();
+    expect(exported.entries).toHaveLength(3);
+    expect(exported.checkpoints).toHaveLength(1);
+
+    const service2 = new IntegrityAuditLogService({ checkpointInterval: 2 });
+    const restored = verifyAuditChain(exported.entries, exported.checkpoints);
+    expect(restored.valid).toBe(true);
+    expect(restored.entryCount).toBe(3);
+    expect(restored.checkpointCount).toBe(1);
+  });
 });

@@ -126,6 +126,58 @@ describe('injectionProtection middleware', () => {
     injectionProtection(req, res, next);
     expect(next).toHaveBeenCalledOnce();
   });
+
+  it('allows memo with semicolon', () => {
+    const req = mockReq({ body: { memo: 'Invoice 12; thanks for payment' } });
+    const { res } = mockRes();
+    const next = vi.fn();
+
+    injectionProtection(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('allows memo with double hyphens', () => {
+    const req = mockReq({ body: { memo: 'Rent -- March 2024' } });
+    const { res } = mockRes();
+    const next = vi.fn();
+
+    injectionProtection(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('allows memo with multiple punctuation marks', () => {
+    const req = mockReq({ body: { memo: 'Payment for Q1; see invoice #42 -- urgent!' } });
+    const { res } = mockRes();
+    const next = vi.fn();
+
+    injectionProtection(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('blocks SQL injection in non-memo fields', () => {
+    const req = mockReq({ body: { name: 'test; DROP TABLE users;--', memo: 'Notes; see invoice' } });
+    const { res, status, json } = mockRes();
+    const next = vi.fn();
+
+    injectionProtection(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'invalid_input' }));
+  });
+
+  it('identifies rejected field in error message', () => {
+    const req = mockReq({ body: { description: 'Normal text', injected: "1' OR '1'='1" } });
+    const { res, json } = mockRes();
+    const next = vi.fn();
+
+    injectionProtection(req, res, next);
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: 'invalid_input',
+        message: expect.stringContaining('injected'),
+      })
+    );
+  });
 });
 
 describe('parameterPollutionProtection middleware', () => {
@@ -188,6 +240,35 @@ describe('contentTypeEnforcement middleware', () => {
     contentTypeEnforcement(req, res, next);
     expect(next).toHaveBeenCalledOnce();
   });
+
+  it('rejects text/html on data routes', () => {
+    const req = mockReq({ method: 'POST', path: '/api/v1/fund', headers: { 'content-type': 'text/html' } });
+    const { res, status } = mockRes();
+    const next = vi.fn();
+
+    contentTypeEnforcement(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(415);
+  });
+
+  it('rejects text/xml on data routes', () => {
+    const req = mockReq({ method: 'POST', path: '/api/v1/fund', headers: { 'content-type': 'text/xml' } });
+    const { res, status } = mockRes();
+    const next = vi.fn();
+
+    contentTypeEnforcement(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(415);
+  });
+
+  it('allows text/* on webhook routes', () => {
+    const req = mockReq({ method: 'POST', path: '/api/webhook/events', headers: { 'content-type': 'text/plain' } });
+    const { res } = mockRes();
+    const next = vi.fn();
+
+    contentTypeEnforcement(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
 });
 
 describe('requestSizeLimiting middleware', () => {
@@ -218,6 +299,29 @@ describe('requestSizeLimiting middleware', () => {
 
     requestSizeLimiting(req, res, next);
     expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('blocks requests with content-length exceeding text/plain limit (8kb)', () => {
+    const req = mockReq({ headers: { 'content-type': 'text/plain', 'content-length': String(9 * 1024) } });
+    const { res, status, json } = mockRes();
+    const next = vi.fn();
+
+    requestSizeLimiting(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(413);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'payload_too_large' }));
+  });
+
+  it('blocks requests with content-length exceeding form-urlencoded limit (16kb)', () => {
+    const req = mockReq({
+      headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': String(17 * 1024) },
+    });
+    const { res, status } = mockRes();
+    const next = vi.fn();
+
+    requestSizeLimiting(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(413);
   });
 });
 

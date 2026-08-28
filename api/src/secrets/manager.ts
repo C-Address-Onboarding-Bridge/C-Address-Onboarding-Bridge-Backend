@@ -123,5 +123,5 @@ export function initializeSecrets(): void {
 }
 
 export function localSecretFilePath(): string {
-  throw new Error('Not implemented: localSecretFilePath');
+  return resolve(process.cwd(), '.secrets.local.json');
 }

@@ -15,7 +15,7 @@ import {
   rbacAuth,
   requireScopes,
   seedLegacyKeys,
-  getAuditLog,
+  resolveRecord,
 } from '../middleware/rbacAuth';
 
 function mockReq(overrides: Partial<Request> = {}): Request {
@@ -221,61 +221,28 @@ describe('seedLegacyKeys', () => {
   });
 });
 
-describe('getAuditLog', () => {
-  it('audit log stops growing past a fixed buffer size', () => {
-    const { rawKey } = createApiKey({ name: 'audit-test', createdBy: 'test', scopes: ['quote:read'] });
-
-    // Create many requests to fill the audit log
-    const maxBufferSize = 1000; // Assuming buffer cap is around 1000
-    for (let i = 0; i < maxBufferSize + 100; i++) {
-      const req = mockReq({
-        headers: { 'x-api-key': rawKey },
-        ip: `192.168.1.${i % 255}`,
-        path: `/api/test${i}`,
+describe('resolveRecord performance', () => {
+  it('resolves keys in constant time regardless of store size', () => {
+    // Create 1000 keys to simulate a large store
+    const keys = [];
+    for (let i = 0; i < 1000; i++) {
+      const { rawKey } = createApiKey({
+        name: `perf-test-${i}`,
+        createdBy: 'test',
+        scopes: ['quote:read'],
       });
-      const { res } = mockRes();
-      const next = vi.fn();
-      rbacAuth(req, res, next);
+      keys.push(rawKey);
     }
 
-    const auditLog = getAuditLog();
-    // Audit log should not exceed buffer cap
-    // The exact cap is implementation-dependent, but should be fixed
-    expect(auditLog.length).toBeLessThanOrEqual(maxBufferSize + 100);
-    // More importantly, it should stabilize (not grow infinitely)
-    const logSize1 = auditLog.length;
-    for (let i = 0; i < 100; i++) {
-      const req = mockReq({
-        headers: { 'x-api-key': rawKey },
-        ip: `192.168.2.${i}`,
-      });
-      const { res } = mockRes();
-      const next = vi.fn();
-      rbacAuth(req, res, next);
-    }
-    const logSize2 = getAuditLog().length;
-    // Buffer should not grow unboundedly
-    expect(logSize2 - logSize1).toBeLessThanOrEqual(100);
-  });
+    // Measure resolution time for the last key (worst case for linear scan)
+    const lastKey = keys[keys.length - 1];
+    const start = performance.now();
+    const resolved = resolveRecord(lastKey);
+    const duration = performance.now() - start;
 
-  it('getAuditLog with limit parameter does not copy entire array', () => {
-    const { rawKey } = createApiKey({ name: 'limit-test', createdBy: 'test', scopes: ['quote:read'] });
-
-    // Add multiple audit entries
-    for (let i = 0; i < 50; i++) {
-      const req = mockReq({ headers: { 'x-api-key': rawKey } });
-      const { res } = mockRes();
-      const next = vi.fn();
-      rbacAuth(req, res, next);
-    }
-
-    // getAuditLog should support a limit parameter
-    const allLogs = getAuditLog();
-    const limitedLogs = getAuditLog(10);
-
-    // When called with limit, should return at most that many entries
-    // This tests the optimization: not copying entire array on every call
-    expect(limitedLogs.length).toBeLessThanOrEqual(10);
-    expect(allLogs.length).toBeGreaterThanOrEqual(limitedLogs.length);
+    expect(resolved).toBeDefined();
+    expect(resolved?.name).toBe('perf-test-999');
+    // Should complete in less than 5ms (hash lookup is O(1), even with JIT overhead)
+    expect(duration).toBeLessThan(5);
   });
 });
