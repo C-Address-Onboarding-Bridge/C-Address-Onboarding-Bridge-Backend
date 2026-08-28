@@ -1,4 +1,7 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 build/
 coverage/
@@ -73,4 +76,3 @@ examples/java/target/
 # Temporary files
 *.tmp
 *.bak
-.nyc_output/
