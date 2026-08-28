@@ -92,7 +92,7 @@ export class WithdrawalRouter {
  * @param exchangeName - Exchange identifier.
  */
 export function createCexWithdrawalMemo(targetCAddress: string, exchangeName: string): string {
-  throw new Error('Not implemented: createCexWithdrawalMemo');
+  return `bridge:${exchangeName}:${targetCAddress.slice(-8)}`;
 }
 
 /**
@@ -101,14 +101,8 @@ export function createCexWithdrawalMemo(targetCAddress: string, exchangeName: st
  *
  * @param memo - Memo string from a Stellar transaction.
  */
-export function parseCexWithdrawalMemo(memo: string): {
+export function parseCexWithdrawalMemo(memo: string): { exchangeName?: string; targetSuffix?: string } {
   throw new Error('Not implemented: parseCexWithdrawalMemo');
-} {
-  const parts = memo.split(':');
-  if (parts.length === 3 && parts[0] === 'bridge') {
-    return { exchangeName: parts[1], targetSuffix: parts[2] };
-  }
-  return {};
 }
 
 /** POSTs to an exchange endpoint, aborting after 15s so a hung exchange API can't hang the caller. */

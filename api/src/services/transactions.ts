@@ -106,40 +106,52 @@ function parseAmount(value: string): number {
   return Number.parseFloat(value);
 }
 
-export function listTransactions(params: TransactionQueryParams = {}): {
-  throw new Error('Not implemented: listTransactions');
-} {
-  const limit = Math.min(Math.max(params.limit ?? 20, 1), 100);
-  const fromDate = params.fromDate ? Date.parse(params.fromDate) : undefined;
-  const toDate = params.toDate ? Date.parse(params.toDate) : undefined;
-  const minAmount = params.minAmount ? parseAmount(params.minAmount) : undefined;
-  const maxAmount = params.maxAmount ? parseAmount(params.maxAmount) : undefined;
+const DEFAULT_TRANSACTIONS_LIMIT = 20;
 
-  const filtered = transactionStore
-    .filter((tx) => (params.status ? tx.status === params.status : true))
-    .filter((tx) => (fromDate !== undefined ? new Date(tx.createdAt).getTime() >= fromDate : true))
-    .filter((tx) => (toDate !== undefined ? new Date(tx.createdAt).getTime() <= toDate : true))
-    .filter((tx) => (minAmount !== undefined ? parseAmount(tx.amount) >= minAmount : true))
-    .filter((tx) => (maxAmount !== undefined ? parseAmount(tx.amount) <= maxAmount : true))
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+export function listTransactions(params: TransactionQueryParams = {}): { data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean } {
+  const { status, fromDate, toDate, minAmount, maxAmount, cursor, offset } = params;
+  const limit = params.limit ?? DEFAULT_TRANSACTIONS_LIMIT;
 
-  let page = filtered;
-  if (params.cursor) {
-    const cursorTime = Date.parse(params.cursor);
-    page = page.filter((tx) => new Date(tx.createdAt).getTime() < cursorTime);
-  } else if (params.offset) {
-    page = page.slice(params.offset);
+  const filtered = transactionStore.filter((tx) => {
+    if (status && tx.status !== status) return false;
+    if (fromDate && tx.createdAt < fromDate) return false;
+    if (toDate && tx.createdAt > toDate) return false;
+    if (minAmount !== undefined && parseAmount(tx.amount) < parseAmount(minAmount)) return false;
+    if (maxAmount !== undefined && parseAmount(tx.amount) > parseAmount(maxAmount)) return false;
+    return true;
+  });
+
+  let startIndex = 0;
+  if (cursor) {
+    const cursorIndex = filtered.findIndex((tx) => tx.id === cursor);
+    startIndex = cursorIndex === -1 ? 0 : cursorIndex + 1;
+  } else if (offset) {
+    startIndex = offset;
   }
 
-  const hasMore = page.length > limit;
-  const slice = page.slice(0, limit);
-  const nextCursor = hasMore ? slice[slice.length - 1]?.createdAt ?? null : null;
+  const page = filtered.slice(startIndex, startIndex + limit);
+  const hasMore = startIndex + limit < filtered.length;
+  const nextCursor = hasMore ? page[page.length - 1]?.id ?? null : null;
 
-  return { data: slice, nextCursor, hasMore };
+  return { data: page, nextCursor, hasMore };
 }
 
 export function serializeTransactionsCsv(transactions: TransactionRecord[]): string {
-  throw new Error('Not implemented: serializeTransactionsCsv');
+  const headers = ['id', 'txHash', 'sourceAddr', 'targetAddr', 'status', 'amount', 'fee', 'createdAt', 'currency'];
+
+  const escapeField = (value: string): string => {
+    // Wrap in quotes if the value contains a comma, double-quote, or newline
+    if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  };
+
+  const rows = transactions.map((tx) =>
+    headers.map((key) => escapeField(String(tx[key as keyof TransactionRecord]))).join(','),
+  );
+
+  return [headers.join(','), ...rows].join('\n');
 }
 
 export function getTransactionStats() {
@@ -150,9 +162,7 @@ export function getFeeConfig(): FeeConfigState {
   throw new Error('Not implemented: getFeeConfig');
 }
 
-export function updateFeeConfig(feeBps: number, timelockMs: number): {
-  throw new Error('Not implemented: updateFeeConfig');
-} {
+export function updateFeeConfig(feeBps: number, timelockMs: number): { pendingFeeBps: number; timelockUntil: number } {
   const timelockUntil = Date.now() + timelockMs;
   feeConfigState = {
     ...feeConfigState,
@@ -164,9 +174,7 @@ export function updateFeeConfig(feeBps: number, timelockMs: number): {
   return { pendingFeeBps: feeBps, timelockUntil };
 }
 
-export function withdrawAccumulatedFees(): {
-  throw new Error('Not implemented: withdrawAccumulatedFees');
-} {
+export function withdrawAccumulatedFees(): { withdrawn: string; status: 'completed' } {
   const withdrawn = accumulatedFees;
   accumulatedFees = '0.00';
   logger.info({ withdrawn }, 'accumulated fees withdrawn');

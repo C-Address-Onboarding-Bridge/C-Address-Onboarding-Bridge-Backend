@@ -16,7 +16,7 @@ interface MetricsSnapshot {
 const metricsStore: MetricsSnapshot[] = [];
 
 export function recordMetric(key: keyof Omit<MetricsSnapshot, 'period' | 'computedAt'>): void {
-  throw new Error('Not implemented: recordMetric');
+  pendingSnapshot[key]++;
 }
 
 let pendingSnapshot: Omit<MetricsSnapshot, 'period' | 'computedAt'> = resetCounters();
@@ -30,9 +30,16 @@ function getPendingSnapshot() {
 }
 
 export async function processMetrics(job: Job<MetricsData>): Promise<void> {
-  throw new Error('Not implemented: processMetrics');
+  const snapshot: MetricsSnapshot = {
+    period: job.data.period,
+    computedAt: Date.now(),
+    ...pendingSnapshot,
+  };
+  metricsStore.push(snapshot);
+  logger.info({ period: job.data.period }, 'Metrics snapshot captured');
+  pendingSnapshot = resetCounters();
 }
 
 export function getMetrics(): MetricsSnapshot[] {
-  throw new Error('Not implemented: getMetrics');
+  return metricsStore;
 }

@@ -149,30 +149,41 @@ export function getAllQueues(): Queue[] {
 }
 
 export async function closeQueues(): Promise<void> {
-  throw new Error('Not implemented: closeQueues');
+  const queues = getQueues();
+  await Promise.all(queues.all.map(q => q.close()));
+  _queues = null;
 }
 
 export async function scheduleRecurringJobs(): Promise<void> {
-  throw new Error('Not implemented: scheduleRecurringJobs');
+  const queues = getQueues();
+  await queues.cacheWarmup.add('cache-warmup', { assets: [] }, { repeat: { pattern: '*/30 * * * * *' } });
+  await queues.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { pattern: '0 * * * * *' } });
+  await queues.cleanup.add('cleanup', { olderThanMs: 7 * 24 * 60 * 60 * 1000 }, { repeat: { pattern: '0 0 * * * *' } });
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
-  throw new Error('Not implemented: enqueueAuditLog');
+  const queues = getQueues();
+  await queues.asyncCritical.add('async-audit-log', data);
 }
 
 export async function enqueueAnalytics(data: AnalyticsJobData): Promise<void> {
-  throw new Error('Not implemented: enqueueAnalytics');
+  const queues = getQueues();
+  await queues.asyncPipeline.add('async-analytics', data);
 }
 
 export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Promise<void> {
-  throw new Error('Not implemented: enqueuePipelineMetrics');
+  const queues = getQueues();
+  await queues.asyncPipeline.add('pipeline-metrics', data);
 }
 
 export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void> {
-  throw new Error('Not implemented: enqueueWebhookRetry');
+  const queues = getQueues();
+  await queues.webhookRetry.add('webhook-retry', data);
 }
 
 /** Returns the number of waiting (not yet picked up) jobs in a queue. */
 export async function getQueueWaitingCount(queueName: 'async-critical' | 'async-pipeline'): Promise<number> {
-  throw new Error('Not implemented: getQueueWaitingCount');
+  const queues = getQueues();
+  const queue = queueName === 'async-critical' ? queues.asyncCritical : queues.asyncPipeline;
+  return queue.count();
 }

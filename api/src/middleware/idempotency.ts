@@ -15,5 +15,47 @@ function idempotencyKey(key: string): string {
 }
 
 export function idempotencyMiddleware(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: idempotencyMiddleware');
+  const key = req.headers['x-idempotency-key'] as string;
+
+  if (!key) {
+    if (!config.idempotency.required) {
+      next();
+      return;
+    }
+    res.status(400).json({ error: 'missing_idempotency_key' });
+    return;
+  }
+
+  if (!UUID_V4_RE.test(key)) {
+    res.status(400).json({ error: 'invalid_idempotency_key' });
+    return;
+  }
+
+  const cacheKey = idempotencyKey(key);
+
+  cacheGet(cacheKey)
+    .then((cached) => {
+      if (cached) {
+        const parsed = JSON.parse(cached) as StoredResponse;
+        res.status(parsed.status);
+        res.setHeader('Idempotent-Replayed', 'true');
+        res.json(parsed.body);
+        return;
+      }
+
+      res.setHeader('Idempotent-Replayed', 'false');
+      const originalJson = res.json.bind(res);
+      res.json = (body: unknown): Response => {
+        const toCache = JSON.stringify({ status: res.statusCode, body });
+        cacheSet(cacheKey, toCache, TTL_SECONDS).catch(() => {
+          // Don't break the response if caching fails.
+        });
+        return originalJson(body);
+      };
+
+      next();
+    })
+    .catch(() => {
+      next();
+    });
 }

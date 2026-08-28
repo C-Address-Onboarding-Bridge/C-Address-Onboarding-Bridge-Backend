@@ -9,7 +9,20 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 type PipelineJobData = AnalyticsJobData | PipelineMetricsJobData;
 
 export async function processAsyncPipeline(job: Job<PipelineJobData>): Promise<void> {
-  throw new Error('Not implemented: processAsyncPipeline');
+  const end = asyncPipelineJobDuration.startTimer();
+  try {
+    if ('batch' in job.data) {
+      await processAnalytics(job as Job<AnalyticsJobData>);
+    } else {
+      await processPipelineMetrics(job as Job<PipelineMetricsJobData>);
+    }
+  } catch (error) {
+    asyncPipelineFailureCounter.inc();
+    logger.error({ jobId: job.id, error }, 'failed to process async pipeline job');
+    throw error;
+  } finally {
+    end();
+  }
 }
 
 async function processAnalytics(job: Job<AnalyticsJobData>): Promise<void> {

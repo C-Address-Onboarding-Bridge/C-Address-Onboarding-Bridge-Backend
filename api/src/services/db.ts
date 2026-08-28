@@ -7,7 +7,20 @@ import { register } from './metrics';
 let pool: Pool | null = null;
 
 export function getPool(): Pool | null {
-  throw new Error('Not implemented: getPool');
+  if (!config.database.url) return null;
+  if (pool) return pool;
+
+  pool = new Pool({
+    connectionString: config.database.url,
+    min: config.database.poolMin,
+    max: config.database.poolMax,
+    idleTimeoutMillis: config.database.idleTimeoutMs,
+    connectionTimeoutMillis: config.database.connectionTimeoutMs,
+    statement_timeout: config.database.statementTimeoutMs,
+    ssl: config.database.ssl,
+  });
+
+  return pool;
 }
 
 export interface PoolMetrics {
@@ -62,9 +75,7 @@ new Gauge({
   },
 });
 
-export async function dbHealthCheck(): Promise<{
-  throw new Error('Not implemented: dbHealthCheck');
-}> {
+export async function dbHealthCheck(): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
   const p = getPool();
   if (!p) return { ok: true };
 

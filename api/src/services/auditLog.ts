@@ -74,7 +74,7 @@ function cloneCheckpoint(checkpoint: AuditCheckpoint): AuditCheckpoint {
 }
 
 export function hashPayload(payload: unknown): string {
-  throw new Error('Not implemented: hashPayload');
+  return sha256(stableStringify(payload));
 }
 
 export function verifyAuditChain(
