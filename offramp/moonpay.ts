@@ -25,7 +25,27 @@ export interface MoonpayPurchaseParams {
  * @returns Fully-formed URL to open in a browser or WebView.
  */
 export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPurchaseParams): string {
-  throw new Error('Not implemented: createMoonpayWidgetUrl');
+  const query = new URLSearchParams({ apiKey: config.apiKey });
+
+  if (params.walletAddress) query.set('walletAddress', params.walletAddress);
+  if (params.walletNetwork) query.set('walletNetwork', params.walletNetwork);
+  if (params.currencyCode) query.set('currencyCode', params.currencyCode);
+  if (params.baseCurrency) query.set('baseCurrencyCode', params.baseCurrency);
+  if (params.baseCurrencyAmount != null) query.set('baseCurrencyAmount', String(params.baseCurrencyAmount));
+  if (params.email) query.set('email', params.email);
+  if (params.redirectUrl) query.set('redirectUrl', params.redirectUrl);
+
+  const queryString = `?${query.toString()}`;
+
+  const signature = crypto
+    .createHmac('sha256', config.secretKey)
+    .update(queryString)
+    .digest('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  return `https://buy.moonpay.com${queryString}&signature=${signature}`;
 }
 
 /**

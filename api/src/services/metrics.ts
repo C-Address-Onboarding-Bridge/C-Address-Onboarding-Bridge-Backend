@@ -149,7 +149,15 @@ const funderTimestamps = new Map<string, number>();
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
 export function recordUniqueFunder(funderId: string): void {
-  throw new Error('Not implemented: recordUniqueFunder');
+  const now = Date.now();
+  // Evict stale entries older than 24 hours
+  for (const [id, ts] of funderTimestamps.entries()) {
+    if (now - ts > TWENTY_FOUR_HOURS_MS) {
+      funderTimestamps.delete(id);
+    }
+  }
+  funderTimestamps.set(funderId, now);
+  uniqueFundersGauge.set(funderTimestamps.size);
 }
 
 export interface FundingMetricInput {
@@ -162,7 +170,32 @@ export interface FundingMetricInput {
 }
 
 export function recordFundingMetrics(input: FundingMetricInput): void {
-  throw new Error('Not implemented: recordFundingMetrics');
+  const currency = input.currency ?? 'XLM';
+
+  // Increment the operation count for this source/status pair
+  fundingCount.inc({ source: input.source, status: input.status });
+
+  // Only track volume and fee metrics for successful operations with amounts
+  if (input.status === 'success') {
+    if (input.amountStroops !== undefined) {
+      const amount = Number(input.amountStroops);
+      if (!Number.isNaN(amount) && amount > 0) {
+        fundingVolume.inc({ source: input.source, currency }, amount);
+        fundingAmountHistogram.observe({ source: input.source }, amount);
+      }
+    }
+
+    if (input.feeStroops !== undefined) {
+      const fee = Number(input.feeStroops);
+      if (!Number.isNaN(fee) && fee > 0) {
+        feeCollected.inc({ source: input.source, currency }, fee);
+      }
+    }
+
+    if (input.funderId !== undefined) {
+      recordUniqueFunder(input.funderId);
+    }
+  }
 }
 
 export function setFeeRateBps(bps: number): void {

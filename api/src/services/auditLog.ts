@@ -74,7 +74,7 @@ function cloneCheckpoint(checkpoint: AuditCheckpoint): AuditCheckpoint {
 }
 
 export function hashPayload(payload: unknown): string {
-  throw new Error('Not implemented: hashPayload');
+  return sha256(stableStringify(payload));
 }
 
 export function verifyAuditChain(
@@ -160,11 +160,17 @@ export class IntegrityAuditLogService {
   }
 
   clearForTest(): void {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('clearForTest() is only available in test mode');
+    }
     this.entries = [];
     this.checkpoints = [];
   }
 
   tamperForTest(sequence: number, payload: Record<string, unknown>): void {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('tamperForTest() is only available in test mode');
+    }
     const entry = this.entries.find((item) => item.sequence === sequence);
     if (entry) entry.payload = payload;
   }

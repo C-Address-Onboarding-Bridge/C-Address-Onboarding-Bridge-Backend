@@ -116,7 +116,10 @@ export const fundEndpointRateLimit = fundLimiter;
 export const telemetryRateLimit = telemetryLimiter;
 
 export function applyRateLimitHeaders(_req: Request, res: Response, next: NextFunction) {
-  throw new Error('Not implemented: applyRateLimitHeaders');
+  const windowSecs = Math.ceil(config.rateLimit.windowMs / 1000);
+  res.set('X-RateLimit-Window', String(windowSecs));
+  res.set('Retry-After', String(windowSecs));
+  next();
 }
 
 export function trackRequestCost(apiKey: string, cost: number): boolean {
