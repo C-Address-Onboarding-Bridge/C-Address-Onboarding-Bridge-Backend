@@ -62,8 +62,16 @@ function detectPatterns(values: string[], patterns: RegExp[]): boolean {
   return values.some((v) => patterns.some((p) => p.test(v)));
 }
 
+const MULTI_VALUED_QUERY_PARAMS = new Set([
+  'status',
+  'type',
+]);
+
 function hasParameterPollution(query: Record<string, unknown>): boolean {
-  return Object.values(query).some((v) => Array.isArray(v));
+  return Object.entries(query).some(([key, v]) => {
+    if (!Array.isArray(v)) return false;
+    return !MULTI_VALUED_QUERY_PARAMS.has(key);
+  });
 }
 
 function sanitizeErrorMessage(msg: string): string {
