@@ -36,7 +36,17 @@ export interface PoolMetrics {
 
 /** Live snapshot of the PostgreSQL pool, or null when the DB is not configured. */
 export function getPoolMetrics(): PoolMetrics | null {
-  throw new Error('Not implemented: getPoolMetrics');
+  const p = getPool();
+  if (!p) return null;
+
+  const idle = p.idleCount;
+  const active = p.totalCount - p.idleCount;
+  return {
+    total: p.totalCount,
+    idle,
+    active,
+    waiting: p.waitingCount,
+  };
 }
 
 // ─── Pool metrics ──────────────────────────────────────────────────────────────
@@ -93,5 +103,8 @@ export async function dbHealthCheck(): Promise<{ ok: boolean; latencyMs?: number
 }
 
 export async function closePool(): Promise<void> {
-  throw new Error('Not implemented: closePool');
+  if (_pool) {
+    await _pool.end();
+    _pool = null;
+  }
 }

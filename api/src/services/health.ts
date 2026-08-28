@@ -88,5 +88,6 @@ export async function getHealthStatus(force = false): Promise<HealthResult> {
 }
 
 export function invalidateHealthCache(): void {
-  throw new Error('Not implemented: invalidateHealthCache');
+  cachedResult = null;
+  cacheExpiresAt = 0;
 }
