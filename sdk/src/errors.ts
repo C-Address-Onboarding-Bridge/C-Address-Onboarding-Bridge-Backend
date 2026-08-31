@@ -181,7 +181,7 @@ export function parseHttpError(status: number, body: ErrorBody, cause?: unknown,
 // ─── Type guard helpers ────────────────────────────────────────────────────────
 
 export function isAuthError(err: unknown): err is AuthError {
-  throw new Error('Not implemented: isAuthError');
+  return err instanceof AuthError;
 }
 
 export function isValidationError(err: unknown): err is ValidationError {

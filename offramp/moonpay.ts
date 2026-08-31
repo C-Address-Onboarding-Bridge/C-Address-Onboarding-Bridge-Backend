@@ -58,7 +58,9 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
  * when the signature has a different byte length than the computed HMAC).
  */
 export function verifyMoonpayWebhook(config: MoonpayConfig, rawBody: string, signature: string): boolean {
-  throw new Error('Not implemented: verifyMoonpayWebhook');
+  const expected = crypto.createHmac('sha256', config.secretKey).update(rawBody).digest();
+  const received = Buffer.from(signature, 'base64');
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
 /**
