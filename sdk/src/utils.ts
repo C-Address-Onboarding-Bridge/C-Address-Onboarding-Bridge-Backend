@@ -6,17 +6,22 @@ import { ValidationError } from './errors';
  * Use `isGAddress` / `isCAddress` when you need to distinguish between them.
  */
 export function isValidStellarAddress(address: string): boolean {
-  throw new Error('Not implemented: isValidStellarAddress');
+  // Stellar StrKey addresses are exactly 56 characters long
+  if (address.length !== 56) return false;
+  // Must start with 'G' (classic account) or 'C' (contract address)
+  if (address[0] !== 'G' && address[0] !== 'C') return false;
+  // Must only contain valid RFC 4648 base32 characters: A-Z and 2-7
+  return /^[A-Z2-7]{56}$/.test(address);
 }
 
 /** Returns `true` if the address is a Soroban contract address (starts with `C`). */
 export function isCAddress(address: string): boolean {
-  return typeof address === 'string' && address.startsWith('C');
+  return isValidStellarAddress(address) && address.startsWith('C');
 }
 
 /** Returns `true` if the address is a classic Stellar account address (starts with `G`). */
 export function isGAddress(address: string): boolean {
-  throw new Error('Not implemented: isGAddress');
+  return isValidStellarAddress(address) && address.startsWith('G');
 }
 
 /**

@@ -106,12 +106,52 @@ function parseAmount(value: string): number {
   return Number.parseFloat(value);
 }
 
+const DEFAULT_TRANSACTIONS_LIMIT = 20;
+
 export function listTransactions(params: TransactionQueryParams = {}): { data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean } {
-  throw new Error('Not implemented: listTransactions');
+  const { status, fromDate, toDate, minAmount, maxAmount, cursor, offset } = params;
+  const limit = params.limit ?? DEFAULT_TRANSACTIONS_LIMIT;
+
+  const filtered = transactionStore.filter((tx) => {
+    if (status && tx.status !== status) return false;
+    if (fromDate && tx.createdAt < fromDate) return false;
+    if (toDate && tx.createdAt > toDate) return false;
+    if (minAmount !== undefined && parseAmount(tx.amount) < parseAmount(minAmount)) return false;
+    if (maxAmount !== undefined && parseAmount(tx.amount) > parseAmount(maxAmount)) return false;
+    return true;
+  });
+
+  let startIndex = 0;
+  if (cursor) {
+    const cursorIndex = filtered.findIndex((tx) => tx.id === cursor);
+    startIndex = cursorIndex === -1 ? 0 : cursorIndex + 1;
+  } else if (offset) {
+    startIndex = offset;
+  }
+
+  const page = filtered.slice(startIndex, startIndex + limit);
+  const hasMore = startIndex + limit < filtered.length;
+  const nextCursor = hasMore ? page[page.length - 1]?.id ?? null : null;
+
+  return { data: page, nextCursor, hasMore };
 }
 
 export function serializeTransactionsCsv(transactions: TransactionRecord[]): string {
-  throw new Error('Not implemented: serializeTransactionsCsv');
+  const headers = ['id', 'txHash', 'sourceAddr', 'targetAddr', 'status', 'amount', 'fee', 'createdAt', 'currency'];
+
+  const escapeField = (value: string): string => {
+    // Wrap in quotes if the value contains a comma, double-quote, or newline
+    if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  };
+
+  const rows = transactions.map((tx) =>
+    headers.map((key) => escapeField(String(tx[key as keyof TransactionRecord]))).join(','),
+  );
+
+  return [headers.join(','), ...rows].join('\n');
 }
 
 export function getTransactionStats() {

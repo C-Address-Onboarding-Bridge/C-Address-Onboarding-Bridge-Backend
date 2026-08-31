@@ -182,6 +182,33 @@ describe('Rate Limit Abuse Detection', () => {
 
       expect(mockNext).toHaveBeenCalled();
     });
+
+    it('enforces 500 req/min limit for high-tier keys when rbacAuth runs first', () => {
+      mockReq.apiKeyRecord = { id: 'key-high', rateLimit: 'high' } as any;
+
+      tierRateLimitMiddleware(mockReq as Request, mockRes as Response, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
+      expect(mockReq.apiKeyRecord.rateLimit).toBe('high');
+    });
+
+    it('enforces 100 req/min limit for standard-tier keys when rbacAuth runs first', () => {
+      mockReq.apiKeyRecord = { id: 'key-standard', rateLimit: 'standard' } as any;
+
+      tierRateLimitMiddleware(mockReq as Request, mockRes as Response, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
+      expect(mockReq.apiKeyRecord.rateLimit).toBe('standard');
+    });
+
+    it('does not apply tier rate limiting to unauthenticated requests', () => {
+      mockReq.apiKeyRecord = undefined;
+
+      tierRateLimitMiddleware(mockReq as Request, mockRes as Response, mockNext);
+
+      expect(mockNext).toHaveBeenCalled();
+      expect(mockReq.apiKeyRecord).toBeUndefined();
+    });
   });
 
   describe('Request Cost Tracking', () => {

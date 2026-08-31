@@ -5,7 +5,7 @@ import { ValidationError } from './errors';
 
 /** Returns `true` if the token is the native XLM asset. */
 export function isNativeToken(token: Token): token is { type: 'native' } {
-  throw new Error('Not implemented: isNativeToken');
+  return token.type === 'native';
 }
 
 /** Returns `true` if the token is a SAC (Stellar Asset Converter) token. */
