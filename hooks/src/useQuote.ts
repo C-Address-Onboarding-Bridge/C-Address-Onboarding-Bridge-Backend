@@ -1,3 +1,4 @@
+```typescript
 import { useCallback, useEffect, useState } from 'react';
 import type { BridgeClientConfig, Quote, QuoteParams } from '@c-address-bridge/sdk';
 import { useCAddressBridge } from './useCAddressBridge';
@@ -11,7 +12,7 @@ export interface UseQuoteResult {
   data: Quote | undefined;
   error: Error | undefined;
   loading: boolean;
-  /** Re-runs the quote request, bypassing nothing but re-triggering the fetch effect. */
+  /** Re-runs the quote request, bypassing the SDK cache. */
   refetch: () => void;
 }
 
@@ -41,9 +42,10 @@ export function useQuote(
     let cancelled = false;
     setLoading(true);
     setError(undefined);
+    setData(undefined);
 
     client
-      .getQuote(params)
+      .getQuote(params, { forceRefresh: true })
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -63,3 +65,4 @@ export function useQuote(
 
   return { data, error, loading, refetch };
 }
+```
