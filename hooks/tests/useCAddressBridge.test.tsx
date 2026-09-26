@@ -35,4 +35,31 @@ describe('useCAddressBridge', () => {
 
     expect(result.current).not.toBe(first);
   });
+
+  it('creates a new client when a function-valued option changes', () => {
+    const logger1 = { debug: () => {} };
+    const logger2 = { debug: () => {} };
+
+    const { result, rerender } = renderHook(
+      (props: { logger: typeof logger1 }) =>
+        useCAddressBridge({ baseUrl: BASE_URL, retry: { logger: props.logger } }),
+      { initialProps: { logger: logger1 } },
+    );
+
+    const first = result.current;
+    rerender({ logger: logger2 });
+
+    expect(result.current).not.toBe(first);
+  });
+
+  it('does not throw when config contains a BigInt value', () => {
+    const configWithBigInt = {
+      baseUrl: BASE_URL,
+      customValue: 100n,
+    } as any;
+
+    expect(() => {
+      renderHook(() => useCAddressBridge(configWithBigInt));
+    }).not.toThrow();
+  });
 });
