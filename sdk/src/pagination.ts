@@ -25,11 +25,17 @@ export class PaginationHelper<T> {
 
       if (cursor && throttleMs > 0) {
         await new Promise<void>((resolve, reject) => {
-          const t = setTimeout(resolve, throttleMs);
-          sig?.addEventListener('abort', () => {
-            clearTimeout(t);
+          const onAbort = () => {
+            clearTimeout(timer);
             reject(new Error('Aborted'));
-          }, { once: true });
+          };
+
+          const timer = setTimeout(() => {
+            sig?.removeEventListener('abort', onAbort);
+            resolve();
+          }, throttleMs);
+
+          sig?.addEventListener('abort', onAbort, { once: true });
         });
       }
     } while (cursor && !sig?.aborted);

@@ -99,6 +99,25 @@ describe('PaginationHelper', () => {
     expect(result[0]).toEqual(batch1);
     expect(result[1]).toEqual(batch2);
   });
+
+  it('does not leak abort listeners after iterating multiple throttled pages', async () => {
+    const { getEventListeners } = await import('node:events');
+    const p1 = { data: [{ id: '1' }], nextCursor: 'c-2', hasMore: true };
+    const p2 = { data: [{ id: '2' }], nextCursor: 'c-3', hasMore: true };
+    const p3 = { data: [{ id: '3' }], nextCursor: null, hasMore: false };
+
+    fetcher = vi.fn().mockResolvedValueOnce(p1).mockResolvedValueOnce(p2).mockResolvedValueOnce(p3);
+
+    const controller = new AbortController();
+    const helper = new PaginationHelper(fetcher, { throttleMs: 5 });
+
+    for await (const page of helper.pages(controller.signal)) {
+      void page;
+    }
+
+    const listeners = getEventListeners(controller.signal, 'abort');
+    expect(listeners).toHaveLength(0);
+  });
 });
 
 describe('paginateAll', () => {
