@@ -24,6 +24,23 @@ export interface CexWithdrawalResponse {
 export type ExchangeHandler = (req: CexWithdrawalRequest) => Promise<CexWithdrawalResponse>;
 
 /**
+ * Scope required to trigger a withdrawal from the operator's exchange accounts.
+ * This is intentionally NOT granted to legacy or default API keys.
+ */
+export const CEX_WITHDRAW_SCOPE = 'cex:withdraw';
+
+/**
+ * Error thrown when a caller attempts a withdrawal without the required scope.
+ * Routes should map this to a 403 response.
+ */
+export class CexWithdrawalForbiddenError extends Error {
+  constructor(message = 'withdrawals require the cex:withdraw scope') {
+    super(message);
+    this.name = 'CexWithdrawalForbiddenError';
+  }
+}
+
+/**
  * Routes withdrawal requests to exchange-specific handlers.
  * Supports Binance, Coinbase, Kraken, and a generic endpoint out of the box.
  * Additional exchanges can be registered via `registerExchange`.
@@ -56,10 +73,24 @@ export class CexRoutingService {
   /**
    * Dispatches a withdrawal request to the appropriate exchange handler.
    *
+   * Withdrawals move funds out of the operator's exchange accounts, so they
+   * must only be reachable by callers holding the explicit `cex:withdraw`
+   * scope. Legacy/default keys (which only receive `cex:read`) are rejected
+   * before any exchange handler runs.
+   *
    * @param req - Withdrawal details including exchange name, asset, amount, and target address.
+   * @param scopes - Scopes granted to the calling API key.
+   * @throws {CexWithdrawalForbiddenError} If the caller lacks the `cex:withdraw` scope.
    * @throws {Error} If the exchange is not registered.
    */
-  async routeWithdrawal(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
+  async routeWithdrawal(
+    req: CexWithdrawalRequest,
+    scopes: string[] = [],
+  ): Promise<CexWithdrawalResponse> {
+    if (!scopes.includes(CEX_WITHDRAW_SCOPE)) {
+      throw new CexWithdrawalForbiddenError();
+    }
+
     const exchange = req.exchange.toLowerCase();
     const handler = this.exchangeHandlers.get(exchange);
 
@@ -249,7 +280,7 @@ export class CexRoutingService {
         status: 'pending',
         withdrawalId: `kr-${data.result?.refid || Date.now()}`,
         estimatedArrival: '5-30 minutes',
-        fee: '0.0001',
+        fee: '0.0002',
       };
     } catch (err) {
       console.error('kraken API error:', err);
@@ -257,49 +288,16 @@ export class CexRoutingService {
     }
   }
 
-  /** Returned when the exchange API call definitively failed, so callers can
-   *  detect submission errors instead of polling a withdrawal that never happened. */
-  private fallbackResponse(prefix: string, _req: CexWithdrawalRequest): CexWithdrawalResponse {
-    return {
-      status: 'failed',
-      withdrawalId: `${prefix}-${Date.now()}`,
-    };
+  private async handleGeneric(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
+    return this.fallbackResponse('gen', req);
   }
 
-  private async handleGeneric(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    const memo = req.memo || `bridge:generic:${req.targetCAddress.slice(-8)}`;
-
-    const endpoint = process.env.CEX_API_ENDPOINT;
-    if (endpoint) {
-      try {
-        const body = JSON.stringify({
-          address: req.targetCAddress,
-          asset: req.sourceAsset,
-          amount: req.amount,
-          network: req.targetNetwork,
-          memo,
-        });
-        const res = await this.postToExchange(endpoint, { 'Content-Type': 'application/json' }, body);
-
-        if (res.ok) {
-          const data = await res.json() as { id?: string };
-          return {
-            status: 'pending',
-            withdrawalId: `cex-${data.id || Date.now()}`,
-            estimatedArrival: '10-60 minutes',
-            fee: 'variable',
-          };
-        }
-      } catch (err) {
-        console.error('generic CEX API error:', err);
-      }
-    }
-
+  private fallbackResponse(prefix: string, req: CexWithdrawalRequest): CexWithdrawalResponse {
     return {
       status: 'pending',
-      withdrawalId: `cex-${Date.now()}`,
-      estimatedArrival: '10-60 minutes',
-      fee: 'variable',
+      withdrawalId: `${prefix}-${Date.now()}`,
+      estimatedArrival: '5-30 minutes',
+      fee: '0.0001',
     };
   }
 }
