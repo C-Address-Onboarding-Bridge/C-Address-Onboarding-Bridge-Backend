@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { requireScopes } from '../middleware/rbacAuth';
 import {
+  CONTRACT_MAX_FEE_BPS,
   getAdminAuditLog,
   getFeeConfig,
   getTransactionStats,
@@ -16,8 +17,8 @@ import { isRedisEnabled, getCacheMetrics } from '../services/cache';
 
 export const adminRouter = Router();
 
-adminRouter.get('/stats', requireScopes('admin:keys'), (_req: Request, res: Response) => {
-  res.json(getTransactionStats());
+adminRouter.get('/stats', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  res.json(await getTransactionStats());
 });
 
 adminRouter.get('/fees', requireScopes('admin:keys'), (_req: Request, res: Response) => {
@@ -27,12 +28,29 @@ adminRouter.get('/fees', requireScopes('admin:keys'), (_req: Request, res: Respo
 adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Response) => {
   const feeBps = Number.parseInt(String(req.body?.feeBps ?? ''), 10);
   const timelockMs = Number.parseInt(String(req.body?.timelockMs ?? '60000'), 10);
-  if (Number.isNaN(feeBps) || feeBps < 0 || feeBps > 10000) {
-    res.status(400).json({ error: 'bad_request' });
+
+  // #639 — validate against contract max_fee_bps (1000 bps), not 10 000
+  if (Number.isNaN(feeBps) || feeBps < 0 || feeBps > CONTRACT_MAX_FEE_BPS) {
+    res.status(400).json({
+      error: 'bad_request',
+      message: `feeBps must be an integer in [0, ${CONTRACT_MAX_FEE_BPS}]`,
+    });
+    return;
+  }
+  // #639 — validate timelockMs: must be a non-negative integer
+  if (Number.isNaN(timelockMs) || timelockMs < 0) {
+    res.status(400).json({ error: 'bad_request', message: 'timelockMs must be a non-negative integer' });
     return;
   }
 
-  const result = updateFeeConfig(feeBps, timelockMs);
+  let result: { pendingFeeBps: number; timelockUntil: number };
+  try {
+    result = updateFeeConfig(feeBps, timelockMs);
+  } catch (err) {
+    res.status(400).json({ error: 'bad_request', message: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+
   const actor = req.apiKeyRecord?.id ?? 'admin';
 
   // recordAdminAction is synchronous but lightweight (in-memory push) — keep sync.
@@ -50,13 +68,17 @@ adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Respo
   res.json(result);
 });
 
-adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), (req: Request, res: Response) => {
-  const result = withdrawAccumulatedFees();
+// #640 — replace in-memory zero-out with governance proposal flow
+adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), async (req: Request, res: Response) => {
   const actor = req.apiKeyRecord?.id ?? 'admin';
+  const recipientAddress = typeof req.body?.recipientAddress === 'string' ? req.body.recipientAddress : undefined;
+  const tokenAddress = typeof req.body?.tokenAddress === 'string' ? req.body.tokenAddress : undefined;
 
-  recordAdminAction('withdraw_fees', { ...result }, actor);
+  const result = await withdrawAccumulatedFees(recipientAddress, tokenAddress);
 
-  const auditPayload = { amount: result.withdrawn, recipient: actor, status: result.status };
+  recordAdminAction('withdraw_fees_proposal', { ...result }, actor);
+
+  const auditPayload = { proposalId: result.proposalId, recipient: result.recipient, token: result.token, actor };
   enqueueAudit(
     'fee_withdrawal',
     auditPayload,

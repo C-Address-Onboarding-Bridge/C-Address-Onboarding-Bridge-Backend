@@ -13,8 +13,8 @@
  * types to match the mocks -- then delete this banner.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Request, Response, NextFunction } from 'express';
-import { createApiKey } from '../middleware/rbacAuth';
+import type { Request, Response } from 'express';
+import { createApiKey, listApiKeys, requireScopes } from '../middleware/rbacAuth';
 import { adminRouter } from '../routes/admin';
 
 process.env.NODE_ENV = 'test';
@@ -24,13 +24,14 @@ vi.mock('../index', () => ({
 }));
 
 vi.mock('../services/transactions', () => ({
+  CONTRACT_MAX_FEE_BPS: 1000,
   getAdminAuditLog: vi.fn(() => []),
   getFeeConfig: vi.fn(() => ({ feeBps: 30, timelockMs: 60000 })),
   getHealthSnapshot: vi.fn(() => ({ status: 'healthy', uptime: 12345 })),
-  getTransactionStats: vi.fn(() => ({ totalFunded: 1000, totalFees: 30 })),
+  getTransactionStats: vi.fn(() => Promise.resolve({ totalFunded: 1000, totalFees: 30 })),
   recordAdminAction: vi.fn(),
-  updateFeeConfig: vi.fn(() => ({ feeBps: 50, timelockMs: 60000 })),
-  withdrawAccumulatedFees: vi.fn(() => ({ status: 'success', withdrawn: 1000 })),
+  updateFeeConfig: vi.fn(() => ({ pendingFeeBps: 50, timelockUntil: Date.now() + 60000 })),
+  withdrawAccumulatedFees: vi.fn(() => Promise.resolve({ proposalId: 'p1', status: 'proposal_created', recipient: 'addr', token: 'tok', note: 'note' })),
 }));
 
 vi.mock('../services/auditLog', () => ({
@@ -89,7 +90,7 @@ describe('Admin Router - Scope Enforcement', () => {
 
       // Simulate what rbacAuth middleware does
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'admin-key');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'admin-key');
       authReq.apiKeyRecord = keyRecord;
 
       const { res } = createMockResponse();
@@ -117,14 +118,13 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'quote-only');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'quote-only');
       authReq.apiKeyRecord = keyRecord;
 
       const { res, status } = createMockResponse();
       const next = vi.fn();
 
       // Simulate requireScopes middleware
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -148,12 +148,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'fee-admin');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'fee-admin');
       authReq.apiKeyRecord = keyRecord;
 
       const { res } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -164,7 +163,7 @@ describe('Admin Router - Scope Enforcement', () => {
       const { rawKey } = createApiKey({
         name: 'no-admin',
         createdBy: 'test',
-        scopes: ['fund:read', 'quote:read'],
+        scopes: ['fund:write', 'quote:read'],
       });
 
       const req = createMockRequest({
@@ -174,12 +173,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'no-admin');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'no-admin');
       authReq.apiKeyRecord = keyRecord;
 
       const { res, status } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -203,12 +201,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'fee-updater');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'fee-updater');
       authReq.apiKeyRecord = keyRecord;
 
       const { res } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -230,12 +227,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'non-admin');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'non-admin');
       authReq.apiKeyRecord = keyRecord;
 
       const { res, status } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -259,12 +255,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'fee-withdrawer');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'fee-withdrawer');
       authReq.apiKeyRecord = keyRecord;
 
       const { res } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -285,12 +280,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'limited-key');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'limited-key');
       authReq.apiKeyRecord = keyRecord;
 
       const { res, status } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -313,12 +307,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'health-checker');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'health-checker');
       authReq.apiKeyRecord = keyRecord;
 
       const { res } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -339,12 +332,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'basic-key');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'basic-key');
       authReq.apiKeyRecord = keyRecord;
 
       const { res, status } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -368,12 +360,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'audit-reader');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'audit-reader');
       authReq.apiKeyRecord = keyRecord;
 
       const { res } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -394,12 +385,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'limited-audit');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'limited-audit');
       authReq.apiKeyRecord = keyRecord;
 
       const { res, status } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -422,12 +412,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'checkpoint-reader');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'checkpoint-reader');
       authReq.apiKeyRecord = keyRecord;
 
       const { res } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -448,12 +437,11 @@ describe('Admin Router - Scope Enforcement', () => {
       });
 
       const authReq = req as any;
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'no-checkpoint-access');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'no-checkpoint-access');
       authReq.apiKeyRecord = keyRecord;
 
       const { res, status } = createMockResponse();
       const next = vi.fn();
-      const requireScopes = require('../middleware/rbacAuth').requireScopes;
       const scopeMiddleware = requireScopes('admin:keys');
       scopeMiddleware(req, res, next);
 
@@ -479,7 +467,7 @@ describe('Admin Router - Scope Enforcement', () => {
         { path: '/api/v1/admin/audit/integrity/checkpoints', method: 'GET' },
       ];
 
-      const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === 'full-admin');
+      const keyRecord = listApiKeys().find((k: any) => k.name === 'full-admin');
 
       adminEndpoints.forEach((_endpoint) => {
         const req = createMockRequest({ headers: { 'x-api-key': rawKey } });
@@ -488,7 +476,6 @@ describe('Admin Router - Scope Enforcement', () => {
 
         const { res } = createMockResponse();
         const next = vi.fn();
-        const requireScopes = require('../middleware/rbacAuth').requireScopes;
         const scopeMiddleware = requireScopes('admin:keys');
         scopeMiddleware(req, res, next);
 
@@ -504,10 +491,10 @@ describe('Admin Router - Scope Enforcement', () => {
         const { rawKey } = createApiKey({
           name: `limited-${scope}`,
           createdBy: 'test',
-          scopes: [scope as any],
+          scopes: [scope],
         });
 
-        const keyRecord = require('../middleware/rbacAuth').listApiKeys().find((k: any) => k.name === `limited-${scope}`);
+        const keyRecord = listApiKeys().find((k: any) => k.name === `limited-${scope}`);
 
         adminEndpoints.forEach((_endpoint) => {
           const req = createMockRequest({ headers: { 'x-api-key': rawKey } });
@@ -516,7 +503,6 @@ describe('Admin Router - Scope Enforcement', () => {
 
           const { res, status } = createMockResponse();
           const next = vi.fn();
-          const requireScopes = require('../middleware/rbacAuth').requireScopes;
           const scopeMiddleware = requireScopes('admin:keys');
           scopeMiddleware(req, res, next);
 

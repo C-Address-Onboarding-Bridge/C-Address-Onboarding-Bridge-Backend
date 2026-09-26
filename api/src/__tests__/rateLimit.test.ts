@@ -106,7 +106,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it.skip('blocks requests from banned IPs', () => {
+    it('blocks requests from banned IPs', () => {
       // First, trigger abuse detection to ban an IP
       const req = {
         ...mockReq,
@@ -226,13 +226,13 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('Request Cost Tracking', () => {
-    it.skip('tracks request cost for API key', () => {
+    it('tracks request cost for API key', () => {
       const result = trackRequestCost('api-key-1', 100);
 
       expect(result).toBe(true);
     });
 
-    it.skip('accumulates costs across multiple requests', () => {
+    it('accumulates costs across multiple requests', () => {
       trackRequestCost('api-key-2', 100);
       trackRequestCost('api-key-2', 200);
       const result = trackRequestCost('api-key-2', 50);
@@ -240,7 +240,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(result).toBe(true);
     });
 
-    it.skip('rejects requests when cost limit exceeded', () => {
+    it('rejects requests when cost limit exceeded', () => {
       const apiKey = 'api-key-exceed';
       const maxCost = 1_000_000;
 
@@ -255,7 +255,7 @@ describe('Rate Limit Abuse Detection', () => {
       );
     });
 
-    it.skip('returns false when cost limit exceeded', () => {
+    it('returns false when cost limit exceeded', () => {
       const apiKey = 'api-key-limit';
       trackRequestCost(apiKey, 1_000_001);
 
@@ -264,14 +264,14 @@ describe('Rate Limit Abuse Detection', () => {
       expect(result).toBe(false);
     });
 
-    it.skip('tracks independent costs per API key', () => {
+    it('tracks independent costs per API key', () => {
       trackRequestCost('key-a', 100);
       trackRequestCost('key-b', 200);
 
       expect(mockSendAbuseAlert).not.toHaveBeenCalled();
     });
 
-    it.skip('resets cost tracking after TTL (3600s)', async () => {
+    it('resets cost tracking after TTL (3600s)', async () => {
       // Cost tracking should respect TTL, but for testing we verify tracking works
       const result = trackRequestCost('api-key-ttl', 500);
       expect(result).toBe(true);
@@ -279,7 +279,7 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('Abuse Pattern Detection - Large Amounts', () => {
-    it.skip('detects large amount requests', () => {
+    it('detects large amount requests', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.100',
@@ -302,7 +302,7 @@ describe('Rate Limit Abuse Detection', () => {
       );
     });
 
-    it.skip('ignores amounts at or below threshold', () => {
+    it('ignores amounts at or below threshold', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.101',
@@ -314,7 +314,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it.skip('accumulates large amount pattern detections', () => {
+    it('accumulates large amount pattern detections', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.102',
@@ -339,7 +339,7 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('Abuse Pattern Detection - Multiple Addresses', () => {
-    it.skip('detects multiple target addresses', () => {
+    it('detects multiple target addresses', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.200',
@@ -364,7 +364,7 @@ describe('Rate Limit Abuse Detection', () => {
       );
     });
 
-    it.skip('tracks unique addresses across requests', () => {
+    it('tracks unique addresses across requests', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.201',
@@ -390,7 +390,7 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('Abuse Pattern Detection - Rapid Requests', () => {
-    it.skip('detects rapid requests within time window', () => {
+    it('detects rapid requests within time window', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.300',
@@ -417,7 +417,7 @@ describe('Rate Limit Abuse Detection', () => {
       );
     });
 
-    it.skip('allows normal request rate', () => {
+    it('allows normal request rate', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.301',
@@ -441,7 +441,7 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('IP Banning After 3 Offenses', () => {
-    it.skip('bans IP after 3 different suspicious patterns detected', () => {
+    it('bans IP after 3 different suspicious patterns detected', () => {
       const ip = '192.168.1.400';
       const req = { ...mockReq, ip } as Request;
 
@@ -472,7 +472,7 @@ describe('Rate Limit Abuse Detection', () => {
       }
     });
 
-    it.skip('tracks offense count per IP', () => {
+    it('tracks offense count per IP', () => {
       const ip1 = '192.168.1.401';
       const ip2 = '192.168.1.402';
 
@@ -503,7 +503,7 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('Cost Limit Rejection', () => {
-    it.skip('rejects requests when cost limit is exceeded', () => {
+    it('rejects requests when cost limit is exceeded', () => {
       const req = {
         ...mockReq,
         headers: { 'x-api-key': 'cost-limit-key' },
@@ -521,7 +521,7 @@ describe('Rate Limit Abuse Detection', () => {
       });
     });
 
-    it.skip('allows requests within cost limits', () => {
+    it('allows requests within cost limits', () => {
       const req = {
         ...mockReq,
         headers: { 'x-api-key': 'normal-key' },
@@ -535,7 +535,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it.skip('sends alert when cost limit exceeded', () => {
+    it('sends alert when cost limit exceeded', () => {
       const apiKey = 'alert-key';
       trackRequestCost(apiKey, 1_000_001);
 
@@ -552,7 +552,7 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('Blocked IPs Stay Blocked', () => {
-    it.skip('maintains IP ban for duration of TTL', () => {
+    it('maintains IP ban for duration of TTL', () => {
       const ip = '192.168.1.500';
       const req = { ...mockReq, ip } as Request;
 
@@ -583,7 +583,7 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('Edge Cases and Error Handling', () => {
-    it.skip('handles missing amount in body gracefully', () => {
+    it('handles missing amount in body gracefully', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.600',
@@ -595,7 +595,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it.skip('handles missing targetAddress in body gracefully', () => {
+    it('handles missing targetAddress in body gracefully', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.601',
@@ -607,7 +607,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it.skip('handles missing body gracefully', () => {
+    it('handles missing body gracefully', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.602',
@@ -619,7 +619,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it.skip('handles missing API key record gracefully', () => {
+    it('handles missing API key record gracefully', () => {
       const req = {
         ...mockReq,
         apiKeyRecord: undefined,
@@ -632,7 +632,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it.skip('handles missing IP gracefully', () => {
+    it('handles missing IP gracefully', () => {
       const req = {
         ...mockReq,
         ip: undefined,
@@ -644,7 +644,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it.skip('handles invalid amount values gracefully', () => {
+    it('handles invalid amount values gracefully', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.603',
@@ -656,7 +656,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(mockNext).toHaveBeenCalled();
     });
 
-    it.skip('tracks unique target addresses only', () => {
+    it('tracks unique target addresses only', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.604',
@@ -714,7 +714,7 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('Multiple Middleware Layers', () => {
-    it.skip('combines IP ban with cost limit enforcement', () => {
+    it('combines IP ban with cost limit enforcement', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.700',
@@ -731,7 +731,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect((mockRes.status as any).mock.calls[0][0]).toBe(429);
     });
 
-    it.skip('applies filters in correct order - ban before other checks', () => {
+    it('applies filters in correct order - ban before other checks', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.701',
@@ -774,7 +774,7 @@ describe('Rate Limit Abuse Detection', () => {
   });
 
   describe('Pattern Accumulation and Thresholds', () => {
-    it.skip('reaches 5-pattern threshold for single pattern type', () => {
+    it('reaches 5-pattern threshold for single pattern type', () => {
       const req = {
         ...mockReq,
         ip: '192.168.1.800',
@@ -796,7 +796,7 @@ describe('Rate Limit Abuse Detection', () => {
       expect(alerts.length).toBeGreaterThan(0);
     });
 
-    it.skip('counts pattern detections correctly per IP/key combination', () => {
+    it('counts pattern detections correctly per IP/key combination', () => {
       const ip = '192.168.1.801';
       const apiKey = 'key-pattern-test';
 

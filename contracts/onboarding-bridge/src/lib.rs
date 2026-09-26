@@ -82,13 +82,45 @@ const MAX_TIERS: u32 = 50;
 /// Maximum memo size stored in each funding record, in bytes.
 const MAX_MEMO_BYTES: u32 = 64;
 
-const ERR_INVALID_C_ADDRESS: &str = "invalid c-address: not a contract address";
-const ERR_REENTRANT_CALL: &str = "reentrant call detected";
-const ERR_EMPTY_BATCH: &str = "batch inputs must not be empty";
-const ERR_MISMATCHED_LENGTHS: &str = "batch input vectors must have same length";
-const ERR_NO_ENTRIES_TO_ARCHIVE: &str = "no entries to archive";
-const ERR_ADMIN_CANNOT_BE_CONTRACT: &str = "admin address cannot be the contract address";
-const ERR_TIER_CAP_EXCEEDED: &str = "tier count exceeds maximum allowed";
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum BridgeError {
+    NotInitialized = 1,
+    AdminsEmpty = 2,
+    ThresholdZero = 3,
+    ThresholdExceedsAdminCount = 4,
+    MaxFeeExceedsLimit = 5,
+    FeeExceedsMaxFee = 6,
+    MinAmountInvalid = 7,
+    MaxAmountBelowMinimum = 8,
+    AdminCannotBeContract = 9,
+    InvalidCAddress = 10,
+    AmountNotPositive = 11,
+    ContractPaused = 12,
+    AmountBelowMinimum = 13,
+    AmountAboveMaximum = 14,
+    AmountTooLarge = 15,
+    ReentrantCall = 16,
+    EmptyBatch = 17,
+    MismatchedBatchLengths = 18,
+    NoEntriesToArchive = 19,
+    OnlyAdminsCanPropose = 20,
+    ExpiryTooShort = 21,
+    ExpiryTooLong = 22,
+    OnlyAdminsCanApprove = 23,
+    ProposalNotFound = 24,
+    ProposalExpired = 25,
+    ProposalAlreadyExecuted = 26,
+    AlreadyApproved = 27,
+    InsufficientApprovals = 28,
+    ExecutionTooSoon = 29,
+    RateBelowMinimum = 30,
+    RateAboveMaximum = 31,
+    InsufficientAccumulatedFees = 32,
+    DiscountTooHigh = 33,
+    TierCapExceeded = 34,
+}
 
 #[contractevent(topics = ["initialize"], data_format = "vec")]
 #[derive(Clone)]
@@ -248,6 +280,8 @@ pub enum DataKey {
     HotCount,
     ArchivedHash(u32),
     NextArchiveId,
+    NextArchiveRecordId,
+    ExecutionDelay,
     MinAmount,
     MaxAmount,
     UserVolume(Address, Address),
@@ -375,32 +409,33 @@ impl OnboardingBridge {
         bytes.first() == Some(b'C')
     }
 
-    fn validate_c_address(target: &Address) {
+    fn validate_c_address(target: &Address) -> Result<(), BridgeError> {
         if !Self::is_contract_address(target) {
-            panic!("{}", ERR_INVALID_C_ADDRESS);
+            return Err(BridgeError::InvalidCAddress);
         }
+        Ok(())
     }
 
-    fn validate_admins(env: &Env, admins: &Vec<Address>) {
+    fn validate_admins(env: &Env, admins: &Vec<Address>) -> Result<(), BridgeError> {
         let contract_address = env.current_contract_address();
         for i in 0..admins.len() {
             let admin = admins.get_unchecked(i);
-            assert!(
-                admin != contract_address,
-                "{}",
-                ERR_ADMIN_CANNOT_BE_CONTRACT
-            );
+            if admin == contract_address {
+                return Err(BridgeError::AdminCannotBeContract);
+            }
         }
+        Ok(())
     }
 
     pub fn is_valid_c_address(_env: Env, target: Address) -> bool {
         Self::is_contract_address(&target)
     }
 
-    fn pre_reentrancy_check(env: &Env) {
+    fn pre_reentrancy_check(env: &Env) -> Result<(), BridgeError> {
         if env.storage().temporary().has(&DataKey::ReentrancyGuard) {
-            panic!("{}", ERR_REENTRANT_CALL);
+            return Err(BridgeError::ReentrantCall);
         }
+        Ok(())
     }
 
     fn set_reentrancy_guard(env: &Env) {
@@ -436,19 +471,33 @@ impl OnboardingBridge {
         max_fee_bps: u32,
         min_amount: i128,
         max_amount: i128,
-    ) {
+    ) -> Result<(), BridgeError> {
         if env.storage().instance().has(&DataKey::Version) {
-            return;
+            return Ok(());
         }
-        assert!(!admins.is_empty(), "admins must not be empty");
-        assert!(threshold > 0, "threshold must be > 0");
-        assert!(threshold <= admins.len(), "threshold exceeds admin count");
-        assert!(max_fee_bps <= 10000, "max_fee_bps must be <= 10000");
-        assert!(fee_bps <= max_fee_bps, "fee_bps must be <= max_fee_bps");
-        assert!(min_amount > 0, "min_amount must be > 0");
-        assert!(max_amount >= min_amount, "max_amount must be >= min_amount");
+        if admins.is_empty() {
+            return Err(BridgeError::AdminsEmpty);
+        }
+        if threshold == 0 {
+            return Err(BridgeError::ThresholdZero);
+        }
+        if threshold > admins.len() {
+            return Err(BridgeError::ThresholdExceedsAdminCount);
+        }
+        if max_fee_bps > 10000 {
+            return Err(BridgeError::MaxFeeExceedsLimit);
+        }
+        if fee_bps > max_fee_bps {
+            return Err(BridgeError::FeeExceedsMaxFee);
+        }
+        if min_amount <= 0 {
+            return Err(BridgeError::MinAmountInvalid);
+        }
+        if max_amount < min_amount {
+            return Err(BridgeError::MaxAmountBelowMinimum);
+        }
 
-        Self::validate_admins(&env, &admins);
+        Self::validate_admins(&env, &admins)?;
 
         env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage()
@@ -474,6 +523,10 @@ impl OnboardingBridge {
         env.storage().instance().set(&DataKey::FundingCount, &0u32);
         env.storage().instance().set(&DataKey::HotCount, &0u32);
         env.storage().instance().set(&DataKey::NextArchiveId, &0u32);
+        env.storage().instance().set(&DataKey::NextArchiveRecordId, &1u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::ExecutionDelay, &execution_delay);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::ProposalNonce, &0u32);
         env.storage()
@@ -631,7 +684,7 @@ impl OnboardingBridge {
         env.storage()
             .instance()
             .get(&DataKey::Admins)
-            .expect("not initialized")
+            .ok_or(BridgeError::NotInitialized)
     }
 
     pub fn get_threshold(env: Env) -> u32 {
@@ -639,7 +692,7 @@ impl OnboardingBridge {
         env.storage()
             .instance()
             .get(&DataKey::Threshold)
-            .expect("not initialized")
+            .ok_or(BridgeError::NotInitialized)
     }
 
     /// #20: Batch analytics view — returns all counters in one call.
@@ -676,24 +729,27 @@ impl OnboardingBridge {
         token_address: Address,
         amount: i128,
         memo: String,
-    ) -> i128 {
+    ) -> Result<i128, BridgeError> {
         Self::extend_ttl(&env);
-        Self::pre_reentrancy_check(&env);
-        Self::validate_c_address(&target);
-        assert!(amount > 0, "amount must be positive");
+        Self::pre_reentrancy_check(&env)?;
+        Self::validate_c_address(&target)?;
+        if amount <= 0 {
+            return Err(BridgeError::AmountNotPositive);
+        }
         if env
             .storage()
             .instance()
             .get(&DataKey::Paused)
             .unwrap_or(false)
         {
-            panic!("contract is paused");
+            return Err(BridgeError::ContractPaused);
         }
         Self::set_reentrancy_guard(&env);
-        let result =
-            Self::fund_c_address_internal(&env, &source, &target, &token_address, amount, &memo);
+        let result = Self::fund_c_address_internal(
+            &env, &source, &target, &token_address, amount, &memo,
+        )?;
         Self::clear_reentrancy_guard(&env);
-        result
+        Ok(result)
     }
 
     fn fund_c_address_internal(
@@ -703,7 +759,7 @@ impl OnboardingBridge {
         token_address: &Address,
         amount: i128,
         memo: &String,
-    ) -> i128 {
+    ) -> Result<i128, BridgeError> {
         let min_amt: i128 = env
             .storage()
             .instance()
@@ -714,8 +770,12 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::MaxAmount)
             .unwrap_or(i128::MAX);
-        assert!(amount >= min_amt, "amount below minimum");
-        assert!(amount <= max_amt, "amount above maximum");
+        if amount < min_amt {
+            return Err(BridgeError::AmountBelowMinimum);
+        }
+        if amount > max_amt {
+            return Err(BridgeError::AmountAboveMaximum);
+        }
         // Guard: amount must not overflow the fee multiplication.
         assert!(
             amount <= MAX_SAFE_AMOUNT,
@@ -741,9 +801,12 @@ impl OnboardingBridge {
                 .instance()
                 .get(&DataKey::AccumulatedFees)
                 .unwrap_or(0);
+            let new_accumulated = accumulated
+                .checked_add(fee)
+                .expect("accumulated fee overflow");
             env.storage()
                 .instance()
-                .set(&DataKey::AccumulatedFees, &(accumulated + fee));
+                .set(&DataKey::AccumulatedFees, &new_accumulated);
 
             if Self::is_fee_token_whitelisted(env.clone(), token_address.clone()) {
                 let token_fee_rate = Self::fee_token_rate(env.clone(), token_address.clone());
@@ -753,9 +816,12 @@ impl OnboardingBridge {
                     .instance()
                     .get(&DataKey::AccumulatedFeesByToken(token_address.clone()))
                     .unwrap_or(0);
+                let new_token_accumulated = token_accumulated
+                    .checked_add(token_fee)
+                    .expect("token fee accumulator overflow");
                 env.storage().instance().set(
                     &DataKey::AccumulatedFeesByToken(token_address.clone()),
-                    &(token_accumulated + token_fee),
+                    &new_token_accumulated,
                 );
             }
         }
@@ -771,7 +837,7 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::FundingCount)
             .unwrap_or(0);
-        let id = count + 1;
+        let id = count.checked_add(1).expect("funding count overflow");
         let record = FundingRecord {
             source: source.clone(),
             target: target.clone(),
@@ -804,9 +870,12 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::TotalVolume)
             .unwrap_or(0);
+        let new_total_vol = total_vol
+            .checked_add(amount)
+            .expect("total volume overflow");
         env.storage()
             .instance()
-            .set(&DataKey::TotalVolume, &(total_vol + amount));
+            .set(&DataKey::TotalVolume, &new_total_vol);
 
         // Track per-token volume separately for meaningful multi-token analytics
         let token_vol_key = DataKey::TotalVolumeByToken(token_address.clone());
@@ -828,9 +897,10 @@ impl OnboardingBridge {
                 .instance()
                 .get(&DataKey::UniqueFunderCount)
                 .unwrap_or(0);
+            let new_uc = uc.checked_add(1).expect("unique funder count overflow");
             env.storage()
                 .instance()
-                .set(&DataKey::UniqueFunderCount, &(uc + 1));
+                .set(&DataKey::UniqueFunderCount, &new_uc);
         }
 
         Funded {
@@ -843,7 +913,7 @@ impl OnboardingBridge {
         }
         .publish(env);
 
-        fee
+        Ok(fee)
     }
 
     pub fn batch_fund_c_address(
@@ -853,21 +923,21 @@ impl OnboardingBridge {
         token_addresses: Vec<Address>,
         amounts: Vec<i128>,
         memos: Vec<String>,
-    ) -> (i128, u32) {
+    ) -> Result<(i128, u32), BridgeError> {
         Self::extend_ttl(&env);
-        Self::pre_reentrancy_check(&env);
+        Self::pre_reentrancy_check(&env)?;
         source.require_auth();
 
         let count = targets.len();
-        assert!(count > 0, "{}", ERR_EMPTY_BATCH);
-        assert!(
-            token_addresses.len() == count && amounts.len() == count && memos.len() == count,
-            "{}",
-            ERR_MISMATCHED_LENGTHS
-        );
+        if count == 0 {
+            return Err(BridgeError::EmptyBatch);
+        }
+        if token_addresses.len() != count || amounts.len() != count || memos.len() != count {
+            return Err(BridgeError::MismatchedBatchLengths);
+        }
 
         for i in 0..count {
-            Self::validate_c_address(&targets.get(i).unwrap());
+            Self::validate_c_address(&targets.get(i).unwrap())?;
         }
 
         Self::set_reentrancy_guard(&env);
@@ -878,8 +948,9 @@ impl OnboardingBridge {
             let token_addr = token_addresses.get(i).unwrap();
             let amount = amounts.get(i).unwrap();
             let memo = memos.get(i).unwrap();
-            total_fees +=
-                Self::fund_c_address_internal(&env, &source, &target, &token_addr, amount, &memo);
+            total_fees += Self::fund_c_address_internal(
+                &env, &source, &target, &token_addr, amount, &memo,
+            )?;
         }
 
         BatchFunded {
@@ -890,7 +961,7 @@ impl OnboardingBridge {
         .publish(&env);
 
         Self::clear_reentrancy_guard(&env);
-        (total_fees, count)
+        Ok((total_fees, count))
     }
 
     /// Route a CEX withdrawal to a C-address.
@@ -901,18 +972,20 @@ impl OnboardingBridge {
         token_address: Address,
         amount: i128,
         memo: String,
-    ) -> i128 {
+    ) -> Result<i128, BridgeError> {
         Self::extend_ttl(&env);
-        Self::pre_reentrancy_check(&env);
-        Self::validate_c_address(&target);
-        assert!(amount > 0, "amount must be positive");
+        Self::pre_reentrancy_check(&env)?;
+        Self::validate_c_address(&target)?;
+        if amount <= 0 {
+            return Err(BridgeError::AmountNotPositive);
+        }
         if env
             .storage()
             .instance()
             .get(&DataKey::Paused)
             .unwrap_or(false)
         {
-            panic!("contract is paused");
+            return Err(BridgeError::ContractPaused);
         }
         exchange.require_auth();
         Self::fund_c_address_internal(&env, &exchange, &target, &token_address, amount, &memo)
@@ -929,7 +1002,7 @@ impl OnboardingBridge {
         env.storage().persistent().get(&DataKey::Funding(id))
     }
 
-    fn archive_old_entries_internal(env: &Env, count: u32) -> BytesN<32> {
+    fn archive_old_entries_internal(env: &Env, count: u32) -> Result<BytesN<32>, BridgeError> {
         Self::extend_ttl(env);
 
         let total: u32 = env
@@ -938,10 +1011,13 @@ impl OnboardingBridge {
             .get(&DataKey::FundingCount)
             .unwrap_or(0);
         let archive_count = if count > total { total } else { count };
-        assert!(archive_count > 0, "{}", ERR_NO_ENTRIES_TO_ARCHIVE);
+        if archive_count == 0 {
+            return Err(BridgeError::NoEntriesToArchive);
+        }
 
         let mut hash_bytes = Bytes::new(env);
-        for i in 1..=archive_count {
+        let end = start + archive_count - 1;
+        for i in start..=end {
             if let Some(mut record) = env
                 .storage()
                 .persistent()
@@ -991,6 +1067,9 @@ impl OnboardingBridge {
         env.storage()
             .instance()
             .set(&DataKey::NextArchiveId, &(archive_id + 1));
+        env.storage()
+            .instance()
+            .set(&DataKey::NextArchiveRecordId, &(end + 1));
 
         Archived {
             archive_count,
@@ -998,7 +1077,7 @@ impl OnboardingBridge {
         }
         .publish(env);
 
-        hash_val
+        Ok(hash_val)
     }
 
     /// Returns `(funding_count, archived_batch_count, accumulated_fees, hot_count)`
@@ -1039,13 +1118,16 @@ impl OnboardingBridge {
             .storage()
             .instance()
             .get(&DataKey::Admins)
-            .expect("not initialized");
-        assert!(
-            is_admin_in_list(&admins, &proposer),
-            "only admins can propose"
-        );
-        assert!(expiry_blocks >= 10, "expiry must be >= 10 blocks");
-        assert!(expiry_blocks <= 100_000, "expiry must be <= 100000 blocks");
+            .ok_or(BridgeError::NotInitialized)?;
+        if !is_admin_in_list(&admins, &proposer) {
+            return Err(BridgeError::OnlyAdminsCanPropose);
+        }
+        if expiry_blocks < 10 {
+            return Err(BridgeError::ExpiryTooShort);
+        }
+        if expiry_blocks > 100_000 {
+            return Err(BridgeError::ExpiryTooLong);
+        }
 
         let nonce: u32 = env
             .storage()
@@ -1092,7 +1174,7 @@ impl OnboardingBridge {
         }
         .publish(&env);
 
-        proposal_id
+        Ok(proposal_id)
     }
 
     pub fn approve(env: Env, admin: Address, proposal_id: u32) {
@@ -1103,20 +1185,23 @@ impl OnboardingBridge {
             .storage()
             .instance()
             .get(&DataKey::Admins)
-            .expect("not initialized");
-        assert!(is_admin_in_list(&admins, &admin), "only admins can approve");
+            .ok_or(BridgeError::NotInitialized)?;
+        if !is_admin_in_list(&admins, &admin) {
+            return Err(BridgeError::OnlyAdminsCanApprove);
+        }
 
         let mut proposal: Proposal = env
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+            .ok_or(BridgeError::ProposalNotFound)?;
 
-        assert!(
-            env.ledger().sequence() <= proposal.expiry,
-            "proposal expired"
-        );
-        assert!(!proposal.executed, "proposal already executed");
+        if env.ledger().sequence() > proposal.expiry {
+            return Err(BridgeError::ProposalExpired);
+        }
+        if proposal.executed {
+            return Err(BridgeError::ProposalAlreadyExecuted);
+        }
 
         let approval_key = DataKey::ProposalApproval(proposal_id, admin.clone());
         assert!(
@@ -1145,39 +1230,39 @@ impl OnboardingBridge {
             .storage()
             .instance()
             .get(&DataKey::Threshold)
-            .expect("not initialized");
+            .ok_or(BridgeError::NotInitialized)?;
 
         let proposal: Proposal = env
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+            .ok_or(BridgeError::ProposalNotFound)?;
 
-        assert!(
-            env.ledger().sequence() <= proposal.expiry,
-            "proposal expired"
-        );
-        assert!(!proposal.executed, "proposal already executed");
-        assert!(
-            proposal.approval_count >= threshold,
-            "insufficient approvals"
-        );
+        if env.ledger().sequence() > proposal.expiry {
+            return Err(BridgeError::ProposalExpired);
+        }
+        if proposal.executed {
+            return Err(BridgeError::ProposalAlreadyExecuted);
+        }
+        if proposal.approval_count < threshold {
+            return Err(BridgeError::InsufficientApprovals);
+        }
 
-        // Enforce a minimum transparency window for sensitive actions.
-        // Prevents a single admin (threshold == 1) from proposing and
-        // immediately executing WithdrawFees, SetFee, or Pause in the same
-        // ledger with no observation window.
+        // Enforce a minimum transparency window for every action that can
+        // move funds, change fees, pause the bridge, or alter governance.
         let sensitive = matches!(
             proposal.action,
             ProposalAction::WithdrawFees(_, _, _)
                 | ProposalAction::SetFee(_)
                 | ProposalAction::Pause
+                | ProposalAction::Unpause
+                | ProposalAction::RotateAdmins(_)
+                | ProposalAction::SetThreshold(_)
         );
         if sensitive {
-            assert!(
-                env.ledger().sequence() >= proposal.proposed_at + MIN_EXEC_DELAY,
-                "execution too soon: minimum delay not elapsed"
-            );
+            if env.ledger().sequence() < proposal.proposed_at + MIN_EXEC_DELAY {
+                return Err(BridgeError::ExecutionTooSoon);
+            }
         }
 
         let mut executed_proposal = proposal.clone();
@@ -1208,15 +1293,17 @@ impl OnboardingBridge {
                     .storage()
                     .instance()
                     .get(&DataKey::MaxFeeBps)
-                    .expect("not initialized");
-                assert!(new_fee_bps <= max_fee, "fee exceeds max_fee_bps");
+                    .ok_or(BridgeError::NotInitialized)?;
+                if new_fee_bps > max_fee {
+                    return Err(BridgeError::FeeExceedsMaxFee);
+                }
                 env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
 
                 let mut params: InitializationParams = env
                     .storage()
                     .instance()
                     .get(&DataKey::InitializationParams)
-                    .expect("not initialized");
+                    .ok_or(BridgeError::NotInitialized)?;
                 params.fee_bps = new_fee_bps;
                 env.storage()
                     .instance()
@@ -1249,20 +1336,34 @@ impl OnboardingBridge {
                 0i128
             }
             ProposalAction::WithdrawFees(to, token, amount) => {
+                let token_key = DataKey::AccumulatedFeesByToken(token.clone());
+                let token_accumulated: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&token_key)
+                    .unwrap_or(0);
+                let withdraw_amount = if amount == 0 { token_accumulated } else { amount };
+                assert!(
+                    withdraw_amount <= token_accumulated,
+                    "insufficient accumulated fees"
+                );
+                let remaining = token_accumulated - withdraw_amount;
+                env.storage()
+                    .instance()
+                    .set(&token_key, &remaining);
                 let accumulated: i128 = env
                     .storage()
                     .instance()
                     .get(&DataKey::AccumulatedFees)
                     .unwrap_or(0);
                 let withdraw_amount = if amount == 0 { accumulated } else { amount };
-                assert!(
-                    withdraw_amount <= accumulated,
-                    "insufficient accumulated fees"
-                );
+                if withdraw_amount > accumulated {
+                    return Err(BridgeError::InsufficientAccumulatedFees);
+                }
                 let remaining = accumulated - withdraw_amount;
                 env.storage()
                     .instance()
-                    .set(&DataKey::AccumulatedFees, &remaining);
+                    .set(&DataKey::AccumulatedFees, &(accumulated - withdraw_amount));
                 let tk = token::Client::new(&env, &token);
                 tk.transfer(&env.current_contract_address(), &to, &withdraw_amount);
                 Withdrawn {
@@ -1284,17 +1385,18 @@ impl OnboardingBridge {
                 0i128
             }
             ProposalAction::RotateAdmins(new_admins) => {
-                assert!(!new_admins.is_empty(), "admins must not be empty");
-                Self::validate_admins(&env, &new_admins);
+                if new_admins.is_empty() {
+                    return Err(BridgeError::AdminsEmpty);
+                }
+                Self::validate_admins(&env, &new_admins)?;
                 let threshold: u32 = env
                     .storage()
                     .instance()
                     .get(&DataKey::Threshold)
-                    .expect("not initialized");
-                assert!(
-                    threshold <= new_admins.len(),
-                    "threshold exceeds admin count"
-                );
+                    .ok_or(BridgeError::NotInitialized)?;
+                if threshold > new_admins.len() {
+                    return Err(BridgeError::ThresholdExceedsAdminCount);
+                }
                 env.storage().instance().set(&DataKey::Admins, &new_admins);
                 AdminsRotated {
                     admins: new_admins.clone(),
@@ -1307,12 +1409,13 @@ impl OnboardingBridge {
                     .storage()
                     .instance()
                     .get(&DataKey::Admins)
-                    .expect("not initialized");
-                assert!(new_threshold > 0, "threshold must be > 0");
-                assert!(
-                    new_threshold <= admins.len(),
-                    "threshold exceeds admin count"
-                );
+                    .ok_or(BridgeError::NotInitialized)?;
+                if new_threshold == 0 {
+                    return Err(BridgeError::ThresholdZero);
+                }
+                if new_threshold > admins.len() {
+                    return Err(BridgeError::ThresholdExceedsAdminCount);
+                }
                 env.storage()
                     .instance()
                     .set(&DataKey::Threshold, &new_threshold);
@@ -1323,7 +1426,7 @@ impl OnboardingBridge {
                 0i128
             }
             ProposalAction::ArchiveOldEntries(count) => {
-                Self::archive_old_entries_internal(&env, count);
+                Self::archive_old_entries_internal(&env, count)?;
                 0i128
             }
             ProposalAction::SetRebateTier(tier_index, threshold, discount_bps) => {
@@ -1359,14 +1462,14 @@ impl OnboardingBridge {
 
         Executed { proposal_id }.publish(&env);
 
-        result
+        Ok(result)
     }
 
-    pub fn get_proposal(env: Env, proposal_id: u32) -> Proposal {
+    pub fn get_proposal(env: Env, proposal_id: u32) -> Result<Proposal, BridgeError> {
         env.storage()
             .instance()
             .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found")
+            .ok_or(BridgeError::ProposalNotFound)
     }
 
     pub fn get_active_proposals(env: Env) -> Vec<Proposal> {
@@ -1410,12 +1513,12 @@ impl OnboardingBridge {
     /// still active (neither executed nor expired) so a later call can pick
     /// up from there once it becomes terminal. Returns the number of
     /// proposals actually pruned.
-    pub fn prune_proposals(env: Env, max_scan: u32) -> u32 {
+    pub fn prune_proposals(env: Env, max_scan: u32) -> Result<u32, BridgeError> {
         let admins: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::Admins)
-            .expect("not initialized");
+            .ok_or(BridgeError::NotInitialized)?;
         if !admins.is_empty() {
             admins.get_unchecked(0).require_auth();
         }
@@ -1476,7 +1579,7 @@ impl OnboardingBridge {
 
         ProposalsPruned { pruned, cursor }.publish(&env);
 
-        pruned
+        Ok(pruned)
     }
 }
 

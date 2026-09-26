@@ -6,6 +6,11 @@ import { register } from './metrics';
 
 let pool: Pool | null = null;
 
+/**
+ * Return the shared Postgres connection pool, or null when the database is not
+ * configured (DATABASE_URL is empty / missing). The pool is created on first
+ * call and reused thereafter.
+ */
 export function getPool(): Pool | null {
   if (!config.database.url) return null;
   if (pool) return pool;
@@ -102,6 +107,7 @@ export async function dbHealthCheck(): Promise<{ ok: boolean; latencyMs?: number
   }
 }
 
+/** Close the connection pool — called during graceful shutdown. */
 export async function closePool(): Promise<void> {
   if (pool) {
     await pool.end();

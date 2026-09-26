@@ -3,7 +3,7 @@
 /// Property: accumulated_fees == sum of all individual fees returned.
 
 use onboarding_bridge::OnboardingBridgeClient;
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{testutils::Address as _, token, Address, Env, String};
 
 struct Lcg(u64);
 
@@ -50,7 +50,16 @@ fn run_iteration(rng: &mut Lcg) {
 
     let source = Address::generate(&env);
     let target = Address::generate(&env);
-    let token = Address::generate(&env);
+
+    // Register a real token contract and mint the source account so the
+    // contract's token transfer during fund_c_address succeeds. Previously
+    // the harness passed a random Address as the token, which caused the
+    // contract to hit a missing storage entry (HostError: Error(Storage,
+    // MissingValue)) when it tried to move funds.
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let token_client = token::StellarAssetClient::new(&env, &token_address);
 
     // 1..=10 funding calls per iteration
     let n_calls = rng.next_usize_bounded(9) + 1;
@@ -59,8 +68,10 @@ fn run_iteration(rng: &mut Lcg) {
 
     for _ in 0..n_calls {
         let amount = rng.next_i128_bounded(max_amount) + 1; // at least 1
+        // Fund the source account with enough balance for this transfer.
+        token_client.mint(&source, &amount);
         let memo = String::from_str(&env, "fuzz");
-        let fee = bridge.fund_c_address(&source, &target, &token, &amount, &memo);
+        let fee = bridge.fund_c_address(&source, &target, &token_address, &amount, &memo);
         expected_fees += fee;
     }
 
