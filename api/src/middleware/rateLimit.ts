@@ -182,7 +182,7 @@ export function fundEndpointRateLimit(
 ): void {
   const keyId = req.apiKeyRecord?.id;
   if (!keyId) {
-    next();
+  next();
     return;
   }
 
@@ -192,6 +192,11 @@ export function fundEndpointRateLimit(
 
 /**
  * Apply standard rate limit headers to a response.
+ *
+ * `Retry-After` is only meaningful on throttling responses (429) and
+ * temporary unavailability (503). Sending it on successful responses is
+ * misleading and some HTTP clients and proxies honour it anyway, so it is
+ * only set when the response status is 429 or 503.
  */
 export function applyRateLimitHeaders(
   res: Response,
@@ -202,6 +207,11 @@ export function applyRateLimitHeaders(
   res.set('X-RateLimit-Limit', String(limit));
   res.set('X-RateLimit-Remaining', String(Math.max(0, remaining)));
   res.set('X-RateLimit-Reset', String(Math.ceil(resetMs / 1000)));
+
+  const status = res.statusCode;
+  if (status === 429 || status === 503) {
+    res.set('Retry-After', String(Math.ceil(resetMs / 1000)));
+  }
 }
 
 /**
