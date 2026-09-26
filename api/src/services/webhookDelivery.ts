@@ -35,6 +35,20 @@ export interface DLQEntry {
   failedAt: number;
 }
 
+/**
+ * Canonical webhook event names emitted by the API. Kept in one place so the
+ * delivery wiring, the OpenAPI documentation, and integrators all agree on the
+ * exact strings.
+ */
+export const WEBHOOK_EVENTS = {
+  FUNDING_SUBMITTED: 'funding.submitted',
+  FUNDING_CONFIRMED: 'funding.confirmed',
+  STATUS_CHANGED: 'status.changed',
+  PROVIDER_WEBHOOK: 'provider.webhook',
+} as const;
+
+export type WebhookEvent = (typeof WEBHOOK_EVENTS)[keyof typeof WEBHOOK_EVENTS];
+
 const RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
 const DELIVERY_TIMEOUT_MS = 10_000;
 
@@ -168,6 +182,20 @@ export class WebhookDeliveryService {
     await Promise.all(targets.map((r) => this.deliver(r, event, data)));
   }
 
+  /**
+   * Fire-and-forget helper used by route handlers to emit a state-change event
+   * to every webhook registered for the given API key. Delivery failures are
+   * logged and never propagate to the caller so request handling is unaffected.
+   */
+  emit(apiKey: string, event: string, data: unknown): void {
+    void this.deliverToAll(apiKey, event, data).catch((err) => {
+      logger.error(
+        { apiKey, event, err: err instanceof Error ? err.message : 'unknown error' },
+        'webhook emit failed',
+      );
+    });
+  }
+
   private async attemptDelivery(
     registration: WebhookRegistration,
     event: string,
@@ -241,98 +269,45 @@ export class WebhookDeliveryService {
       );
     } catch (err) {
       attempt.error = err instanceof Error ? err.message : 'unknown error';
-      const errorAuditPayload = {
-        payloadHash: hashPayload(payload),
-        destination: registration.url,
-        registrationId: registration.id,
-        event,
-        attemptNumber: attemptNumber + 1,
-        result: 'error',
-        error: attempt.error,
-      };
-      enqueueAudit(
-        'webhook_delivery',
-        errorAuditPayload,
-        registration.apiKey,
-        () => integrityAuditLog.append('webhook_delivery', errorAuditPayload, registration.apiKey),
-      );
       logger.warn(
-        { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
-        'webhook delivery error',
+        { registrationId: registration.id, url: registration.url, event, err: attempt.error, attempt: attemptNumber + 1 },
+        'webhook delivery threw',
       );
     }
 
     this.deliveryLog.push(attempt);
 
     if (attemptNumber < RETRY_DELAYS_MS.length) {
-      const delay = RETRY_DELAYS_MS[attemptNumber];
-      logger.info(
-        { registrationId: registration.id, event, nextAttemptIn: delay, attempt: attemptNumber + 1 },
-        'scheduling webhook retry',
-      );
-      try {
-        await enqueueWebhookRetry({
-          registrationId: registration.id,
-          event,
-          payload,
-          signature,
-          data,
-          attemptNumber: attemptNumber + 1,
-        });
-      } catch (err) {
-        logger.error(
-          { registrationId: registration.id, event, error: err instanceof Error ? err.message : String(err) },
-          'failed to enqueue webhook retry',
-        );
-        this.moveToDLQ(registration, event, data);
-      }
-    } else {
-      this.moveToDLQ(registration, event, data);
+      enqueueWebhookRetry({
+        registrationId: registration.id,
+        event,
+        data,
+        attemptNumber: attemptNumber + 1,
+        delayMs: RETRY_DELAYS_MS[attemptNumber],
+      });
+      return;
     }
-  }
 
-  private moveToDLQ(registration: WebhookRegistration, event: string, data: unknown): void {
-    const attempts = this.deliveryLog.filter((a) => a.registrationId === registration.id && a.event === event);
-    const entry: DLQEntry = {
+    this.dlq.push({
       id: crypto.randomUUID(),
       registration,
       payload: data,
       event,
-      attempts,
+      attempts: this.deliveryLog.filter((a) => a.registrationId === registration.id),
       failedAt: Date.now(),
-    };
-    this.dlq.push(entry);
+    });
     logger.error(
-      { registrationId: registration.id, url: registration.url, event, dlqId: entry.id },
-      'webhook moved to dead letter queue after max retries',
+      { registrationId: registration.id, url: registration.url, event },
+      'webhook delivery exhausted retries, moved to DLQ',
     );
-  }
-
-  getDLQ(): DLQEntry[] {
-    return [...this.dlq];
-  }
-
-  getDLQEntry(id: string): DLQEntry | undefined {
-    return this.dlq.find((e) => e.id === id);
-  }
-
-  deleteDLQEntry(id: string): boolean {
-    const idx = this.dlq.findIndex((e) => e.id === id);
-    if (idx === -1) return false;
-    this.dlq.splice(idx, 1);
-    return true;
   }
 
   getDeliveryLog(): DeliveryAttempt[] {
     return [...this.deliveryLog];
   }
 
-  getStats(): { registered: number; dlqSize: number; totalAttempts: number } {
-    return {
-      registered: this.registrations.size,
-      dlqSize: this.dlq.length,
-      totalAttempts: this.deliveryLog.length,
-    };
+  getDLQ(): DLQEntry[] {
+    return [...this.dlq];
   }
 }
 
