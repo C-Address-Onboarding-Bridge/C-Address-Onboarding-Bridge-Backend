@@ -848,3 +848,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-595 -->
 - #595: design(contract): route_from_exchange accepts any address as an 'exchange'
+
+<!-- handsoff-issue-596 -->
+- #596: test(contract): fix and un-ignore test_full_scenario
