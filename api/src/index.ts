@@ -65,10 +65,49 @@ const app = express();
 
 app.set('logger', logger);
 
+export function resolveCorsOrigin(
+  configuredOrigins: string[],
+  environment: string = process.env.NODE_ENV || 'development',
+): boolean | string | string[] {
+  if (!configuredOrigins || configuredOrigins.length === 0) {
+    return false;
+  }
+
+  const isProduction = environment === 'production';
+  const hasWildcard = configuredOrigins.includes('*');
+
+  if (hasWildcard) {
+    if (isProduction) {
+      const nonWildcards = configuredOrigins.filter((o) => o !== '*');
+      return nonWildcards.length > 0 ? nonWildcards : false;
+    }
+    return '*';
+  }
+
+  return configuredOrigins;
+}
+
+const effectiveCorsOrigin = resolveCorsOrigin(config.corsOrigins, config.logging.environment);
+
+if (config.corsOrigins.includes('*') && config.logging.environment === 'production') {
+  logger.warn('CORS wildcard origin (*) is disallowed in production and has been stripped');
+}
+
+const corsPolicyDescription =
+  effectiveCorsOrigin === false
+    ? 'disabled (no cross-origin requests allowed)'
+    : effectiveCorsOrigin === '*'
+    ? 'wildcard (*)'
+    : Array.isArray(effectiveCorsOrigin)
+    ? effectiveCorsOrigin.join(', ')
+    : String(effectiveCorsOrigin);
+
+logger.info(`CORS policy initialized: ${corsPolicyDescription}`);
+
 app.use(helmet());
 app.use(
   cors({
-    origin: config.corsOrigins.length > 0 ? config.corsOrigins : '*',
+    origin: effectiveCorsOrigin,
     methods: ['GET', 'POST', 'DELETE', 'PATCH'],
   })
 );
