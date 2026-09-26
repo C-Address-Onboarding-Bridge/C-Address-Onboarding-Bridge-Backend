@@ -41,6 +41,14 @@ export interface AdminAuditEntry {
   details: Record<string, unknown>;
 }
 
+export interface TransactionStats {
+  total: number;
+  byStatus: Record<TransactionStatus, number>;
+  totalVolume: string;
+  totalFees: string;
+  averageAmount: string;
+}
+
 const seededTransactions: TransactionRecord[] = [
   {
     id: 'tx_1001',
@@ -161,8 +169,41 @@ export function serializeTransactionsCsv(transactions: TransactionRecord[]): str
   return [headers.join(','), ...rows].join('\n');
 }
 
-export function getTransactionStats() {
-  throw new Error('Not implemented: getTransactionStats');
+/**
+ * Computes aggregate statistics over the in-memory transaction store.
+ *
+ * Backs `GET /api/v1/admin/stats`. Returns the total number of transactions,
+ * a per-status breakdown, the summed `amount` and `fee` across all
+ * transactions, and the average transaction amount. Monetary values are
+ * returned as fixed-precision strings to avoid floating point drift in
+ * callers.
+ */
+export function getTransactionStats(): TransactionStats {
+  const byStatus: Record<TransactionStatus, number> = {
+    pending: 0,
+    success: 0,
+    failed: 0,
+  };
+
+  let totalVolume = 0;
+  let totalFees = 0;
+
+  for (const tx of transactionStore) {
+    byStatus[tx.status] += 1;
+    totalVolume += parseAmount(tx.amount);
+    totalFees += parseAmount(tx.fee);
+  }
+
+  const total = transactionStore.length;
+  const averageAmount = total === 0 ? 0 : totalVolume / total;
+
+  return {
+    total,
+    byStatus,
+    totalVolume: totalVolume.toFixed(2),
+    totalFees: totalFees.toFixed(2),
+    averageAmount: averageAmount.toFixed(2),
+  };
 }
 
 /**
