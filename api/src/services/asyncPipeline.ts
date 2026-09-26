@@ -135,7 +135,27 @@ export function enqueueAudit(
   actor: string,
   syncFallback?: () => void,
 ): void {
-  throw new Error('Not implemented: enqueueAudit');
+  const fallback = syncFallback ?? (() => {});
+
+  if (!config.asyncPipeline.enabled) {
+    fallback();
+    return;
+  }
+
+  const data: AuditLogJobData = { type, payload, actor };
+
+  enqueueAuditLog(data)
+    .then(() => {
+      asyncPipelineEnqueueCounter.inc({ queue: 'async-critical', job: 'audit-log' });
+    })
+    .catch(() => {
+      asyncPipelineDroppedCounter.inc({ queue: 'async-critical', job: 'audit-log' });
+      try {
+        fallback();
+      } catch {
+        // Never let a fallback failure propagate to the caller.
+      }
+    });
 }
 
 /**
@@ -153,7 +173,20 @@ export function bufferAnalytics(
   labels: Record<string, string>,
   syncFallback?: () => void,
 ): void {
-  throw new Error('Not implemented: bufferAnalytics');
+  if (!config.asyncPipeline.enabled || isBackpressured()) {
+    asyncPipelineDroppedCounter.inc({ queue: 'async-pipeline', job: 'async-analytics' });
+    syncFallback?.();
+    return;
+  }
+
+  const key = bufferKey(event, labels);
+  const existing = analyticsBuffer.get(key);
+  if (existing) {
+    existing.value += 1;
+  } else {
+    analyticsBuffer.set(key, { event, labels, value: 1 });
+  }
+  scheduleFlush();
 }
 
 /**
@@ -169,7 +202,26 @@ export function enqueueFundingMetrics(
   input: FundingMetricInput,
   syncFallback?: () => void,
 ): void {
-  throw new Error('Not implemented: enqueueFundingMetrics');
+  if (!config.asyncPipeline.enabled || isBackpressured()) {
+    asyncPipelineDroppedCounter.inc({ queue: 'async-pipeline', job: 'funding-metrics' });
+    syncFallback?.();
+    return;
+  }
+
+  const data: PipelineMetricsJobData = { kind: 'funding', input };
+
+  enqueuePipelineMetrics(data)
+    .then(() => {
+      asyncPipelineEnqueueCounter.inc({ queue: 'async-pipeline', job: 'funding-metrics' });
+    })
+    .catch(() => {
+      asyncPipelineDroppedCounter.inc({ queue: 'async-pipeline', job: 'funding-metrics' });
+      try {
+        syncFallback?.();
+      } catch {
+        // Never let a fallback failure propagate to the caller.
+      }
+    });
 }
 
 /**
@@ -183,17 +235,17 @@ export function enqueueCounterIncrement(
   labels: Record<string, string>,
   syncFallback?: () => void,
 ): void {
-  throw new Error('Not implemented: enqueueCounterIncrement');
+  bufferAnalytics(event, labels, syncFallback);
 }
 
 // ─── Exported test helpers ────────────────────────────────────────────────────
 
 /** Force-set the backpressure state. For tests only. */
 export function _setBackpressuredForTest(value: boolean): void {
-  throw new Error('Not implemented: _setBackpressuredForTest');
+  _backpressured = value;
 }
 
 /** Expose current buffer size. For tests only. */
 export function _getBufferSizeForTest(): number {
-  throw new Error('Not implemented: _getBufferSizeForTest');
+  return analyticsBuffer.size;
 }
