@@ -40,33 +40,40 @@ webhookAdminRouter.get('/registrations', requireScopes('admin:keys'), (req: Requ
   res.json({ registrations });
 });
 
-// Delete a registration
+// Delete a registration owned by the calling key
 webhookAdminRouter.delete('/registrations/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
-  const deleted = webhookDeliveryService.unregister(req.params.id);
-  if (!deleted) {
+  const apiKey = req.headers['x-api-key'] as string;
+  const registration = webhookDeliveryService.getRegistration(req.params.id);
+  if (!registration || registration.apiKey !== apiKey) {
     res.status(404).json({ error: 'not_found', message: 'registration not found' });
     return;
   }
+  webhookDeliveryService.unregister(req.params.id);
   res.json({ status: 'deleted' });
 });
 
-// DLQ inspection — list all failed deliveries
-webhookAdminRouter.get('/dlq', requireScopes('admin:keys'), (_req: Request, res: Response) => {
-  const entries = webhookDeliveryService.getDLQ().map((e) => ({
-    id: e.id,
-    registrationId: e.registration.id,
-    url: e.registration.url,
-    event: e.event,
-    failedAt: e.failedAt,
-    attemptCount: e.attempts.length,
-  }));
+// DLQ inspection — list failed deliveries for the calling key
+webhookAdminRouter.get('/dlq', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const apiKey = req.headers['x-api-key'] as string;
+  const entries = webhookDeliveryService
+    .getDLQ()
+    .filter((e) => e.registration.apiKey === apiKey)
+    .map((e) => ({
+      id: e.id,
+      registrationId: e.registration.id,
+      url: e.registration.url,
+      event: e.event,
+      failedAt: e.failedAt,
+      attemptCount: e.attempts.length,
+    }));
   res.json({ entries });
 });
 
 // DLQ entry detail — full payload and attempt history
 webhookAdminRouter.get('/dlq/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const apiKey = req.headers['x-api-key'] as string;
   const entry = webhookDeliveryService.getDLQEntry(req.params.id);
-  if (!entry) {
+  if (!entry || entry.registration.apiKey !== apiKey) {
     res.status(404).json({ error: 'not_found', message: 'DLQ entry not found' });
     return;
   }
@@ -76,11 +83,13 @@ webhookAdminRouter.get('/dlq/:id', requireScopes('admin:keys'), (req: Request, r
 
 // Remove a DLQ entry after manual inspection / resolution
 webhookAdminRouter.delete('/dlq/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
-  const deleted = webhookDeliveryService.deleteDLQEntry(req.params.id);
-  if (!deleted) {
+  const apiKey = req.headers['x-api-key'] as string;
+  const entry = webhookDeliveryService.getDLQEntry(req.params.id);
+  if (!entry || entry.registration.apiKey !== apiKey) {
     res.status(404).json({ error: 'not_found', message: 'DLQ entry not found' });
     return;
   }
+  webhookDeliveryService.deleteDLQEntry(req.params.id);
   res.json({ status: 'deleted' });
 });
 
@@ -89,7 +98,14 @@ webhookAdminRouter.get('/stats', requireScopes('admin:keys'), (_req: Request, re
   res.json(webhookDeliveryService.getStats());
 });
 
-// Delivery log
-webhookAdminRouter.get('/log', requireScopes('admin:keys'), (_req: Request, res: Response) => {
-  res.json({ attempts: webhookDeliveryService.getDeliveryLog() });
+// Delivery log — scoped to the calling key's registrations
+webhookAdminRouter.get('/log', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const apiKey = req.headers['x-api-key'] as string;
+  const registrationIds = new Set(
+    webhookDeliveryService.getRegistrationsByApiKey(apiKey).map((r) => r.id),
+  );
+  const attempts = webhookDeliveryService
+    .getDeliveryLog()
+    .filter((a) => registrationIds.has(a.registrationId));
+  res.json({ attempts });
 });
