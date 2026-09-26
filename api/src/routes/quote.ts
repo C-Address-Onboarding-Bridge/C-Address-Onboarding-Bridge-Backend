@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
 import { sorobanService } from '../services/soroban';
 import { buildCacheKey, cacheDelPattern } from '../services/cache';
+import { requireScopes } from '../middleware/rbac';
+import { PermissionScope } from '../types/auth';
 // import { cacheMiddleware } from '../middleware/cache'; // see TODO on the GET / route
 // import { setFeeRateBps } from '../services/metrics'; // see TODO in GET /
 
@@ -17,6 +19,7 @@ const getQuoteSchema = z.object({
 
 quoteRouter.get(
   '/',
+  requireScopes(PermissionScope.QUOTE_READ),
   // TODO(next-bounty): cacheMiddleware() in src/middleware/cache.ts is still a
   // `throw new Error('Not implemented')` stub. Because it is *called* here while
   // the router is built, importing this module threw -- which meant src/index.ts

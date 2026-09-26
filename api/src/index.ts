@@ -164,22 +164,22 @@ app.get('/api/v1/deprecations', (_req, res) => {
 // OpenAPI spec + Swagger UI interactive docs
 app.use('/api', docsRouter);
 
-app.use('/api/v1/quote', rbacAuth, quoteRouter);
+app.use('/api/v1/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
 app.use('/api/telemetry', telemetryRateLimit, telemetryRouter);
-app.use('/api/v2/quote', rbacAuth, quoteRouter);
-app.use('/api/v1/fund', rbacAuth, fundingRouter);
-app.use('/api/v2/fund', rbacAuth, fundingRouter);
-app.use('/api/v1/status', rbacAuth, statusRouter);
-app.use('/api/v2/status', rbacAuth, statusRouter);
-app.use('/api/v1/offramp', rbacAuth, offrampRouter);
-app.use('/api/v2/offramp', rbacAuth, offrampRouter);
-app.use('/api/v1/cex', rbacAuth, cexRouter);
-app.use('/api/v2/cex', rbacAuth, cexRouter);
-app.use('/api/quote', rbacAuth, quoteRouter);
-app.use('/api/fund', rbacAuth, fundingRouter);
-app.use('/api/status', rbacAuth, statusRouter);
-app.use('/api/offramp', rbacAuth, offrampRouter);
-app.use('/api/cex', rbacAuth, cexRouter);
+app.use('/api/v2/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
+app.use('/api/v1/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
+app.use('/api/v2/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
+app.use('/api/v1/status', rbacAuth, requireScopes('status:read'), statusRouter);
+app.use('/api/v2/status', rbacAuth, requireScopes('status:read'), statusRouter);
+app.use('/api/v1/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
+app.use('/api/v2/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
+app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
+app.use('/api/v2/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
+app.use('/api/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
+app.use('/api/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
+app.use('/api/status', rbacAuth, requireScopes('status:read'), statusRouter);
+app.use('/api/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
+app.use('/api/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
 
 app.use('/api/webhook/moonpay', moonpayWebhookRouter);
 app.use('/api/webhook/transak', transakWebhookRouter);
@@ -195,34 +195,21 @@ app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
 // Prometheus metrics — internal only, protected by RBAC
 app.use('/metrics', rbacAuth, metricsRouter);
 
-// Bull Board queue dashboard — admin-only, must be mounted before the error pipeline
-if (config.jobs.enabled) {
-  const { createBullBoard } = require('@bull-board/api');
-  const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
-  const { ExpressAdapter } = require('@bull-board/express');
-  const { getAllQueues } = require('./services/queue');
+// Bull Board queue dashboard — admin-only, must be mounted before the error handler
+app.use('/admin/queues', rbacAuth, requireScopes('admin:write'), adminRouter);
 
-  const serverAdapter = new ExpressAdapter();
-  serverAdapter.setBasePath('/api/jobs');
-  createBullBoard({ queues: getAllQueues().map((q: unknown) => new BullMQAdapter(q)), serverAdapter });
-  app.use('/api/jobs', rbacAuth, requireScopes('admin:keys'), serverAdapter.getRouter());
-}
-
-app.use(xssErrorSanitizer);
 app.use(errorHandler);
 
-if (process.env.NODE_ENV !== 'test') {
-  const server = app.listen(config.port, () => {
-    logger.info({ port: config.port }, 'API server listening');
-  });
+const server = app.listen(config.port, () => {
+  logger.info({ port: config.port }, 'API server listening');
+});
 
-  const wss = createWebSocketServer(server);
-  server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
+const wss = createWebSocketServer(server);
+server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
 
-  registerSignalHandlers(async () => {
-    await shutdownTracing();
-    await closePool();
-  });
-}
+registerSignalHandlers(async () => {
+  await closePool();
+  await shutdownTracing();
+});
 
 export default app;
