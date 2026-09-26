@@ -397,6 +397,70 @@ describe('BridgeClient stale-while-revalidate', () => {
     expect(second).toEqual(mockStatus);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('never serves stale non-terminal pending status and fetches pending -> success transition immediately', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const client = new BridgeClient({
+      baseUrl: 'http://localhost:3001',
+      cache: { statusTtlMs: 10, terminalStatusTtlMs: 50_000 },
+    });
+    const pendingStatus = { status: 'pending' as const, hash: 'tx123' };
+    const successStatus = { status: 'success' as const, hash: 'tx123' };
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(pendingStatus) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(successStatus) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Initial fetch returns pending
+    const first = await client.getStatus('tx123');
+    expect(first).toEqual(pendingStatus);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Advance time past the 10ms status TTL into the window that would normally serve stale
+    vi.setSystemTime(15);
+
+    // Should NOT serve stale pending -- must await and return fresh success status
+    const second = await client.getStatus('tx123');
+    expect(second).toEqual(successStatus);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Advance further past normal status TTL (e.g. at 100ms) -- terminal status should stay cached long-term
+    vi.setSystemTime(100);
+    const third = await client.getStatus('tx123');
+    expect(third).toEqual(successStatus);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // No extra request, served from cache
+  });
+
+  it('fetches pending -> failed transition immediately without serving stale pending', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const client = new BridgeClient({
+      baseUrl: 'http://localhost:3001',
+      cache: { statusTtlMs: 10 },
+    });
+    const pendingStatus = { status: 'pending' as const, hash: 'tx456' };
+    const failedStatus = { status: 'failed' as const, hash: 'tx456', error: 'insufficient funds' };
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(pendingStatus) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(failedStatus) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = await client.getStatus('tx456');
+    expect(first).toEqual(pendingStatus);
+
+    vi.setSystemTime(15);
+
+    const second = await client.getStatus('tx456');
+    expect(second).toEqual(failedStatus);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('BridgeClient.runDiagnostics', () => {

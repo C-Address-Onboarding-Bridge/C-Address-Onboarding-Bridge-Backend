@@ -171,6 +171,7 @@ export interface BridgeClientConfig {
   cache?: {
     quoteTtlMs?: number;
     statusTtlMs?: number;
+    terminalStatusTtlMs?: number;
     healthTtlMs?: number;
     staleWhileRevalidate?: boolean;
     maxEntries?: number;

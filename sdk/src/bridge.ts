@@ -302,7 +302,15 @@ export class BridgeClient {
 
     refresh()
       .then((result) => {
-        this.cache.set(cacheKey, result, this.getTtl(ttlKind), this.shouldUseStaleWhileRevalidate());
+        if (ttlKind === "status" && result && typeof result === "object" && "status" in result) {
+          const statusResult = result as unknown as TransactionStatus;
+          const isTerminal = statusResult.status === "success" || statusResult.status === "failed";
+          const ttl = isTerminal ? this.getTerminalStatusTtl() : this.getTtl("status");
+          const swr = isTerminal ? this.shouldUseStaleWhileRevalidate() : false;
+          this.cache.set(cacheKey, result, ttl, swr);
+        } else {
+          this.cache.set(cacheKey, result, this.getTtl(ttlKind), this.shouldUseStaleWhileRevalidate());
+        }
       })
       .catch(() => {
         // Swallow background refresh failures; the stale value was already
@@ -462,15 +470,21 @@ export class BridgeClient {
     const cacheKey = `status:${txHash}`;
     const cached = this.cache.get<TransactionStatus>(cacheKey);
     if (cached) {
-      if (cached.stale) {
-        this.triggerBackgroundRefresh(cacheKey, "status", () =>
-          this.request<TransactionStatus>(
-            "GET",
-            `/api/v1/status/${encodeURIComponent(txHash)}`,
-          ),
-        );
+      const isTerminal = cached.value.status === 'success' || cached.value.status === 'failed';
+      if (!isTerminal && cached.stale) {
+        // Never serve stale non-terminal statuses (e.g. pending); invalidate and re-fetch fresh
+        this.cache.invalidate(cacheKey);
+      } else {
+        if (cached.stale) {
+          this.triggerBackgroundRefresh(cacheKey, "status", () =>
+            this.request<TransactionStatus>(
+              "GET",
+              `/api/v1/status/${encodeURIComponent(txHash)}`,
+            ),
+          );
+        }
+        return cached.value;
       }
-      return cached.value;
     }
 
     const startedAt = Date.now();
@@ -479,11 +493,14 @@ export class BridgeClient {
         "GET",
         `/api/v1/status/${encodeURIComponent(txHash)}`,
       );
+      const isTerminal = result.status === 'success' || result.status === 'failed';
+      const ttl = isTerminal ? this.getTerminalStatusTtl() : this.getTtl("status");
+      const swr = isTerminal ? this.shouldUseStaleWhileRevalidate() : false;
       this.cache.set(
         cacheKey,
         result,
-        this.getTtl("status"),
-        this.shouldUseStaleWhileRevalidate(),
+        ttl,
+        swr,
       );
       this.telemetry.record({
         method: "getStatus",
@@ -582,6 +599,11 @@ export class BridgeClient {
   private getTtl(kind: "quote" | "status" | "health"): number {
     const defaults = { quote: 15_000, status: 5_000, health: 30_000 } as const;
     return this.getCacheOption(kind, defaults[kind]);
+  }
+
+  private getTerminalStatusTtl(): number {
+    const defaultTerminalTtl = 24 * 60 * 60 * 1000; // 24 hours
+    return this.config.cache?.terminalStatusTtlMs ?? defaultTerminalTtl;
   }
 
   private getCacheOption(
