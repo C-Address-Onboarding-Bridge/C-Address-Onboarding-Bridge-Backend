@@ -1,6 +1,7 @@
 import { dbHealthCheck } from './db';
 import { config } from '../config';
-import { logger } from '../logger';
+import { rpcPool } from './rpcPool';
+import { getCacheClient } from './cache';
 
 interface DependencyCheck {
   ok: boolean;
@@ -22,6 +23,23 @@ const CACHE_TTL_MS = 5000;
 async function checkSoroban(): Promise<DependencyCheck> {
   const start = Date.now();
   try {
+    const metrics = rpcPool.getMetrics();
+    if (metrics.length > 0) {
+      const anyHealthy = metrics.some((p) => p.healthy);
+      const healthyProvider = metrics.find((p) => p.healthy);
+      if (!anyHealthy) {
+        return {
+          ok: false,
+          latencyMs: Date.now() - start,
+          error: 'all rpc providers unhealthy in pool',
+        };
+      }
+      return {
+        ok: true,
+        latencyMs: healthyProvider?.lastLatencyMs ?? (Date.now() - start),
+      };
+    }
+
     const url = config.soroban.rpcUrls[0];
     if (!url) return { ok: false, error: 'no rpc url configured' };
 
@@ -31,7 +49,14 @@ async function checkSoroban(): Promise<DependencyCheck> {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getNetwork', params: [] }),
       signal: AbortSignal.timeout(3000),
     });
-    return { ok: res.ok || res.status < 500, latencyMs: Date.now() - start };
+    if (!res.ok) {
+      return {
+        ok: false,
+        latencyMs: Date.now() - start,
+        error: `rpc returned HTTP ${res.status}: ${res.statusText}`,
+      };
+    }
+    return { ok: true, latencyMs: Date.now() - start };
   } catch (err) {
     return { ok: false, latencyMs: Date.now() - start, error: String(err) };
   }
@@ -41,16 +66,11 @@ async function checkRedis(): Promise<DependencyCheck> {
   if (!config.redis.enabled) return { ok: true, error: undefined };
   const start = Date.now();
   try {
-    const { default: Redis } = await import('ioredis');
-    const client = new Redis(config.redis.url, {
-      lazyConnect: true,
-      maxRetriesPerRequest: 0,
-      connectTimeout: 2000,
-      enableOfflineQueue: false,
-    });
-    await client.connect();
+    const client = getCacheClient();
+    if (!client) {
+      return { ok: false, latencyMs: Date.now() - start, error: 'shared redis client not initialized' };
+    }
     await client.ping();
-    await client.quit();
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err) {
     return { ok: false, latencyMs: Date.now() - start, error: String(err) };

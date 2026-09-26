@@ -180,7 +180,7 @@ const stream = new AggregationStream(
 
 export const logger = pino(
   {
-    level: config.logLevel,
+    level: config.logLevel || 'info',
     base: {
       service: config.logging.serviceName,
       version: config.logging.version,

@@ -1,6 +1,6 @@
 import { SorobanRpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
-import { logger } from '../index';
+import { logger } from '../logger';
 import { applyKeepAliveAgents } from './httpAgent';
 
 interface ProviderState {
@@ -26,10 +26,10 @@ export class RpcPool {
     // Reuse TCP/TLS connections per RPC endpoint via shared keep-alive agents.
     applyKeepAliveAgents();
 
-    const { rpcUrls, rpc } = config.soroban;
-    this.strategy = rpc.selectionStrategy;
-    this.failureThreshold = rpc.failureThreshold;
-    this.recoveryIntervalMs = rpc.recoveryIntervalMs;
+    const { rpcUrls = [], rpc } = config.soroban;
+    this.strategy = rpc?.selectionStrategy ?? 'round-robin';
+    this.failureThreshold = rpc?.failureThreshold ?? 3;
+    this.recoveryIntervalMs = rpc?.recoveryIntervalMs ?? 30000;
 
     this.providers = rpcUrls.map((url) => ({
       url,
@@ -42,7 +42,7 @@ export class RpcPool {
       totalFailures: 0,
     }));
 
-    if (this.providers.length > 1) {
+    if (this.providers.length > 1 && rpc?.healthCheckIntervalMs) {
       this.startHealthChecks(rpc.healthCheckIntervalMs);
     }
   }
