@@ -37,6 +37,7 @@ import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
 import { createWebSocketServer, handleUpgrade } from './services/websocket';
+import { integrityAuditLog } from './services/auditLog';
 import { cacheMetricsRouter } from './routes/cacheMetrics';
 
 export { logger } from './logger';
@@ -201,8 +202,14 @@ app.use(errorHandler);
 if (process.env.NODE_ENV !== 'test') {
   const wss = createWebSocketServer();
 
-  const server = app.listen(config.port, config.host, () => {
+  const server = app.listen(config.port, config.host, async () => {
     logger.info({ port: config.port, rpcUrls: config.soroban.rpcUrls.length }, 'bridge api server started');
+
+    try {
+      await integrityAuditLog.initialize();
+    } catch (err) {
+      logger.warn({ err }, 'failed to initialize audit log from database');
+    }
   });
 
   // WebSocket upgrade at /ws

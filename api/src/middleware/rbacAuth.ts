@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
+import { config } from '../config';
 import { logger } from '../logger';
 
 export type PermissionScope =
@@ -163,6 +164,14 @@ export function requireScopes(...required: PermissionScope[]) {
 }
 
 export function rbacAuth(req: Request, res: Response, next: NextFunction): void {
+  if (!config.rbac.enabled) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('RBAC is disabled but required in production. Set RBAC_ENABLED=true');
+    }
+    next();
+    return;
+  }
+
   const apiKey = req.headers['x-api-key'] as string | undefined;
   if (!apiKey) {
     res.status(401).json({ error: 'missing_api_key' });
