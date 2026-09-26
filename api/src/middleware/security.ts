@@ -146,14 +146,53 @@ export function requestSizeLimiting(req: Request, res: Response, next: NextFunct
 
 const FREE_TEXT_FIELDS = new Set(['memo', 'description', 'notes', 'comment', 'message']);
 
+/**
+ * Fields whose values are binary/encoded payloads (base64 XDR, hex hashes,
+ * addresses). These are validated structurally elsewhere, and their byte
+ * sequences can legitimately match SQL/XSS regexes (e.g. padded base64
+ * ending in `...onQx=` trips /on\w+\s*=/). Skip pattern checks for them.
+ */
+const ENCODED_FIELDS = new Set([
+  'signedxdr',
+  'xdr',
+  'envelope',
+  'envelopexdr',
+  'transactionxdr',
+  'hash',
+  'txhash',
+  'transactionhash',
+  'signature',
+  'signatures',
+  'publickey',
+  'address',
+  'fromaddress',
+  'toaddress',
+  'sourceaccount',
+  'destinationaccount',
+  'contractid',
+  'assetissuer',
+  'assetcode',
+]);
+
 function isFreetextField(fieldPath: string): boolean {
   const fieldName = fieldPath.split('.').pop()?.toLowerCase() ?? '';
   return FREE_TEXT_FIELDS.has(fieldName);
 }
 
+function isEncodedField(fieldPath: string): boolean {
+  const fieldName = fieldPath.split('.').pop()?.toLowerCase() ?? '';
+  return ENCODED_FIELDS.has(fieldName);
+}
+
 export function injectionProtection(req: Request, res: Response, next: NextFunction): void {
-  function checkForInjection(obj: unknown, path = '', isInFreetextField = false): { match: RegExp; field: string } | null {
+  function checkForInjection(obj: unknown, path = '', isInFreetextField = false, isInEncodedField = false): { match: RegExp; field: string } | null {
     if (typeof obj === 'string') {
+      // Encoded/binary fields (base64 XDR, hashes, addresses) are validated
+      // structurally elsewhere; their bytes can match SQL/XSS regexes by
+      // coincidence, so skip pattern checks entirely for them.
+      if (isInEncodedField) {
+        return null;
+      }
       // Skip SQL patterns for freetext fields; always check NoSQL and XSS
       if (!isInFreetextField && detectPatterns([obj], SQL_PATTERNS)) {
         return { match: SQL_PATTERNS.find((p) => testPattern(p, obj)) as RegExp, field: path || 'unknown' };
@@ -169,7 +208,7 @@ export function injectionProtection(req: Request, res: Response, next: NextFunct
 
     if (Array.isArray(obj)) {
       for (let i = 0; i < obj.length; i++) {
-        const result = checkForInjection(obj[i], `${path}[${i}]`, isInFreetextField);
+        const result = checkForInjection(obj[i], `${path}[${i}]`, isInFreetextField, isInEncodedField);
         if (result) return result;
       }
       return null;
@@ -186,7 +225,8 @@ export function injectionProtection(req: Request, res: Response, next: NextFunct
       for (const [key, value] of Object.entries(objMap)) {
         const fieldPath = path ? `${path}.${key}` : key;
         const isFreetextCheckField = isInFreetextField || isFreetextField(fieldPath);
-        const result = checkForInjection(value, fieldPath, isFreetextCheckField);
+        const isEncodedCheckField = isInEncodedField || isEncodedField(fieldPath);
+        const result = checkForInjection(value, fieldPath, isFreetextCheckField, isEncodedCheckField);
         if (result) return result;
       }
       return null;
@@ -221,36 +261,15 @@ const SUSPICIOUS_WINDOW_MS = 60_000;
 const SUSPICIOUS_THRESHOLD = 10;
 
 /**
- * Record a suspicious request for an IP. Only call this when a detector
- * (injection, pollution, bad signature, …) actually tripped — normal traffic
- * must never increment the counter.
+ * Track suspicious request counts per IP within a rolling window.
  */
-export function flagSuspiciousRequest(ip: string): void {
+export function trackSuspiciousRequest(ip: string): boolean {
   const now = Date.now();
   const entry = suspiciousIpCounts.get(ip);
-
   if (!entry || now - entry.windowStart > SUSPICIOUS_WINDOW_MS) {
     suspiciousIpCounts.set(ip, { count: 1, windowStart: now });
-    return;
+    return false;
   }
-
   entry.count += 1;
-}
-
-/**
- * Rate-limit only requests that have already been flagged as suspicious.
- * The counter is incremented by the detectors (via flagSuspiciousRequest),
- * not by this middleware, so ordinary requests are never counted.
- */
-export function suspiciousRateLimiting(req: Request, res: Response, next: NextFunction): void {
-  const ip = req.ip ?? 'unknown';
-  const entry = suspiciousIpCounts.get(ip);
-
-  if (entry && Date.now() - entry.windowStart <= SUSPICIOUS_WINDOW_MS && entry.count >= SUSPICIOUS_THRESHOLD) {
-    logger.warn({ ip, path: req.path, count: entry.count }, 'suspicious request rate limit exceeded');
-    res.status(429).json({ error: 'too_many_requests', message: 'Too many suspicious requests' });
-    return;
-  }
-
-  next();
+  return entry.count >= SUSPICIOUS_THRESHOLD;
 }
