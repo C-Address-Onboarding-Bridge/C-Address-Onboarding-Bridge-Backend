@@ -845,3 +845,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-594 -->
 - #594: bug(contract): prune_proposals only accepts admins[0] and stalls behind any long-lived proposal
+
+<!-- handsoff-issue-595 -->
+- #595: design(contract): route_from_exchange accepts any address as an 'exchange'
