@@ -8,14 +8,18 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": {
+        "import": "./dist/esm/index.d.ts",
+        "require": "./dist/index.d.ts"
+      },
       "import": "./dist/esm/index.js",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json",
+    "check:exports": "npx @arethetypeswrong/cli --pack . --ignore-rules unexpected-module-syntax",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint --ext .ts,.tsx src/"
