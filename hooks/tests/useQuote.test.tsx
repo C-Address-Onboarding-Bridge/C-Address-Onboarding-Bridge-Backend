@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook, waitFor, act } from '@testing-library/react';
 import { useQuote } from '../src';
 
 const BASE_URL = 'http://localhost:3001';
@@ -87,7 +87,62 @@ describe('useQuote', () => {
 
     await waitFor(() => expect(result.current.data).toEqual(mockQuote1));
 
-    result.current.refetch();
+    act(() => {
+      result.current.refetch();
+    });
+
+    await waitFor(() => expect(result.current.data).toEqual(mockQuote2));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('resets data to undefined when params change', async () => {
+    const mockQuote1 = { estimatedFee: '100', expectedReceive: '9900', feeBps: 100, rate: '1.0' };
+    const mockQuote2 = { estimatedFee: '200', expectedReceive: '9800', feeBps: 200, rate: '1.0' };
+    let resolveSecondQuote: (val?: any) => void;
+    const secondPromise = new Promise((resolve) => {
+      resolveSecondQuote = resolve;
+    });
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(mockQuote1) })
+      .mockReturnValueOnce(secondPromise);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result, rerender } = renderHook(
+      (props: { params: typeof QUOTE_PARAMS }) => useQuote({ baseUrl: BASE_URL }, props.params),
+      { initialProps: { params: QUOTE_PARAMS } },
+    );
+
+    await waitFor(() => expect(result.current.data).toEqual(mockQuote1));
+
+    rerender({ params: { ...QUOTE_PARAMS, amount: '20000' } });
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.data).toBeUndefined();
+
+    resolveSecondQuote!({ ok: true, json: () => Promise.resolve(mockQuote2) });
+    await waitFor(() => expect(result.current.data).toEqual(mockQuote2));
+  });
+
+  it('refetches fresh data bypassing cache even with active TTL', async () => {
+    const mockQuote1 = { estimatedFee: '100', expectedReceive: '9900', feeBps: 100, rate: '1.0' };
+    const mockQuote2 = { estimatedFee: '200', expectedReceive: '9800', feeBps: 200, rate: '1.0' };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(mockQuote1) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(mockQuote2) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() =>
+      useQuote({ baseUrl: BASE_URL }, QUOTE_PARAMS),
+    );
+
+    await waitFor(() => expect(result.current.data).toEqual(mockQuote1));
+
+    act(() => {
+      result.current.refetch();
+    });
 
     await waitFor(() => expect(result.current.data).toEqual(mockQuote2));
     expect(fetchMock).toHaveBeenCalledTimes(2);

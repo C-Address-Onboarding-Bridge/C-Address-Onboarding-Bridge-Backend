@@ -35,10 +35,14 @@ export function useQuote(
 
   useEffect(() => {
     if (!enabled || !params) {
+      setData(undefined);
+      setError(undefined);
+      setLoading(false);
       return;
     }
 
     let cancelled = false;
+    setData(undefined);
     setLoading(true);
     setError(undefined);
 
@@ -59,7 +63,12 @@ export function useQuote(
     };
   }, [client, paramsKey, enabled, refetchToken]);
 
-  const refetch = useCallback(() => setRefetchToken((n) => n + 1), []);
+  const refetch = useCallback(() => {
+    if (params) {
+      client.invalidateQuoteCache(params);
+    }
+    setRefetchToken((n) => n + 1);
+  }, [client, params]);
 
   return { data, error, loading, refetch };
 }
