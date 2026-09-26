@@ -840,3 +840,8 @@ MIT — see [LICENSE](LICENSE) for details.
 - [Soroban Smart Accounts by OpenZeppelin](https://github.com/OpenZeppelin/soroban-accounts)
 - [Stellar Soroban SDK](https://github.com/stellar/soroban-sdk)
 - [EIP-4337 Account Abstraction](https://eips.ethereum.org/EIPS/eip-4337)
+
+## Handsoff notes
+
+<!-- handsoff-issue-605 -->
+- #605: implement: getMoonpayBuyQuote() in moonpay.ts
