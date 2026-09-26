@@ -70,7 +70,7 @@ describe('BridgeClient', () => {
     expect(result.name).toBe('Stellar Lumens');
   });
 
-  it.skip('getQuote works with SAC token parameter', async () => {
+  it('getQuote works with SAC token parameter', async () => {
     const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
     const mockQuote = {
       estimatedFee: '100',
@@ -148,6 +148,37 @@ describe('BridgeClient', () => {
       tokenAddress: VALID_C_ADDR,
       amount: '1000000',
       token: sacToken,
+    });
+
+    expect(result).toEqual(mockPrepare);
+    const calledBody = JSON.parse((fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+    expect(calledBody.tokenAddress).toBe(VALID_C_ADDR);
+  });
+
+  it('prepareFundingTransaction resolves legacy tokenAddress via tokenFromLegacy when token param is omitted', async () => {
+    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
+    const mockPrepare = {
+      instruction: 'sign-and-submit',
+      simulation: { status: 'success', fee: '100' },
+      params: {
+        sourceAddress: VALID_G_ADDR,
+        targetAddress: VALID_C_ADDR,
+        tokenAddress: VALID_C_ADDR,
+        amount: '1000000',
+        memo: '',
+      },
+    };
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve(mockPrepare),
+    }));
+
+    const result = await client.prepareFundingTransaction({
+      sourceAddress: VALID_G_ADDR,
+      targetAddress: VALID_C_ADDR,
+      tokenAddress: VALID_C_ADDR,
+      amount: '1000000',
     });
 
     expect(result).toEqual(mockPrepare);
@@ -259,16 +290,19 @@ describe('Utils', () => {
     expect(parseTokenAmount('2', 6)).toBe('2000000');
   });
 
-  it.skip('converts token to source asset string', () => {
+  it('converts token to source asset string', () => {
     expect(tokenToSourceAsset({ type: 'native' })).toBe('XLM');
     expect(tokenToSourceAsset({ type: 'sac', contractId: VALID_C_ADDR })).toBe(VALID_C_ADDR);
   });
 
-  it.skip('derives token from legacy parameters', () => {
+  it('derives token from legacy parameters', () => {
     expect(tokenFromLegacy(VALID_C_ADDR)).toEqual({ type: 'sac', contractId: VALID_C_ADDR });
     expect(tokenFromLegacy(undefined, 'XLM')).toEqual({ type: 'native' });
     expect(tokenFromLegacy(undefined, VALID_C_ADDR)).toEqual({ type: 'sac', contractId: VALID_C_ADDR });
     expect(tokenFromLegacy()).toEqual({ type: 'native' });
+    expect(tokenFromLegacy('', '')).toEqual({ type: 'native' });
+    expect(tokenFromLegacy('invalid-addr', 'not-c-addr')).toEqual({ type: 'native' });
+    expect(tokenFromLegacy(VALID_C_ADDR, 'XLM')).toEqual({ type: 'sac', contractId: VALID_C_ADDR });
   });
 
   it.skip('returns correct default decimals', () => {
@@ -444,8 +478,6 @@ describe('BridgeClient.runDiagnostics', () => {
 
   it('returns unhealthy when contract status check fails', async () => {
     vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health latency
       .mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({ message: 'Contract error' }) }) // quote
     );
 

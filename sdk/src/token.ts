@@ -30,16 +30,27 @@ export function isValidTokenIdentifier(identifier: string): boolean {
   throw new Error('Not implemented: isValidTokenIdentifier');
 }
 
+const C_ADDRESS_REGEX = /^C[A-Z2-7]{55}$/;
+
 // ─── Token Serialization ────────────────────────────────────────────────────
 
 /** Serializes a Token into the format expected by the bridge API. */
 export function tokenToSourceAsset(token: Token): string {
-  throw new Error('Not implemented: tokenToSourceAsset');
+  if (token.type === 'sac') {
+    return token.contractId;
+  }
+  return 'XLM';
 }
 
 /** Derives a Token from legacy string parameters. Defaults to native XLM. */
 export function tokenFromLegacy(tokenAddress?: string, sourceAsset?: string): Token {
-  throw new Error('Not implemented: tokenFromLegacy');
+  if (tokenAddress && C_ADDRESS_REGEX.test(tokenAddress)) {
+    return { type: 'sac', contractId: tokenAddress };
+  }
+  if (sourceAsset && C_ADDRESS_REGEX.test(sourceAsset)) {
+    return { type: 'sac', contractId: sourceAsset };
+  }
+  return { type: 'native' };
 }
 
 // ─── Amount Formatting / Parsing ──────────────────────────────────────────────
