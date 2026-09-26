@@ -13,6 +13,10 @@
 # Usage:
 #   SOURCE_ACCOUNT=S... ADMIN_ADDRESSES=G... bash scripts/deploy-contract.sh [OPTIONS]
 #
+#   initialize() requires authorization from every address in ADMIN_ADDRESSES.
+#   Use a signer/multisig flow that can provide those authorization entries;
+#   SOURCE_ACCOUNT remains the transaction fee-payer and deployer.
+#
 # Options:
 #   --network     testnet|mainnet|custom  (default: testnet)
 #   --threshold   u32  multi-sig threshold (default: 1)

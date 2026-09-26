@@ -30,7 +30,7 @@ import { correlationMiddleware } from './middleware/correlation';
 // import { setFeeRateBps } from './services/metrics'; // see TODO below
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
-// import { loggingMiddleware } from './middleware/logging'; // see TODO below
+import { loggingMiddleware } from './middleware/logging';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
 import { closePool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
@@ -138,11 +138,7 @@ app.get('/health/live', (_req, res) => {
 app.use(requestTracker);
 
 // PII-masking request/response logger
-// TODO(next-bounty): loggingMiddleware (and the maskBody helper it relies on) is
-// still a stub that throws. Registered globally, it turned every API request into
-// a 500. Commented out until it is implemented -- note this means requests are
-// NOT currently PII-masked in logs, which matters before anything goes live.
-// app.use(loggingMiddleware);
+app.use(loggingMiddleware);
 
 app.use('/api/webhook', express.text({ type: '*/*' }));
 app.use('/api', express.json({ limit: '32kb' }));

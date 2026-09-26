@@ -124,14 +124,102 @@ export function applyRateLimitHeaders(_req: Request, res: Response, next: NextFu
 }
 
 export function trackRequestCost(apiKey: string, cost: number): boolean {
-  throw new Error('Not implemented: trackRequestCost');
+  const key = `cost_${apiKey}`;
+  const current = requestCostCache.get<RequestCost>(key) || { totalCost: 0, requestCount: 0 };
+
+  current.totalCost += cost;
+  current.requestCount++;
+  requestCostCache.set(key, current);
+
+  if (current.totalCost > MAX_REQUEST_COST_PER_KEY) {
+    // Never log the raw key; the alert channel receives it for correlation.
+    logger.warn({ apiKey: `***${apiKey.slice(-4)}`, totalCost: current.totalCost }, 'API key exceeded cost limit');
+    void sendAbuseAlert({
+      type: 'cost_limit_exceeded',
+      ip: 'unknown',
+      apiKeyId: apiKey,
+      details: { totalCost: current.totalCost },
+    });
+    return false;
+  }
+  return true;
 }
 
 /**
  * Abuse detection middleware — must run after express.json() so req.body is populated.
  */
 export function fundAbuseDetectionMiddleware(req: Request, res: Response, next: NextFunction) {
-  throw new Error('Not implemented: fundAbuseDetectionMiddleware');
+  const ip = req.ip ?? 'unknown';
+  const apiKeyId = req.apiKeyRecord?.id ?? (req.headers['x-api-key'] as string) ?? 'anonymous';
+  const key = `${ip}_${apiKeyId}`;
+
+  if (isIPBanned(ip)) {
+    res.status(403).json({ error: 'forbidden', message: 'IP temporarily banned due to suspicious activity' });
+    return;
+  }
+
+  const activity = abuseCache.get<SuspiciousActivity>(key) || {
+    count: 0,
+    firstSeen: Date.now(),
+    patterns: [],
+    addresses: [],
+  };
+
+  activity.count++;
+  let detectedPattern: string | null = null;
+  const body = req.body as Record<string, unknown> | undefined;
+
+  if (body?.amount && parseInt(String(body.amount), 10) > LARGE_AMOUNT_THRESHOLD) {
+    detectedPattern = 'large_amount';
+  }
+
+  const targetAddress = body?.targetAddress as string | undefined;
+  if (targetAddress) {
+    if (!activity.addresses.includes(targetAddress)) {
+      activity.addresses.push(targetAddress);
+    }
+    if (activity.addresses.length > 10) {
+      detectedPattern = 'multiple_addresses';
+    }
+  }
+
+  if (Date.now() - activity.firstSeen < 60_000 && activity.count > 20) {
+    detectedPattern = 'rapid_requests';
+  }
+
+  if (detectedPattern) {
+    activity.patterns.push(detectedPattern);
+
+    if (activity.patterns.filter((p) => p === detectedPattern).length >= SUSPICIOUS_PATTERN_THRESHOLD) {
+      const banCount = (ipBanCache.get<number>(`ban_count_${ip}`) || 0) + 1;
+      ipBanCache.set(`ban_count_${ip}`, banCount);
+
+      if (banCount >= BAN_THRESHOLD) {
+        banIP(ip, detectedPattern);
+        res.status(403).json({ error: 'forbidden', message: 'IP temporarily banned due to suspicious activity' });
+        return;
+      }
+
+      logger.warn({ ip, pattern: detectedPattern, count: activity.count }, 'Suspicious activity detected');
+      void sendAbuseAlert({
+        type: 'suspicious_activity',
+        ip,
+        apiKeyId,
+        pattern: detectedPattern,
+        details: { count: activity.count },
+      });
+    }
+  }
+  // NodeCache stores clones, so persist after all mutations above.
+  abuseCache.set(key, activity);
+
+  const rawKey = req.headers['x-api-key'] as string | undefined;
+  if (rawKey && !trackRequestCost(rawKey, 100)) {
+    res.status(429).json({ error: 'rate_limit', message: 'API key cost limit exceeded' });
+    return;
+  }
+
+  next();
 }
 
 /** @deprecated Use ipRateLimitMiddleware + fundEndpointRateLimit */

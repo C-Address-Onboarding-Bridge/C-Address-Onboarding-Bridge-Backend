@@ -6,7 +6,7 @@
 ///   3. governance proposals can be executed to change fee rates
 
 use onboarding_bridge::{OnboardingBridgeClient, ProposalAction};
-use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
+use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Env, String, Vec};
 
 struct Lcg(u64);
 
@@ -99,6 +99,10 @@ fn run_iteration(rng: &mut Lcg) {
             }
             Op::ExecuteFee => {
                 if let Some(proposal_id) = pending_proposal_id {
+                    // Advance the ledger past the proposal's minimum execution delay
+                    // so the contract no longer rejects with "execution too soon".
+                    let seq = env.ledger().sequence();
+                    env.ledger().set_sequence_number(seq.saturating_add(1001));
                     // Execute the proposal
                     let _result = bridge.execute(&proposal_id);
                     pending_proposal_id = None;

@@ -173,9 +173,15 @@ export function bufferAnalytics(
   labels: Record<string, string>,
   syncFallback?: () => void,
 ): void {
-  if (!config.asyncPipeline.enabled || isBackpressured()) {
-    asyncPipelineDroppedCounter.inc({ queue: 'async-pipeline', job: 'async-analytics' });
+  if (!config.asyncPipeline.enabled) {
     syncFallback?.();
+    return;
+  }
+
+  // Analytics are explicitly best-effort: once backpressure is observed,
+  // discard the increment rather than allowing an unbounded in-process buffer.
+  if (isBackpressured()) {
+    asyncPipelineDroppedCounter.inc({ job: 'async-analytics' });
     return;
   }
 
@@ -184,7 +190,7 @@ export function bufferAnalytics(
   if (existing) {
     existing.value += 1;
   } else {
-    analyticsBuffer.set(key, { event, labels, value: 1 });
+    analyticsBuffer.set(key, { event, labels: { ...labels }, value: 1 });
   }
   scheduleFlush();
 }
@@ -203,24 +209,16 @@ export function enqueueFundingMetrics(
   syncFallback?: () => void,
 ): void {
   if (!config.asyncPipeline.enabled || isBackpressured()) {
-    asyncPipelineDroppedCounter.inc({ queue: 'async-pipeline', job: 'funding-metrics' });
     syncFallback?.();
     return;
   }
 
-  const data: PipelineMetricsJobData = { kind: 'funding', input };
-
-  enqueuePipelineMetrics(data)
+  void enqueuePipelineMetrics({ operation: 'funding', data: input as unknown as Record<string, unknown> })
     .then(() => {
-      asyncPipelineEnqueueCounter.inc({ queue: 'async-pipeline', job: 'funding-metrics' });
+      asyncPipelineEnqueueCounter.inc({ queue: 'async-pipeline', job: 'pipeline-metrics' });
     })
     .catch(() => {
-      asyncPipelineDroppedCounter.inc({ queue: 'async-pipeline', job: 'funding-metrics' });
-      try {
-        syncFallback?.();
-      } catch {
-        // Never let a fallback failure propagate to the caller.
-      }
+      syncFallback?.();
     });
 }
 
@@ -243,6 +241,7 @@ export function enqueueCounterIncrement(
 /** Force-set the backpressure state. For tests only. */
 export function _setBackpressuredForTest(value: boolean): void {
   _backpressured = value;
+  _lastBackpressureCheck = Date.now();
 }
 
 /** Expose current buffer size. For tests only. */

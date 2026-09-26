@@ -843,5 +843,11 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ## Handsoff notes
 
-<!-- handsoff-issue-605 -->
-- #605: implement: getMoonpayBuyQuote() in moonpay.ts
+<!-- handsoff-issue-594 -->
+- #594: bug(contract): prune_proposals only accepts admins[0] and stalls behind any long-lived proposal
+
+<!-- handsoff-issue-595 -->
+- #595: design(contract): route_from_exchange accepts any address as an 'exchange'
+
+<!-- handsoff-issue-596 -->
+- #596: test(contract): fix and un-ignore test_full_scenario

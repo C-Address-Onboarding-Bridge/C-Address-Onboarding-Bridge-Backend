@@ -38,6 +38,8 @@ export interface CreateKeyInput {
 const keyStore = new Map<string, ApiKeyRecord>();
 const keyHashIndex = new Map<string, ApiKeyRecord>();
 const auditLog: Array<{ ts: number; keyId: string; ip: string; path: string; method: string }> = [];
+/** Keep the in-memory audit log bounded; oldest entries are dropped first. */
+const MAX_AUDIT_LOG_ENTRIES = 10_000;
 
 function hashKey(rawKey: string): string {
   return crypto.createHash('sha256').update(rawKey).digest('hex');
@@ -108,7 +110,25 @@ function isIpAllowed(ip: string, whitelist: string[]): boolean {
 }
 
 export function createApiKey(input: CreateKeyInput): { rawKey: string; record: ApiKeyRecord } {
-  throw new Error('Not implemented: createApiKey');
+  const rawKey = `cab_${crypto.randomBytes(32).toString('hex')}`;
+  const now = Date.now();
+  const record: ApiKeyRecord = {
+    id: crypto.randomUUID(),
+    keyHash: hashKey(rawKey),
+    name: input.name,
+    createdBy: input.createdBy,
+    createdAt: now,
+    updatedAt: now,
+    lastUsedAt: null,
+    scopes: input.scopes,
+    ipWhitelist: input.ipWhitelist ?? [],
+    expiresAt: input.expiresAt ?? null,
+    rateLimit: input.rateLimit ?? 'standard',
+    revoked: false,
+  };
+  keyStore.set(record.id, record);
+  keyHashIndex.set(record.keyHash, record);
+  return { rawKey, record };
 }
 
 export function revokeApiKey(id: string): boolean {
@@ -120,14 +140,20 @@ export function revokeApiKey(id: string): boolean {
 }
 
 export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {
-  return Array.from(keyStore.values()).map(({ keyHash, ...rest }) => rest);
+  // Copy the arrays so callers cannot change a stored key's scopes or IP whitelist.
+  return Array.from(keyStore.values()).map(({ keyHash, ...rest }) => ({
+    ...rest,
+    scopes: [...rest.scopes],
+    ipWhitelist: [...rest.ipWhitelist],
+  }));
 }
 
 export function getApiKey(id: string): Omit<ApiKeyRecord, 'keyHash'> | undefined {
   const record = keyStore.get(id);
   if (!record) return undefined;
   const { keyHash, ...rest } = record;
-  return rest;
+  // Copy the arrays so callers cannot change the stored key's scopes or IP whitelist.
+  return { ...rest, scopes: [...rest.scopes], ipWhitelist: [...rest.ipWhitelist] };
 }
 
 export function updateApiKey(
@@ -136,11 +162,22 @@ export function updateApiKey(
 ): boolean {
   const record = keyStore.get(id);
   if (!record) return false;
-  Object.assign(record, patch, { updatedAt: Date.now() });
+  // Types are erased at runtime: apply only the updatable fields so a caller
+  // can never overwrite id, keyHash, revoked, etc. Undefined values are
+  // ignored and arrays are copied so later mutation of the patch has no effect.
+  if (patch.name !== undefined) record.name = patch.name;
+  if (patch.scopes !== undefined) record.scopes = [...patch.scopes];
+  if (patch.ipWhitelist !== undefined) record.ipWhitelist = [...patch.ipWhitelist];
+  if (patch.expiresAt !== undefined) record.expiresAt = patch.expiresAt;
+  if (patch.rateLimit !== undefined) record.rateLimit = patch.rateLimit;
+  record.updatedAt = Date.now();
   return true;
 }
 
 export function resolveRecord(rawKey: string): ApiKeyRecord | undefined {
+  // Header values can arrive as arrays or be empty; hashing a non-string
+  // throws, so treat anything but a non-empty string as an unknown key.
+  if (typeof rawKey !== 'string' || rawKey.length === 0) return undefined;
   const hash = hashKey(rawKey);
   return keyHashIndex.get(hash);
 }
@@ -154,8 +191,11 @@ declare module 'express-serve-static-core' {
 
 export function requireScopes(...required: PermissionScope[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (!req.resolvedScopes || !required.every((scope) => req.resolvedScopes!.includes(scope))) {
-      res.status(403).json({ error: 'insufficient_scope' });
+    const granted = req.resolvedScopes ?? [];
+    const missing = required.filter((scope) => !granted.includes(scope));
+    if (!req.resolvedScopes || missing.length > 0) {
+      // Name the missing scopes so clients can tell which permission to request.
+      res.status(403).json({ error: 'insufficient_scope', required, missing });
       return;
     }
     next();
@@ -163,7 +203,8 @@ export function requireScopes(...required: PermissionScope[]) {
 }
 
 export function rbacAuth(req: Request, res: Response, next: NextFunction): void {
-  const apiKey = req.headers['x-api-key'] as string | undefined;
+  const header = req.headers['x-api-key'];
+  const apiKey = Array.isArray(header) ? header[0] : header;
   if (!apiKey) {
     res.status(401).json({ error: 'missing_api_key' });
     return;
@@ -194,7 +235,8 @@ export function rbacAuth(req: Request, res: Response, next: NextFunction): void 
   record.lastUsedAt = Date.now();
   const { keyHash, ...publicRecord } = record;
   req.apiKeyRecord = publicRecord;
-  req.resolvedScopes = record.scopes;
+  // Copy so downstream middleware cannot alter the stored key's scopes.
+  req.resolvedScopes = [...record.scopes];
 
   auditLog.push({
     ts: Date.now(),
@@ -203,17 +245,27 @@ export function rbacAuth(req: Request, res: Response, next: NextFunction): void 
     path: req.path,
     method: req.method,
   });
+  if (auditLog.length > MAX_AUDIT_LOG_ENTRIES) {
+    auditLog.splice(0, auditLog.length - MAX_AUDIT_LOG_ENTRIES);
+  }
 
   next();
 }
 
 export function getAuditLog(): typeof auditLog {
-  return [...auditLog];
+  // Copy each entry too: returning the stored objects would let callers
+  // rewrite recorded audit history.
+  return auditLog.map((entry) => ({ ...entry }));
 }
 
 export function seedLegacyKeys(rawKeys: string[]): void {
   const now = Date.now();
-  for (const rawKey of rawKeys) {
+  for (const entry of rawKeys) {
+    // API_KEYS="k1, k2" would otherwise seed " k2", which never matches a
+    // presented key; blank entries must not become valid keys either.
+    if (typeof entry !== 'string') continue;
+    const rawKey = entry.trim();
+    if (rawKey.length === 0) continue;
     const keyHash = hashKey(rawKey);
     if (keyHashIndex.has(keyHash)) continue;
 
