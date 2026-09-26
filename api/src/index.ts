@@ -19,7 +19,7 @@ import { metricsRouter } from './routes/metrics';
 import { telemetryRouter } from './routes/telemetry';
 import { transactionsRouter } from './routes/transactions';
 import { adminRouter } from './routes/admin';
-import { rbacAuth, seedLegacyKeys } from './middleware/rbacAuth';
+import { rbacAuth, requireScopes, seedLegacyKeys } from './middleware/rbacAuth';
 import { registerWebhookVerifier, moonpayVerifier, transakVerifier } from './middleware/webhookVerification';
 import { compressionMiddleware } from './middleware/compression';
 import { errorHandler } from './middleware/error';
@@ -195,75 +195,34 @@ app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
 // Prometheus metrics — internal only, protected by RBAC
 app.use('/metrics', rbacAuth, metricsRouter);
 
+// Bull Board queue dashboard — admin-only, must be mounted before the error pipeline
+if (config.jobs.enabled) {
+  const { createBullBoard } = require('@bull-board/api');
+  const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
+  const { ExpressAdapter } = require('@bull-board/express');
+  const { getAllQueues } = require('./services/queue');
+
+  const serverAdapter = new ExpressAdapter();
+  serverAdapter.setBasePath('/api/jobs');
+  createBullBoard({ queues: getAllQueues().map((q: unknown) => new BullMQAdapter(q)), serverAdapter });
+  app.use('/api/jobs', rbacAuth, requireScopes('admin:keys'), serverAdapter.getRouter());
+}
+
 app.use(xssErrorSanitizer);
 app.use(errorHandler);
 
 if (process.env.NODE_ENV !== 'test') {
-  const wss = createWebSocketServer();
-
-  const server = app.listen(config.port, config.host, () => {
-    logger.info({ port: config.port, rpcUrls: config.soroban.rpcUrls.length }, 'bridge api server started');
+  const server = app.listen(config.port, () => {
+    logger.info({ port: config.port }, 'API server listening');
   });
 
-  // WebSocket upgrade at /ws
-  server.on('upgrade', (req, socket, head) => {
-    const { pathname } = new URL(req.url ?? '/', `http://${req.headers.host}`);
-    if (pathname === '/ws') {
-      handleUpgrade(wss, req, socket as import('net').Socket, head);
-    } else {
-      socket.destroy();
-    }
-  });
+  const wss = createWebSocketServer(server);
+  server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
 
-  gracefulShutdown.attach(server, logger);
-
-  // Drain all external-service connection pools on shutdown.
-  // Imported lazily so the RPC pool / keep-alive agents aren't constructed
-  // during this module's early initialization.
-  const drainConnectionPools = async () => {
-    const [{ rpcPool }, { destroyAgents }] = await Promise.all([
-      import('./services/rpcPool'),
-      import('./services/httpAgent'),
-    ]);
-    rpcPool.destroy();
-    destroyAgents();
+  registerSignalHandlers(async () => {
+    await shutdownTracing();
     await closePool();
-    logger.info('connection pools drained');
-  };
-
-  if (config.jobs.enabled) {
-    import('./jobs/queue').then(async ({ getAllQueues, scheduleRecurringJobs, closeQueues }) => {
-      const { createBullBoard } = await import('@bull-board/api');
-      const { BullMQAdapter } = await import('@bull-board/api/bullMQAdapter');
-      const { ExpressAdapter } = await import('@bull-board/express');
-
-      const serverAdapter = new ExpressAdapter();
-      serverAdapter.setBasePath('/api/jobs');
-      createBullBoard({ queues: getAllQueues().map((q) => new BullMQAdapter(q)), serverAdapter });
-      app.use('/api/jobs', serverAdapter.getRouter());
-
-      await scheduleRecurringJobs();
-      logger.info('background job queues ready');
-
-      registerSignalHandlers(async () => {
-        await closeQueues();
-        await drainConnectionPools();
-        await shutdownTracing();
-        logger.info('job queues closed');
-      });
-    }).catch((err: Error) => {
-      logger.error({ err }, 'failed to initialize job queues');
-      registerSignalHandlers(async () => {
-        await drainConnectionPools();
-        await shutdownTracing();
-      });
-    });
-  } else {
-    registerSignalHandlers(async () => {
-      await drainConnectionPools();
-      await shutdownTracing();
-    });
-  }
+  });
 }
 
-export { app };
+export default app;
