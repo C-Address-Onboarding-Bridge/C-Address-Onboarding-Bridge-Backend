@@ -41,6 +41,42 @@ export class CexWithdrawalForbiddenError extends Error {
 }
 
 /**
+ * Number of decimal places (smallest-unit exponent) for supported assets.
+ * Exchange withdrawal APIs expect amounts denominated in whole coin units,
+ * while the API contract accepts integer strings in the asset's smallest unit
+ * (stroops for Stellar assets).
+ */
+export const ASSET_DECIMALS: Record<string, number> = {
+  XLM: 7,
+  USDC: 7,
+  BTC: 8,
+  ETH: 18,
+};
+
+/**
+ * Converts an integer string expressed in an asset's smallest unit (e.g.
+ * stroops) into the decimal whole-unit string expected by exchange APIs.
+ *
+ * @param amount - Integer string in the asset's smallest unit.
+ * @param asset - Asset symbol (case-insensitive).
+ * @returns Decimal string in whole units, or the original amount if the asset
+ *          is unknown or the input is not a valid integer string.
+ */
+export function toWholeUnits(amount: string, asset: string): string {
+  const decimals = ASSET_DECIMALS[asset.toUpperCase()];
+  if (decimals === undefined || !/^-?\d+$/.test(amount)) {
+    return amount;
+  }
+
+  const negative = amount.startsWith('-');
+  const digits = (negative ? amount.slice(1) : amount).padStart(decimals + 1, '0');
+  const whole = digits.slice(0, digits.length - decimals);
+  const fraction = digits.slice(digits.length - decimals).replace(/0+$/, '');
+  const result = fraction ? `${whole}.${fraction}` : whole;
+  return negative ? `-${result}` : result;
+}
+
+/**
  * Routes withdrawal requests to exchange-specific handlers.
  * Supports Binance, Coinbase, Kraken, and a generic endpoint out of the box.
  * Additional exchanges can be registered via `registerExchange`.
@@ -190,7 +226,7 @@ export class CexRoutingService {
       const { query, headers } = this.signBinance(
         {
           coin: req.sourceAsset,
-          amount: req.amount,
+          amount: toWholeUnits(req.amount, req.sourceAsset),
           address: req.targetCAddress,
           network: req.targetNetwork,
           addressTag: memo,
@@ -231,12 +267,16 @@ export class CexRoutingService {
       const body = JSON.stringify({
         type: 'send',
         to: req.targetCAddress,
-        amount: req.amount,
+        amount: toWholeUnits(req.amount, req.sourceAsset),
         currency: req.sourceAsset,
         description: memo,
       });
       const headers = this.signCoinbase(requestPath, body);
-      const res = await this.postToExchange(`https://api.coinbase.com${requestPath}`, headers, body);
+      const res = await this.postToExchange(
+        `https://api.coinbase.com${requestPath}`,
+        headers,
+        body,
+      );
 
       if (!res.ok) {
         const errBody = await res.text();
@@ -248,8 +288,8 @@ export class CexRoutingService {
       return {
         status: 'pending',
         withdrawalId: `cb-${data.data?.id || Date.now()}`,
-        estimatedArrival: '5-30 minutes',
-        fee: '0.00005',
+        estimatedArrival: '10-60 minutes',
+        fee: '0.0001',
       };
     } catch (err) {
       console.error('coinbase API error:', err);
@@ -258,16 +298,22 @@ export class CexRoutingService {
   }
 
   private async handleKraken(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
+    const memo = req.memo || `bridge:kraken:${req.targetCAddress.slice(-8)}`;
     const path = '/0/private/Withdraw';
 
     try {
       const { body, headers } = this.signKraken(path, {
         asset: req.sourceAsset,
+        amount: toWholeUnits(req.amount, req.sourceAsset),
         key: req.targetCAddress,
-        amount: req.amount,
-        network: req.targetNetwork,
+        address: req.targetCAddress,
+        memo,
       });
-      const res = await this.postToExchange(`https://api.kraken.com${path}`, headers, body);
+      const res = await this.postToExchange(
+        `https://api.kraken.com${path}`,
+        headers,
+        body,
+      );
 
       if (!res.ok) {
         const errBody = await res.text();
@@ -279,8 +325,8 @@ export class CexRoutingService {
       return {
         status: 'pending',
         withdrawalId: `kr-${data.result?.refid || Date.now()}`,
-        estimatedArrival: '5-30 minutes',
-        fee: '0.0002',
+        estimatedArrival: '10-60 minutes',
+        fee: '0.0001',
       };
     } catch (err) {
       console.error('kraken API error:', err);
@@ -289,7 +335,42 @@ export class CexRoutingService {
   }
 
   private async handleGeneric(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    return this.fallbackResponse('gen', req);
+    const memo = req.memo || `bridge:generic:${req.targetCAddress.slice(-8)}`;
+
+    try {
+      const body = JSON.stringify({
+        asset: req.sourceAsset,
+        amount: toWholeUnits(req.amount, req.sourceAsset),
+        address: req.targetCAddress,
+        network: req.targetNetwork,
+        memo,
+      });
+      const res = await this.postToExchange(
+        `${config.cex.generic.baseUrl}/withdrawals`,
+        {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.cex.generic.apiKey}`,
+        },
+        body,
+      );
+
+      if (!res.ok) {
+        const errBody = await res.text();
+        console.error(`generic withdrawal failed: ${errBody}`);
+        return this.fallbackResponse('gen', req);
+      }
+
+      const data = await res.json() as { id?: string };
+      return {
+        status: 'pending',
+        withdrawalId: `gen-${data.id || Date.now()}`,
+        estimatedArrival: '5-30 minutes',
+        fee: '0.0001',
+      };
+    } catch (err) {
+      console.error('generic API error:', err);
+      return this.fallbackResponse('gen', req);
+    }
   }
 
   private fallbackResponse(prefix: string, req: CexWithdrawalRequest): CexWithdrawalResponse {
@@ -301,5 +382,3 @@ export class CexRoutingService {
     };
   }
 }
-
-export const cexService = new CexRoutingService();

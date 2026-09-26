@@ -115,3 +115,25 @@ describe('parseCexWithdrawalMemo', () => {
     expect(parseCexWithdrawalMemo('wrong:binance:AB12CD34')).toEqual({});
   });
 });
+
+describe('CEX withdrawal amount units (#609)', () => {
+  it('converts stroop amounts to whole units for the binance handler', async () => {
+    const result = await defaultCexHandlers.binance(request, cexConfig);
+    expect(result.amount).toBe('1');
+  });
+
+  it('converts stroop amounts to whole units for the coinbase handler', async () => {
+    const result = await defaultCexHandlers.coinbase(request, cexConfig);
+    expect(result.amount).toBe('1');
+  });
+
+  it('converts stroop amounts to whole units for the kraken handler', async () => {
+    const result = await defaultCexHandlers.kraken(request, cexConfig);
+    expect(result.amount).toBe('1');
+  });
+
+  it('converts stroop amounts to whole units for the generic handler', async () => {
+    const result = await defaultCexHandlers.generic(request, cexConfig);
+    expect(result.amount).toBe('1');
+  });
+});
