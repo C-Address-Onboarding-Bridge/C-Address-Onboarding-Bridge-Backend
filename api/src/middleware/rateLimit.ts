@@ -134,6 +134,11 @@ export function ipRateLimitMiddleware(
 /**
  * Tier-based rate limiting middleware.
  * Runs after authentication; keyed by the validated API key id.
+ *
+ * This must be mounted after `rbacAuth` so that `req.apiKeyRecord` is
+ * populated and the configured tier (e.g. 'high' = 500/window) is honored.
+ * If it runs before authentication, `req.apiKeyRecord` is undefined and every
+ * key falls back to the 'low' tier.
  */
 export function tierRateLimitMiddleware(
   req: Request,
