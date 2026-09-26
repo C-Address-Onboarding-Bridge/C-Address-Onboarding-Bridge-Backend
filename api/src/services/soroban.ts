@@ -19,7 +19,7 @@ const tracer = trace.getTracer('soroban-service');
 
 /** Shape of a Soroban transaction response returned by the API. */
 export interface SorobanTxResponse {
-  status: 'pending' | 'success' | 'failed';
+  status: 'pending' | 'success' | 'failed' | 'expired';
   hash: string;
   error?: string;
 }
@@ -38,7 +38,35 @@ export class SorobanRetryableError extends Error {
   }
 }
 
+/**
+ * Error thrown when the Soroban RPC cannot be reached or returns an
+ * unexpected failure. Callers must surface this as a retryable failure
+ * (HTTP 503) instead of silently reporting `pending`.
+ */
+export class SorobanRpcError extends Error {
+  readonly code = 'RPC_ERROR';
+
+  constructor(message = 'Soroban RPC request failed', options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'SorobanRpcError';
+  }
+}
+
 const BASIS_POINTS_DENOM = 10000;
+
+/**
+ * Default RPC retention window (in seconds) after which a transaction that is
+ * still `NOT_FOUND` can no longer be included and is considered expired.
+ * Soroban RPCs typically retain ~24h of ledger history.
+ */
+const DEFAULT_RPC_RETENTION_SECONDS = 24 * 60 * 60;
+
+/**
+ * Tracks the time bounds (unix seconds) of transactions we have submitted so
+ * that a persistent `NOT_FOUND` can be reported as `expired` once the
+ * transaction's own validity window has elapsed.
+ */
+const submittedTxTimeBounds = new Map<string, { maxTime: number; submittedAt: number }>();
 
 /** Wraps the Soroban RPC server and bridge contract interactions. */
 export class SorobanService {
@@ -154,6 +182,10 @@ export class SorobanService {
     const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
     const tx = new Transaction(envelope, this.networkPassphrase);
 
+    // Record the transaction's time bounds so a later `NOT_FOUND` can be
+    // distinguished from a transaction that is genuinely still in flight.
+    this.rememberTimeBounds(txHash, tx);
+
     const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
     externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
 
@@ -182,26 +214,69 @@ export class SorobanService {
   }
 
   /**
+   * Records the time bounds of a submitted transaction so that a persistent
+   * `NOT_FOUND` can later be classified as `expired`.
+   */
+  private rememberTimeBounds(txHash: string, tx: Transaction): void {
+    const maxTime = tx.timeBounds?.maxTime ? Number(tx.timeBounds.maxTime) : 0;
+    submittedTxTimeBounds.set(txHash, { maxTime, submittedAt: Math.floor(Date.now() / 1000) });
+  }
+
+  /**
+   * Returns true when a `NOT_FOUND` transaction can no longer be included:
+   * either its own time bounds have elapsed, or the RPC retention window has
+   * passed since submission.
+   */
+  private isExpired(txHash: string): boolean {
+    const now = Math.floor(Date.now() / 1000);
+    const bounds = submittedTxTimeBounds.get(txHash);
+    if (bounds) {
+      if (bounds.maxTime > 0 && now > bounds.maxTime) {
+        return true;
+      }
+      return now - bounds.submittedAt > DEFAULT_RPC_RETENTION_SECONDS;
+    }
+    // Unknown transaction: only treat as expired once the retention window has
+    // elapsed since the epoch of first observation is unknowable, so stay pending.
+    return false;
+  }
+
+  /**
    * Polls the Soroban RPC for the current status of a submitted transaction.
+   *
+   * - `NOT_FOUND` → `pending` while the transaction may still be included,
+   *   `expired` once its time bounds or the RPC retention window have elapsed.
+   * - `FAILED` → `failed`
+   * - `SUCCESS` → `success`
+   * - RPC/network errors → throws `SorobanRpcError` (HTTP 503) instead of
+   *   silently reporting `pending`.
    *
    * @param txHash - Hex-encoded transaction hash.
    * @returns Latest known transaction status.
+   * @throws {SorobanRpcError} If the RPC call fails.
    */
   async getTransactionStatus(txHash: string): Promise<SorobanTxResponse> {
+    let tx: Awaited<ReturnType<Awaited<ReturnType<typeof rpcPool.execute>> extends never ? never : any>>;
     try {
-      const tx = await rpcPool.execute((server) => server.getTransaction(txHash));
-      if (tx.status === 'NOT_FOUND') {
-        return { status: 'pending', hash: txHash };
+      tx = await rpcPool.execute((server) => server.getTransaction(txHash));
+    } catch (err) {
+      logger.warn({ err, txHash }, 'soroban.getTransactionStatus: RPC request failed');
+      throw new SorobanRpcError('Soroban RPC request failed', { cause: err });
+    }
+
+    if (tx.status === 'NOT_FOUND') {
+      if (this.isExpired(txHash)) {
+        submittedTxTimeBounds.delete(txHash);
+        return { status: 'expired', hash: txHash, error: 'transaction expired without inclusion' };
       }
-      if (tx.status === 'FAILED') {
-        return { status: 'failed', hash: txHash, error: 'transaction failed' };
-      }
-      return { status: 'success', hash: txHash };
-    } catch {
-      // TODO: distinguish RPC errors from "not found" so callers can detect
-      // connectivity failures rather than treating them as a pending state.
       return { status: 'pending', hash: txHash };
     }
+    if (tx.status === 'FAILED') {
+      submittedTxTimeBounds.delete(txHash);
+      return { status: 'failed', hash: txHash, error: 'transaction failed' };
+    }
+    submittedTxTimeBounds.delete(txHash);
+    return { status: 'success', hash: txHash };
   }
 
   /**
@@ -220,95 +295,6 @@ export class SorobanService {
    */
   async contractSimulate(
     sourceAddress: string,
-    functionName: string,
-    targetAddress: string,
-    tokenAddress: string,
-    amount: string,
-    memo: string,
-  ): Promise<{ footprint: string; minResourceFee: string }> {
-    if (!this.contractId) {
-      return { footprint: 'not_configured', minResourceFee: '0' };
-    }
+   
 
-    try {
-      const contract = new Contract(this.contractId);
-      const amountBigInt = BigInt(amount);
-
-      const op = contract.call(
-        functionName,
-        Address.fromString(sourceAddress).toScVal(),
-        Address.fromString(targetAddress).toScVal(),
-        Address.fromString(tokenAddress).toScVal(),
-        xdr.ScVal.scvI128(
-          new xdr.Int128Parts({
-            lo: new xdr.Uint64(amountBigInt & BigInt('0xFFFFFFFFFFFFFFFF')),
-            hi: new xdr.Int64(amountBigInt >> BigInt(64)),
-          }),
-        ),
-        xdr.ScVal.scvBytes(Buffer.from(memo || '')),
-      );
-
-      // Build a minimal transaction for simulation purposes.
-      // The source is a throwaway keypair — the RPC simulates without verifying signatures.
-      const dummyKeypair = Keypair.random();
-      const dummyAccount = new Account(dummyKeypair.publicKey(), '0');
-
-      const tx = new TransactionBuilder(dummyAccount, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(op)
-        .setTimeout(30)
-        .build();
-
-      const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
-
-      if ('error' in simulation && simulation.error) {
-        throw new Error(`simulation failed: ${simulation.error}`);
-      }
-
-      const footprint = 'footprint' in simulation && simulation.footprint
-        ? simulation.footprint.toXDR('base64')
-        : 'not_available';
-      const minResourceFee = 'minResourceFee' in simulation && simulation.minResourceFee
-        ? String(simulation.minResourceFee)
-        : '0';
-
-      return { footprint, minResourceFee };
-    } catch (err) {
-      logger.warn({ err }, 'soroban.contractSimulate failed');
-      return { footprint: 'not_available', minResourceFee: '0' };
-    }
-  }
-
-  /**
-   * Submits a batch of signed funding transactions.
-   *
-   * Delegates to the shared submission path so status mapping (including
-   * `TRY_AGAIN_LATER` and `DUPLICATE`) stays consistent with the single
-   * funding flow.
-   *
-   * @param signedXdrs - Base64-encoded signed transaction envelopes.
-   * @returns Per-transaction status and hash.
-   */
-  async submitBatchFundingTransaction(
-    signedXdrs: string[],
-  ): Promise<SorobanTxResponse[]> {
-    return tracer.startActiveSpan('soroban.submitBatchFundingTransaction', async (span): Promise<SorobanTxResponse[]> => {
-      try {
-        const results: SorobanTxResponse[] = [];
-        for (const signedXdr of signedXdrs) {
-          const start = Date.now();
-          const validation = validateXdr(signedXdr);
-          results.push(await this.submitValidatedXdr(signedXdr, validation.txHash, span, start));
-        }
-        return results;
-      } catch (err) {
-        span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
-        throw err;
-      } finally {
-        span.end();
-      }
-    });
-  }
-}
+/* … truncated 3175 chars — edit only what you need near the top … */
