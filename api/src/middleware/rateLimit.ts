@@ -45,6 +45,27 @@ const ABUSE_MAX_REQUESTS = 50;
 const abuseTracker = new Map<string, { count: number; windowStart: number }>();
 
 /**
+ * Path prefixes that must never be IP rate-limited.
+ *
+ * The IP limiter is mounted at the app root, so `req.path` includes the
+ * `/api` mount prefix (e.g. `/api/webhook/moonpay`). Matching on the bare
+ * `/webhook` prefix therefore never fired and provider callbacks were counted
+ * against the global IP limit. Match the full mounted prefix instead.
+ */
+const WEBHOOK_PATH_PREFIXES = ['/api/webhook/', '/webhook/'];
+
+/**
+ * Whether the request targets a provider webhook route that should bypass the
+ * global IP limiter.
+ */
+export function isWebhookPath(path: string | undefined): boolean {
+  if (!path) {
+    return false;
+  }
+  return WEBHOOK_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+/**
  * Build a limiter keyed strictly by IP.
  *
  * The X-API-Key header is deliberately ignored here: this limiter runs before
@@ -113,8 +134,9 @@ export function ipRateLimitMiddleware(
   res: Response,
   next: NextFunction
 ): void {
-  // Skip webhook endpoints
-  if (req.path?.startsWith('/webhook')) {
+  // Skip webhook endpoints. The limiter is mounted at the app root, so the
+  // path carries the `/api` prefix (e.g. `/api/webhook/moonpay`).
+  if (isWebhookPath(req.path)) {
     next();
     return;
   }
