@@ -11,7 +11,7 @@ function normalizeVersion(value: string | undefined): ApiVersion | undefined {
   return undefined;
 }
 
-function resolveVersion(req: Request): ApiVersion {
+export function resolveVersion(req: Request): ApiVersion {
   const pathVersion = req.path.match(/^\/api\/(v\d+)/)?.[1];
   if (pathVersion) {
     return normalizeVersion(pathVersion) ?? 'v1';
@@ -39,17 +39,45 @@ function resolveVersion(req: Request): ApiVersion {
   return 'v1';
 }
 
+export interface DeprecationOptions {
+  sunset?: string;
+  link?: string;
+}
+
+/**
+ * Middleware to mark a specific endpoint as deprecated in accordance with RFC 8594.
+ * Emits `Deprecation: true`, and optionally `Sunset` and `Link` headers.
+ */
+export function markDeprecated(options: DeprecationOptions = {}) {
+  return (_req: Request, res: Response, next: NextFunction) => {
+    res.set('Deprecation', 'true');
+    if (options.sunset) {
+      res.set('Sunset', options.sunset);
+    }
+    if (options.link) {
+      res.set('Link', options.link);
+    }
+    next();
+  };
+}
+
+/**
+ * Creates an unversioned route redirect handler that routes requests to the resolved
+ * canonical version (`v1` by default, or `v2` if negotiated via header/query) using HTTP 308 (RFC 7538).
+ */
+export function createUnversionedRedirect(_basePath: string) {
+  return (req: Request, res: Response) => {
+    const version = (req as Request & { apiVersion?: ApiVersion }).apiVersion ?? resolveVersion(req);
+    const target = `/api/${version}${req.originalUrl.slice(4)}`;
+    res.redirect(308, target);
+  };
+}
+
 export function versionCompatibility(req: Request, res: Response, next: NextFunction) {
   const version = resolveVersion(req);
   const reqWithVersion = req as Request & { apiVersion?: ApiVersion };
   reqWithVersion.apiVersion = version;
 
   res.set('X-API-Version', version);
-  if (version === 'v1') {
-    res.set('Deprecation', 'true');
-    res.set('Sunset', '2027-12-31');
-    res.set('Link', '<https://docs.example.com/api/versioning>; rel="successor-version"');
-  }
-
   next();
 }

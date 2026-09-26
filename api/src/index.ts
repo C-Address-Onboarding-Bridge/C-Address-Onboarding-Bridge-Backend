@@ -24,7 +24,7 @@ import { registerWebhookVerifier, moonpayVerifier, transakVerifier } from './mid
 import { compressionMiddleware } from './middleware/compression';
 import { errorHandler } from './middleware/error';
 import { CircuitBreaker } from './circuit-breaker';
-import { versionCompatibility } from './middleware/versioning';
+import { versionCompatibility, createUnversionedRedirect } from './middleware/versioning';
 import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
 // import { setFeeRateBps } from './services/metrics'; // see TODO below
@@ -155,9 +155,9 @@ app.use('/api', tierRateLimitMiddleware);
 app.get('/api/v1/deprecations', (_req, res) => {
   res.json({
     version: 'v1',
-    deprecated: true,
-    sunset: '2027-12-31',
-    features: ['legacy quote endpoints', 'legacy funding routing', 'legacy status polling'],
+    deprecated: false,
+    message: 'v1 is active and supported. No active deprecations.',
+    features: [],
   });
 });
 
@@ -175,11 +175,12 @@ app.use('/api/v1/offramp', rbacAuth, offrampRouter);
 app.use('/api/v2/offramp', rbacAuth, offrampRouter);
 app.use('/api/v1/cex', rbacAuth, cexRouter);
 app.use('/api/v2/cex', rbacAuth, cexRouter);
-app.use('/api/quote', rbacAuth, quoteRouter);
-app.use('/api/fund', rbacAuth, fundingRouter);
-app.use('/api/status', rbacAuth, statusRouter);
-app.use('/api/offramp', rbacAuth, offrampRouter);
-app.use('/api/cex', rbacAuth, cexRouter);
+
+// Unversioned aliases: redirect to canonical versioned endpoints (RFC 7538)
+const unversionedAliases = ['/api/quote', '/api/fund', '/api/status', '/api/offramp', '/api/cex'];
+for (const alias of unversionedAliases) {
+  app.use(alias, createUnversionedRedirect(alias));
+}
 
 app.use('/api/webhook/moonpay', moonpayWebhookRouter);
 app.use('/api/webhook/transak', transakWebhookRouter);

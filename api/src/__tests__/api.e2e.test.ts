@@ -68,7 +68,7 @@ describe('API E2E', () => {
     }
   });
 
-  it('accept header versioning routes to v2 when requested', async () => {
+  it('accept header versioning on unversioned endpoint redirects to v2 with 308', async () => {
     const res = await request(app)
       .get('/api/quote')
       .query({
@@ -79,11 +79,13 @@ describe('API E2E', () => {
       .set('X-API-Key', 'test-api-key-123')
       .set('Accept', 'application/vnd.bridge+json; version=2');
 
-    expect(res.status).toBe(200);
-    expect(res.headers['x-api-version']).toBe('v2');
+    expect(res.status).toBe(308);
+    expect(res.headers.location).toBe(
+      '/api/v2/quote?sourceAsset=XLM&amount=1000&targetAddress=CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW',
+    );
   });
 
-  it('v1 endpoints expose deprecation headers', async () => {
+  it('v1 endpoints do not falsely expose deprecation headers while v1 is active', async () => {
     const res = await request(app)
       .get('/api/v1/quote')
       .query({
@@ -94,8 +96,15 @@ describe('API E2E', () => {
       .set('X-API-Key', 'test-api-key-123');
 
     expect(res.status).toBe(200);
-    expect(res.headers.deprecation).toBe('true');
+    expect(res.headers.deprecation).toBeUndefined();
     expect(res.headers['x-api-version']).toBe('v1');
+  });
+
+  it('GET /api/v1/deprecations reports active v1 status with no deprecations', async () => {
+    const res = await request(app).get('/api/v1/deprecations');
+    expect(res.status).toBe(200);
+    expect(res.body.version).toBe('v1');
+    expect(res.body.deprecated).toBe(false);
   });
 
   it('GET /api/v1/quote returns fee quote for authed request', async () => {

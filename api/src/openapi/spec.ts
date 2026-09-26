@@ -513,7 +513,7 @@ Funding submissions are idempotent — retrying with the same signed XDR will re
 
 ## Versioning
 
-The API supports versioned paths (\`/api/v1/\`, \`/api/v2/\`) and content-type negotiation via the \`Accept: application/vnd.bridge+json; version=2\` header.
+The API supports versioned paths (\`/api/v1/\`, \`/api/v2/\`) and content-type negotiation via the \`Accept: application/vnd.bridge+json; version=2\` header. Unversioned aliases (e.g. \`/api/quote\`) redirect to the canonical versioned endpoints via HTTP 308 Permanent Redirect. Both v1 and v2 are currently active. Deprecation headers are only emitted on truly deprecated resources.
 
 ## Example: full funding flow
 

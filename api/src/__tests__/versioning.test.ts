@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { describe, it, expect, vi } from 'vitest';
-import { versionCompatibility } from '../middleware/versioning';
+import { versionCompatibility, markDeprecated, createUnversionedRedirect } from '../middleware/versioning';
 
 function buildReq(overrides: { path?: string; headers?: Record<string, string>; query?: Record<string, string> } = {}): Request {
   const headers = overrides.headers ?? {};
@@ -79,15 +79,15 @@ describe('versionCompatibility', () => {
     expect(headers['x-api-version']).toBe('v1');
   });
 
-  it('exposes deprecation headers for v1 requests', () => {
+  it('does not falsely expose deprecation headers for active v1 requests', () => {
     const req = buildReq({ path: '/api/v1/quote' });
     const { res, headers } = buildRes();
 
     versionCompatibility(req, res, vi.fn() as NextFunction);
 
-    expect(headers.deprecation).toBe('true');
-    expect(headers.sunset).toBe('2027-12-31');
-    expect(headers.link).toContain('rel="successor-version"');
+    expect(headers.deprecation).toBeUndefined();
+    expect(headers.sunset).toBeUndefined();
+    expect(headers.link).toBeUndefined();
   });
 
   it('does not deprecate v2 requests', () => {
@@ -107,5 +107,68 @@ describe('versionCompatibility', () => {
     versionCompatibility(req, res, vi.fn() as NextFunction);
 
     expect((req as Request & { apiVersion?: string }).apiVersion).toBe('v2');
+  });
+
+  it('exposes deprecation headers when markDeprecated middleware is used', () => {
+    const middleware = markDeprecated({
+      sunset: '2028-12-31',
+      link: '<https://docs.example.com/api/v2>; rel="successor-version"',
+    });
+    const req = buildReq({ path: '/api/v1/legacy' });
+    const { res, headers } = buildRes();
+
+    middleware(req, res, vi.fn() as NextFunction);
+
+    expect(headers.deprecation).toBe('true');
+    expect(headers.sunset).toBe('2028-12-31');
+    expect(headers.link).toContain('rel="successor-version"');
+  });
+
+  it('createUnversionedRedirect redirects unversioned paths to v1 canonical URL with 308', () => {
+    const redirectMiddleware = createUnversionedRedirect('/api/quote');
+    const req = {
+      path: '/api/quote',
+      url: '/',
+      originalUrl: '/api/quote?sourceAsset=XLM&amount=100',
+      get: () => undefined,
+      query: {},
+    } as unknown as Request;
+    let redirectStatus: number | undefined;
+    let redirectLocation: string | undefined;
+    const res = {
+      redirect: (status: number, location: string) => {
+        redirectStatus = status;
+        redirectLocation = location;
+      },
+    } as unknown as Response;
+
+    redirectMiddleware(req, res);
+
+    expect(redirectStatus).toBe(308);
+    expect(redirectLocation).toBe('/api/v1/quote?sourceAsset=XLM&amount=100');
+  });
+
+  it('createUnversionedRedirect redirects to v2 when negotiated via header', () => {
+    const redirectMiddleware = createUnversionedRedirect('/api/fund');
+    const req = {
+      path: '/api/fund',
+      url: '/prepare',
+      originalUrl: '/api/fund/prepare',
+      get: (h: string) => (h === 'x-api-version' ? 'v2' : undefined),
+      query: {},
+    } as unknown as Request;
+    let redirectStatus: number | undefined;
+    let redirectLocation: string | undefined;
+    const res = {
+      redirect: (status: number, location: string) => {
+        redirectStatus = status;
+        redirectLocation = location;
+      },
+    } as unknown as Response;
+
+    redirectMiddleware(req, res);
+
+    expect(redirectStatus).toBe(308);
+    expect(redirectLocation).toBe('/api/v2/fund/prepare');
   });
 });
