@@ -143,6 +143,9 @@ app.use(loggingMiddleware);
 app.use('/api/webhook', express.text({ type: '*/*' }));
 app.use('/api', express.json({ limit: '32kb' }));
 
+// suspiciousRateLimiting is mounted exactly once here. It only counts requests
+// that actually tripped a detector (see middleware/security.ts), so normal
+// traffic is never throttled.
 app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
@@ -189,30 +192,6 @@ app.use('/api/v1/admin', rbacAuth, adminRouter);
 app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/api/v1/metrics', rbacAuth, metricsRouter);
+app.use('
 
-// xssErrorSanitizer only sanitizes the error and forwards it via next(err);
-// it must run BEFORE errorHandler so errorHandler can map status codes
-// (e.g. Zod validation errors -> 400 validation_error) and hide 5xx messages.
-app.use(xssErrorSanitizer);
-app.use(errorHandler);
-
-registerSignalHandlers();
-
-const server = app.listen(config.port, () => {
-  logger.info({ port: config.port }, 'API server listening');
-});
-
-const wss = createWebSocketServer(server);
-server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
-
-async function shutdown() {
-  await gracefulShutdown(server);
-  await closePool();
-  await shutdownTracing();
-}
-
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-
-export { app, server };
+/* … truncated 797 chars — edit only what you need near the top … */

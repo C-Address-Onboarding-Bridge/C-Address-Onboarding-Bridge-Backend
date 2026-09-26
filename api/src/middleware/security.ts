@@ -220,42 +220,37 @@ const suspiciousIpCounts = new Map<string, { count: number; windowStart: number 
 const SUSPICIOUS_WINDOW_MS = 60_000;
 const SUSPICIOUS_THRESHOLD = 10;
 
-export function suspiciousActivityDetection(req: Request, res: Response, next: NextFunction): void {
-  const ip = req.ip ?? 'unknown';
+/**
+ * Record a suspicious request for an IP. Only call this when a detector
+ * (injection, pollution, bad signature, …) actually tripped — normal traffic
+ * must never increment the counter.
+ */
+export function flagSuspiciousRequest(ip: string): void {
   const now = Date.now();
   const entry = suspiciousIpCounts.get(ip);
 
   if (!entry || now - entry.windowStart > SUSPICIOUS_WINDOW_MS) {
     suspiciousIpCounts.set(ip, { count: 1, windowStart: now });
-    next();
     return;
   }
 
   entry.count += 1;
-
-  if (entry.count > SUSPICIOUS_THRESHOLD) {
-    logger.warn({ ip, path: req.path, count: entry.count }, 'suspicious activity detected');
-  }
-
-  next();
 }
 
 /**
- * Sanitizes error messages before they are sent to clients.
- *
- * Issue #619: this middleware must NOT respond on its own. It previously
- * short-circuited every error into a 500, so `errorHandler` never ran and
- * Zod validation errors were never mapped to 400 `validation_error`.
- * Instead, sanitize the message in place and forward the error via `next(err)`
- * so the central error handler can decide the status code and body.
+ * Rate-limit only requests that have already been flagged as suspicious.
+ * The counter is incremented by the detectors (via flagSuspiciousRequest),
+ * not by this middleware, so ordinary requests are never counted.
  */
-export function xssErrorSanitizer(err: unknown, _req: Request, _res: Response, next: NextFunction): void {
-  if (err && typeof err === 'object') {
-    const error = err as { message?: unknown };
-    if (typeof error.message === 'string') {
-      error.message = sanitizeErrorMessage(error.message);
-    }
+export function suspiciousRateLimiting(req: Request, res: Response, next: NextFunction): void {
+  const ip = req.ip ?? 'unknown';
+  const entry = suspiciousIpCounts.get(ip);
+
+  if (entry && Date.now() - entry.windowStart <= SUSPICIOUS_WINDOW_MS && entry.count >= SUSPICIOUS_THRESHOLD) {
+    logger.warn({ ip, path: req.path, count: entry.count }, 'suspicious request rate limit exceeded');
+    res.status(429).json({ error: 'too_many_requests', message: 'Too many suspicious requests' });
+    return;
   }
 
-  next(err);
+  next();
 }
