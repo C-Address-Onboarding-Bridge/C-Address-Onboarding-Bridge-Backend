@@ -65,6 +65,11 @@ const app = express();
 
 app.set('logger', logger);
 
+// Trust the configured reverse proxy so req.ip reflects the real client
+// (X-Forwarded-For) instead of the load balancer. Without this, IP allowlists,
+// IP rate limits, IP bans and webhook failure tracking all key off the proxy.
+app.set('trust proxy', config.trustProxy);
+
 app.use(helmet());
 app.use(
   cors({
@@ -189,23 +194,6 @@ app.use('/api/v1/admin', rbacAuth, adminRouter);
 app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/metrics', rbacAuth, metricsRouter);
+app.use('
 
-// Bull Board queue dashboard — admin-only, must be mounted before the error handler
-app.use('/admin/queues', rbacAuth, requireScopes('admin:write'), adminRouter);
-
-app.use(errorHandler);
-
-const server = app.listen(config.port, () => {
-  logger.info({ port: config.port }, 'API server listening');
-});
-
-const wss = createWebSocketServer(server);
-server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
-
-registerSignalHandlers(async () => {
-  await closePool();
-  await shutdownTracing();
-});
-
-export default app;
+/* … truncated 579 chars — edit only what you need near the top … */
