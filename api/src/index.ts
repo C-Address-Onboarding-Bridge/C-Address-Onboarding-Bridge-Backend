@@ -27,7 +27,7 @@ import { CircuitBreaker } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
 import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
-import { setFeeRateBps } from './services/metrics';
+import { setFeeRateBps, updateCircuitBreakerMetrics } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
@@ -85,9 +85,7 @@ app.use((req, res, next) => {
     const labels = { method: req.method, path: route, status: String(res.statusCode) };
     httpRequestCounter.inc(labels);
     httpRequestDuration.observe(labels, (Date.now() - start) / 1000);
-    // TODO(next-bounty): updateCircuitBreakerMetrics() is still a stub that throws.
-    // It runs in every response's 'finish' handler, so it failed every request.
-    // updateCircuitBreakerMetrics(circuitBreakers);
+    updateCircuitBreakerMetrics(circuitBreakers);
   });
   next();
 });
@@ -197,9 +195,9 @@ const server = app.listen(config.port, () => {
 const wss = createWebSocketServer(server);
 server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
 
-registerSignalHandlers(server, async () => {
-  await closePool();
+registerSignalHandlers(async () => {
   await shutdownTracing();
+  await closePool();
 });
 
-export { app, server };
+export { app, server, wss };
