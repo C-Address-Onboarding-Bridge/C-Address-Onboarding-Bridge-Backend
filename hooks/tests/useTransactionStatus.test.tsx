@@ -72,4 +72,66 @@ describe('useTransactionStatus', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toBeInstanceOf(Error);
   });
+
+  it('resets data and error when txHash changes', async () => {
+    const mockStatus1 = { status: 'pending', hash: 'hash1' };
+    const mockStatus2 = { status: 'success', hash: 'hash2' };
+    let resolveSecondStatus: (val?: any) => void;
+    const secondPromise = new Promise((resolve) => {
+      resolveSecondStatus = resolve;
+    });
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(mockStatus1) })
+      .mockReturnValueOnce(secondPromise);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result, rerender } = renderHook(
+      (props: { txHash: string | undefined }) =>
+        useTransactionStatus(
+          { baseUrl: BASE_URL, cache: { statusTtlMs: 0, staleWhileRevalidate: false } },
+          props.txHash,
+        ),
+      { initialProps: { txHash: 'hash1' } },
+    );
+
+    await waitFor(() => expect(result.current.data).toEqual(mockStatus1));
+
+    rerender({ txHash: 'hash2' });
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.error).toBeUndefined();
+
+    resolveSecondStatus!({ ok: true, json: () => Promise.resolve(mockStatus2) });
+    await waitFor(() => expect(result.current.data).toEqual(mockStatus2));
+  });
+
+  it('continues polling with backoff after errors until terminal status', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'pending', hash: 'hash1' }) })
+      .mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({ message: 'temporary server error' }) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'success', hash: 'hash1' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() =>
+      useTransactionStatus(
+        { baseUrl: BASE_URL, retry: { maxRetries: 0 }, cache: { statusTtlMs: 0, staleWhileRevalidate: false } },
+        'hash1',
+        { pollIntervalMs: 20 },
+      ),
+    );
+
+    await waitFor(() => expect(result.current.data?.status).toBe('pending'));
+
+    // Wait for the transient error
+    await waitFor(() => expect(result.current.error).toBeDefined());
+
+    // Should continue polling after the error and recover to success
+    await waitFor(() => expect(result.current.data?.status).toBe('success'), { timeout: 2000 });
+    expect(result.current.error).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 });

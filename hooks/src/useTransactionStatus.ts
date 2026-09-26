@@ -7,6 +7,8 @@ export interface UseTransactionStatusOptions {
   enabled?: boolean;
   /** When set, polls at this interval (ms) until the status is `success` or `failed`. */
   pollIntervalMs?: number;
+  /** Maximum backoff interval (ms) when retrying after errors. Defaults to 30000. */
+  maxPollIntervalMs?: number;
 }
 
 export interface UseTransactionStatusResult {
@@ -25,19 +27,24 @@ export function useTransactionStatus(
   txHash: string | undefined,
   options: UseTransactionStatusOptions = {},
 ): UseTransactionStatusResult {
-  const { enabled = true, pollIntervalMs } = options;
+  const { enabled = true, pollIntervalMs, maxPollIntervalMs = 30_000 } = options;
   const client = useCAddressBridge(config);
   const [data, setData] = useState<TransactionStatus | undefined>(undefined);
   const [error, setError] = useState<Error | undefined>(undefined);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    setData(undefined);
+    setError(undefined);
+
     if (!enabled || !txHash) {
+      setLoading(false);
       return;
     }
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let consecutiveErrors = 0;
 
     const fetchStatus = () => {
       setLoading(true);
@@ -45,6 +52,7 @@ export function useTransactionStatus(
         .getStatus(txHash)
         .then((result) => {
           if (cancelled) return;
+          consecutiveErrors = 0;
           setData(result);
           setError(undefined);
           if (pollIntervalMs && !TERMINAL_STATUSES.has(result.status)) {
@@ -54,6 +62,14 @@ export function useTransactionStatus(
         .catch((err: unknown) => {
           if (cancelled) return;
           setError(err instanceof Error ? err : new Error(String(err)));
+          if (pollIntervalMs) {
+            consecutiveErrors++;
+            const backoffMs = Math.min(
+              pollIntervalMs * 2 ** (consecutiveErrors - 1),
+              maxPollIntervalMs,
+            );
+            timer = setTimeout(fetchStatus, backoffMs);
+          }
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
@@ -66,7 +82,7 @@ export function useTransactionStatus(
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [client, txHash, enabled, pollIntervalMs]);
+  }, [client, txHash, enabled, pollIntervalMs, maxPollIntervalMs]);
 
   return { data, error, loading };
 }
