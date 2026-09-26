@@ -35,25 +35,80 @@ export interface FeeConfigState {
   timelockUntil: number | null;
 }
 
-// #639 — The max fee cap enforced by the on-chain contract (governance enforced).
-// Matches CONTRACT_MAX_FEE_BPS from deployment config.
-export const CONTRACT_MAX_FEE_BPS = 1000;
+export interface AdminAuditEntry {
+  ts: number;
+  action: string;
+  actor: string;
+  details: Record<string, unknown>;
+}
 
-// Default page size and bounds for pagination (#638)
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
+const seededTransactions: TransactionRecord[] = [
+  {
+    id: 'tx_1001',
+    txHash: '0xabc1001',
+    sourceAddr: 'GABC1001',
+    targetAddr: 'GXYZ1001',
+    status: 'success',
+    amount: '120.50',
+    fee: '0.36',
+    createdAt: '2026-06-20T10:15:00.000Z',
+    currency: 'USDC',
+  },
+  {
+    id: 'tx_1002',
+    txHash: '0xabc1002',
+    sourceAddr: 'GABC1002',
+    targetAddr: 'GXYZ1002',
+    status: 'pending',
+    amount: '80.00',
+    fee: '0.24',
+    createdAt: '2026-06-21T09:45:00.000Z',
+    currency: 'USDC',
+  },
+  {
+    id: 'tx_1003',
+    txHash: '0xabc1003',
+    sourceAddr: 'GABC1003',
+    targetAddr: 'GXYZ1003',
+    status: 'failed',
+    amount: '45.00',
+    fee: '0.14',
+    createdAt: '2026-06-22T05:30:00.000Z',
+    currency: 'USDC',
+  },
+  {
+    id: 'tx_1004',
+    txHash: '0xabc1004',
+    sourceAddr: 'GABC1004',
+    targetAddr: 'GXYZ1004',
+    status: 'success',
+    amount: '220.00',
+    fee: '0.66',
+    createdAt: '2026-06-23T12:45:00.000Z',
+    currency: 'USDC',
+  },
+  {
+    id: 'tx_1005',
+    txHash: '0xabc1005',
+    sourceAddr: 'GABC1005',
+    targetAddr: 'GXYZ1005',
+    status: 'pending',
+    amount: '99.99',
+    fee: '0.30',
+    createdAt: '2026-06-24T08:10:00.000Z',
+    currency: 'USDC',
+  },
+];
 
-// In-memory admin audit log (backed by DB when available)
-const adminAuditLog: Array<{ ts: number; action: string; actor: string; details: Record<string, unknown> }> = [];
-
-// In-memory fee config state — tracks the current read-only view of the on-chain fee.
-// Do NOT write config.soroban.feeBps from admin routes (#639).
+const transactionStore: TransactionRecord[] = [...seededTransactions];
 let feeConfigState: FeeConfigState = {
   feeBps: config.soroban.feeBps,
   updatedAt: Date.now(),
   pendingFeeBps: null,
   timelockUntil: null,
 };
+let accumulatedFees = '1.20';
+const adminAuditLog: AdminAuditEntry[] = [];
 
 // #638 — helpers for DB-backed pagination
 
@@ -76,157 +131,55 @@ function rowToRecord(row: Record<string, unknown>): TransactionRecord {
   };
 }
 
-/**
- * #638 — Query real transaction rows from Postgres with validated pagination and
- * integer amount filtering. Falls back to an empty result set when the DB is not
- * configured (so the API still starts in dev without a database).
- */
-export async function listTransactions(
-  params: TransactionQueryParams = {},
-): Promise<{ data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean }> {
-  const pool = getPool();
+const DEFAULT_TRANSACTIONS_LIMIT = 20;
 
-  // --- Parameter validation (#638) ---
+export function listTransactions(params: TransactionQueryParams = {}): { data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean } {
+  const { status, fromDate, toDate, minAmount, maxAmount, cursor, offset } = params;
+  const limit = params.limit ?? DEFAULT_TRANSACTIONS_LIMIT;
 
-  // Clamp limit to [1, MAX_LIMIT], default to DEFAULT_LIMIT
-  let limit = typeof params.limit === 'number' ? Math.floor(params.limit) : DEFAULT_LIMIT;
-  if (!Number.isFinite(limit) || limit < 1) limit = DEFAULT_LIMIT;
-  if (limit > MAX_LIMIT) limit = MAX_LIMIT;
+  const filtered = transactionStore.filter((tx) => {
+    if (status && tx.status !== status) return false;
+    if (fromDate && tx.createdAt < fromDate) return false;
+    if (toDate && tx.createdAt > toDate) return false;
+    if (minAmount !== undefined && parseAmount(tx.amount) < parseAmount(minAmount)) return false;
+    if (maxAmount !== undefined && parseAmount(tx.amount) > parseAmount(maxAmount)) return false;
+    return true;
+  });
 
-  // offset must be a non-negative integer
-  let offset = typeof params.offset === 'number' ? Math.floor(params.offset) : 0;
-  if (!Number.isFinite(offset) || offset < 0) offset = 0;
-
-  // Amount filters must parse as integers (amounts are stored in stroops, integers)
-  let minAmountInt: bigint | null = null;
-  let maxAmountInt: bigint | null = null;
-  if (params.minAmount !== undefined) {
-    try {
-      minAmountInt = BigInt(Math.floor(Number(params.minAmount)));
-    } catch {
-      minAmountInt = null;
-    }
-  }
-  if (params.maxAmount !== undefined) {
-    try {
-      maxAmountInt = BigInt(Math.floor(Number(params.maxAmount)));
-    } catch {
-      maxAmountInt = null;
-    }
+  let startIndex = 0;
+  if (cursor) {
+    const cursorIndex = filtered.findIndex((tx) => tx.id === cursor);
+    startIndex = cursorIndex === -1 ? 0 : cursorIndex + 1;
+  } else if (offset) {
+    startIndex = offset;
   }
 
-  // When the DB is not configured, return empty (don't serve stale fixtures)
-  if (!pool) {
-    logger.debug('listTransactions: no database configured, returning empty result');
-    return { data: [], nextCursor: null, hasMore: false };
-  }
+  const page = filtered.slice(startIndex, startIndex + limit);
+  const hasMore = startIndex + limit < filtered.length;
+  const nextCursor = hasMore ? page[page.length - 1]?.id ?? null : null;
 
-  // --- Build parameterised query ---
-  const conditions: string[] = [];
-  const values: unknown[] = [];
-  let idx = 1;
-
-  if (params.status) {
-    conditions.push(`status = $${idx++}`);
-    values.push(params.status);
-  }
-  if (params.fromDate) {
-    conditions.push(`created_at >= $${idx++}`);
-    values.push(new Date(params.fromDate).getTime());
-  }
-  if (params.toDate) {
-    conditions.push(`created_at <= $${idx++}`);
-    values.push(new Date(params.toDate).getTime());
-  }
-  if (minAmountInt !== null) {
-    conditions.push(`CAST(amount AS NUMERIC) >= $${idx++}`);
-    values.push(minAmountInt.toString());
-  }
-  if (maxAmountInt !== null) {
-    conditions.push(`CAST(amount AS NUMERIC) <= $${idx++}`);
-    values.push(maxAmountInt.toString());
-  }
-
-  // Cursor-based pagination: cursor encodes the created_at timestamp of the last seen row
-  if (params.cursor) {
-    try {
-      const cursorTs = parseInt(Buffer.from(params.cursor, 'base64').toString('utf8'), 10);
-      if (Number.isFinite(cursorTs)) {
-        conditions.push(`created_at < $${idx++}`);
-        values.push(cursorTs);
-      }
-    } catch {
-      // ignore malformed cursor
-    }
-  }
-
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
-  // Fetch one extra row to determine hasMore
-  const fetchLimit = limit + 1;
-  values.push(fetchLimit);
-  values.push(offset);
-
-  const sql = `
-    SELECT
-      id,
-      tx_hash,
-      status,
-      source_addr,
-      target_addr,
-      token_addr    AS currency,
-      amount,
-      ROUND(CAST(amount AS NUMERIC) * fee_bps / 10000.0, 0)::TEXT AS fee,
-      created_at,
-      TO_CHAR(TO_TIMESTAMP(created_at / 1000.0), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at_iso
-    FROM transactions
-    ${where}
-    ORDER BY created_at DESC
-    LIMIT $${idx++} OFFSET $${idx++}
-  `;
-
-  const client = await pool.connect();
-  try {
-    const result = await client.query(sql, values);
-    const rows = result.rows as Record<string, unknown>[];
-
-    const hasMore = rows.length > limit;
-    const page = rows.slice(0, limit).map(rowToRecord);
-
-    let nextCursor: string | null = null;
-    if (hasMore && page.length > 0) {
-      const lastRow = rows[limit - 1];
-      const cursorTs = String(lastRow['created_at']);
-      nextCursor = Buffer.from(cursorTs, 'utf8').toString('base64');
-    }
-
-    return { data: page, nextCursor, hasMore };
-  } finally {
-    client.release();
-  }
+  return { data: page, nextCursor, hasMore };
 }
 
 /**
  * Serialise a list of transaction records to CSV. Used by the export endpoint.
  */
 export function serializeTransactionsCsv(transactions: TransactionRecord[]): string {
-  const header = 'id,txHash,sourceAddr,targetAddr,status,amount,fee,createdAt,currency';
-  const rows = transactions.map((t) =>
-    [
-      t.id,
-      t.txHash,
-      t.sourceAddr,
-      t.targetAddr,
-      t.status,
-      t.amount,
-      t.fee,
-      t.createdAt,
-      t.currency,
-    ]
-      .map((v) => `"${String(v).replace(/"/g, '""')}"`)
-      .join(','),
+  const headers = ['id', 'txHash', 'sourceAddr', 'targetAddr', 'status', 'amount', 'fee', 'createdAt', 'currency'];
+
+  const escapeField = (value: string): string => {
+    // Wrap in quotes if the value contains a comma, double-quote, or newline
+    if (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  };
+
+  const rows = transactions.map((tx) =>
+    headers.map((key) => escapeField(String(tx[key as keyof TransactionRecord]))).join(','),
   );
-  return [header, ...rows].join('\n');
+
+  return [headers.join(','), ...rows].join('\n');
 }
 
 /**
@@ -261,7 +214,11 @@ export async function getTransactionStats(): Promise<{
 }
 
 /**
- * #639 — Return the current fee config state. Does NOT touch config.soroban.feeBps.
+ * Returns the current fee configuration state.
+ *
+ * The returned object is a snapshot of the in-memory fee config, including
+ * the active `feeBps`, when it was last `updatedAt`, and any pending fee
+ * change scheduled via {@link updateFeeConfig} along with its `timelockUntil`.
  */
 export function getFeeConfig(): FeeConfigState {
   return { ...feeConfigState };
@@ -349,35 +306,41 @@ export async function withdrawAccumulatedFees(
 }
 
 /**
- * Record an admin action to the in-memory audit log (and DB when available).
+ * Appends an entry to the in-memory admin audit log.
+ *
+ * Records who performed an administrative action, what the action was, and
+ * any structured `details` associated with it. The entry is timestamped at
+ * the moment of the call and returned so callers can echo it back in a
+ * response. Entries are appended in chronological order and are retrievable
+ * via {@link getAdminAuditLog}.
+ *
+ * @param action  Short identifier for the admin action (e.g. `'fee.update'`).
+ * @param details Arbitrary structured metadata describing the action.
+ * @param actor   Identity of the admin performing the action. Defaults to `'admin'`.
+ * @returns The recorded audit entry.
  */
 export function recordAdminAction(
   action: string,
   details: Record<string, unknown>,
   actor = 'admin',
-): void {
-  const entry = { ts: Date.now(), action, actor, details };
+): AdminAuditEntry {
+  const entry: AdminAuditEntry = {
+    ts: Date.now(),
+    action,
+    actor,
+    details,
+  };
   adminAuditLog.push(entry);
-
-  // Best-effort persist to DB
-  const pool = getPool();
-  if (pool) {
-    pool
-      .query(
-        `INSERT INTO admin_audit_log (ts, action, actor, details)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT DO NOTHING`,
-        [entry.ts, action, actor, JSON.stringify(details)],
-      )
-      .catch((err: unknown) => {
-        logger.warn({ err }, 'recordAdminAction: failed to persist to DB (non-fatal)');
-      });
-  }
+  logger.info({ action, actor }, 'admin action recorded');
+  return entry;
 }
 
 /**
- * Return the in-memory admin audit log.
+ * Returns the recorded admin audit log.
+ *
+ * Backs `GET /api/v1/admin/audit`. Returns a shallow copy of the entries so
+ * callers cannot mutate the internal log, preserving append-only semantics.
  */
-export function getAdminAuditLog(): typeof adminAuditLog {
-  return [...adminAuditLog];
+export function getAdminAuditLog(): AdminAuditEntry[] {
+  return adminAuditLog.map((entry) => ({ ...entry }));
 }

@@ -71,5 +71,6 @@ export async function collectAllPages<T>(
   fetcher: PageFetcher<T>,
   options?: AutoPaginateOptions,
 ): Promise<T[]> {
-  throw new Error('Not implemented: collectAllPages');
+  const helper = new PaginationHelper(fetcher, options);
+  return helper.all(options?.signal);
 }

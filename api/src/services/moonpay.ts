@@ -84,7 +84,9 @@ export class MoonpayService {
 
     if (!res.ok) throw new Error(`moonpay quote failed: ${res.statusText}`);
 
-    const data = await res.json();
+    // res.json() is untyped; the runtime guards immediately below are what
+    // actually validate the shape.
+    const data = (await res.json()) as Record<string, unknown> | null;
     const { quoteCurrencyAmount, feeAmount, totalAmount } = data ?? {};
     if (
       typeof quoteCurrencyAmount !== 'number'

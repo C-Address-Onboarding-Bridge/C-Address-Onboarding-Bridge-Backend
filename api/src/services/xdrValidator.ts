@@ -105,7 +105,7 @@ const seenHashes = new NodeCache({ stdTTL: SEEN_HASH_TTL_SECONDS, checkperiod: 6
 
 /** Exposed for testing — allows clearing the seen-hash store between tests. */
 export function clearSeenHashes(): void {
-  throw new Error('Not implemented: clearSeenHashes');
+  seenHashes.flushAll();
 }
 
 /** Returns true if the hash has been seen before; records it if not. */
@@ -332,5 +332,27 @@ export function validateXdr(
   xdrString: string,
   opts: XdrValidationOptions = {},
 ): XdrValidationResult {
-  throw new Error('Not implemented: validateXdr');
+  const maxByteLength = opts.maxByteLength ?? MAX_XDR_BYTE_LENGTH;
+  const networkPassphrase = opts.networkPassphrase ?? config.soroban.networkPassphrase;
+  const contractId = opts.contractId ?? config.soroban.bridgeContractId;
+
+  checkSize(xdrString, maxByteLength);
+  const rawBuf = decodeBase64(xdrString);
+  const tx = parseEnvelope(rawBuf, networkPassphrase);
+  checkNetworkPassphrase(tx, networkPassphrase);
+  checkFee(tx);
+  checkTimeBounds(tx);
+  checkSourceAccount(tx);
+  checkOperations(tx, contractId, opts.skipContractCheck ?? false);
+
+  const txHash = tx.hash().toString('hex');
+  checkDuplicate(txHash);
+
+  return {
+    valid: true,
+    txHash,
+    sourceAccount: tx.source,
+    fee: parseInt(tx.fee, 10),
+    operationCount: tx.operations.length,
+  };
 }

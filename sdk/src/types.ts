@@ -236,6 +236,8 @@ export interface QueueEntry {
 }
 
 export interface OfflineQueueOptions {
+   /** Locale for error messages raised by the queue (mirrors OfflineBridgeClient). */
+   locale?: SupportedLocale;
    maxSize?: number;
    storageAdapter?: StorageAdapter;
    healthCheckIntervalMs?: number;

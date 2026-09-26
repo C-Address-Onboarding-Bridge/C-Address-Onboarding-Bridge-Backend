@@ -3,7 +3,13 @@ import { logger } from '../index';
 
 const SQL_PATTERNS = [
   /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|UNION|TRUNCATE|DECLARE|CAST|CONVERT)\b)/i,
-  /(--|\/\*|\*\/|;|\bxp_|\bsp_)/i,
+  // Detect stored procedure calls and comment markers only in specific contexts
+  /\b(xp_|sp_)[\w]+/i,
+  // Only match comment patterns when clearly isolated (not in normal text)
+  /\/\*[\s\S]*?\*\//,
+  /--\s*[\w]/i,
+  // SQL statement terminator must be followed by another keyword or be at end
+  /;\s*(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|EXEC|UNION|DECLARE)\b/i,
   /(\bOR\b|\bAND\b)\s+['"]?\d+['"]?\s*=\s*['"]?\d+['"]?/i,
   /'\s*(OR|AND)\s*'/i,
   /SLEEP\s*\(\d+\)/i,
@@ -52,12 +58,36 @@ function flattenValue(v: unknown): string[] {
   return [];
 }
 
-function detectPatterns(values: string[], patterns: RegExp[]): boolean {
-  return values.some((v) => patterns.some((p) => p.test(v)));
+/**
+ * RegExp.test is stateful for /g patterns (it advances lastIndex), so the
+ * same payload could alternately match and not match across requests.
+ * Reset lastIndex before every test.
+ */
+function testPattern(pattern: RegExp, value: string): boolean {
+  pattern.lastIndex = 0;
+  return pattern.test(value);
 }
 
+function detectPatterns(values: string[], patterns: RegExp[]): boolean {
+  return values.some((v) => patterns.some((p) => testPattern(p, v)));
+}
+
+const MULTI_VALUED_QUERY_PARAMS = new Set([
+  'status',
+  'type',
+]);
+
+/** Upper bound on values for params that may legitimately repeat. */
+const MAX_MULTI_VALUES = 20;
+
 function hasParameterPollution(query: Record<string, unknown>): boolean {
-  return Object.values(query).some((v) => Array.isArray(v));
+  return Object.entries(query).some(([key, v]) => {
+    // qs turns `a[b]=1` into an object: never a valid single value here.
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) return true;
+    if (!Array.isArray(v)) return false;
+    if (!MULTI_VALUED_QUERY_PARAMS.has(key)) return true;
+    return v.length > MAX_MULTI_VALUES || v.some((item) => typeof item !== 'string');
+  });
 }
 
 function sanitizeErrorMessage(msg: string): string {
@@ -95,15 +125,95 @@ export function contentTypeEnforcement(req: Request, res: Response, next: NextFu
 }
 
 export function requestSizeLimiting(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: requestSizeLimiting');
+  // Issue #398: Enforce actual size limits, not just header
+  const ct = (req.headers['content-type'] ?? '').toLowerCase();
+  const limit = SIZE_LIMITS[ct] ?? DEFAULT_LIMIT;
+
+  const contentLengthStr = req.headers['content-length'];
+  const contentLength = contentLengthStr ? parseInt(contentLengthStr, 10) : null;
+
+  // If Content-Length is present, check it against the limit
+  // Note: express.json() will enforce the actual limit downstream
+  if (contentLength !== null && contentLength > limit) {
+    res.status(413).json({ error: 'payload_too_large', message: 'Request payload exceeds size limit' });
+    return;
+  }
+
+  // If Content-Length is missing but the request has a body (POST/PUT),
+  // we allow it through and let express.json() enforce the actual limit
+  next();
+}
+
+const FREE_TEXT_FIELDS = new Set(['memo', 'description', 'notes', 'comment', 'message']);
+
+function isFreetextField(fieldPath: string): boolean {
+  const fieldName = fieldPath.split('.').pop()?.toLowerCase() ?? '';
+  return FREE_TEXT_FIELDS.has(fieldName);
 }
 
 export function injectionProtection(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: injectionProtection');
+  function checkForInjection(obj: unknown, path = '', isInFreetextField = false): { match: RegExp; field: string } | null {
+    if (typeof obj === 'string') {
+      // Skip SQL patterns for freetext fields; always check NoSQL and XSS
+      if (!isInFreetextField && detectPatterns([obj], SQL_PATTERNS)) {
+        return { match: SQL_PATTERNS.find((p) => testPattern(p, obj)) as RegExp, field: path || 'unknown' };
+      }
+      if (detectPatterns([obj], NOSQL_PATTERNS)) {
+        return { match: NOSQL_PATTERNS.find((p) => testPattern(p, obj)) as RegExp, field: path || 'unknown' };
+      }
+      if (detectPatterns([obj], XSS_PATTERNS)) {
+        return { match: XSS_PATTERNS.find((p) => testPattern(p, obj)) as RegExp, field: path || 'unknown' };
+      }
+      return null;
+    }
+
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) {
+        const result = checkForInjection(obj[i], `${path}[${i}]`, isInFreetextField);
+        if (result) return result;
+      }
+      return null;
+    }
+
+    if (obj && typeof obj === 'object') {
+      const objMap = obj as Record<string, unknown>;
+      // Check keys for NoSQL operators like $where, $ne
+      if (detectPatterns(Object.keys(objMap), NOSQL_PATTERNS)) {
+        const badKey = Object.keys(objMap).find((k) => NOSQL_PATTERNS.some((p) => testPattern(p, k)));
+        return { match: NOSQL_PATTERNS.find((p) => testPattern(p, badKey ?? '')) as RegExp, field: path ? `${path}.${badKey}` : badKey ?? 'unknown' };
+      }
+
+      for (const [key, value] of Object.entries(objMap)) {
+        const fieldPath = path ? `${path}.${key}` : key;
+        const isFreetextCheckField = isInFreetextField || isFreetextField(fieldPath);
+        const result = checkForInjection(value, fieldPath, isFreetextCheckField);
+        if (result) return result;
+      }
+      return null;
+    }
+
+    return null;
+  }
+
+  const injectionResult = checkForInjection(req.body) ?? checkForInjection(req.query) ?? checkForInjection(req.params);
+
+  if (injectionResult) {
+    res.status(400).json({
+      error: 'invalid_input',
+      message: `field '${injectionResult.field}' contains disallowed patterns`,
+    });
+    return;
+  }
+
+  next();
 }
 
 export function parameterPollutionProtection(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: parameterPollutionProtection');
+  if (hasParameterPollution(req.query as Record<string, unknown>)) {
+    res.status(400).json({ error: 'invalid_input', message: 'duplicate or nested query parameters detected' });
+    return;
+  }
+  next();
 }
 
 const suspiciousIpCounts = new Map<string, { count: number; windowStart: number }>();
@@ -111,19 +221,62 @@ const SUSPICIOUS_WINDOW_MS = 60_000;
 const SUSPICIOUS_THRESHOLD = 10;
 
 export function suspiciousRateLimiting(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: suspiciousRateLimiting');
+  const ip = req.ip?.trim() || '0.0.0.0';
+  const isRateLimited = flagSuspiciousRequest(ip);
+
+  if (!isRateLimited) {
+    next();
+    return;
+  }
+
+  if (res.headersSent) {
+    next();
+    return;
+  }
+
+  res.status(429).json({ error: 'rate_limited', message: 'Too many suspicious requests' });
 }
 
 export function flagSuspiciousRequest(ip: string): boolean {
-  throw new Error('Not implemented: flagSuspiciousRequest');
+  const now = Date.now();
+  const record = suspiciousIpCounts.get(ip);
+
+  if (record && now - record.windowStart <= SUSPICIOUS_WINDOW_MS) {
+    record.count += 1;
+    return record.count >= SUSPICIOUS_THRESHOLD;
+  }
+
+  if (!record || now - record.windowStart > SUSPICIOUS_WINDOW_MS) {
+    suspiciousIpCounts.set(ip, { count: 1, windowStart: now });
+  }
+
+  return false;
 }
 
-export function xssErrorSanitizer(err: Error, _req: Request, _res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: xssErrorSanitizer');
+export function xssErrorSanitizer(err: Error, _req: Request, res: Response, next: NextFunction): void {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+
+  const sanitizedMessage = sanitizeErrorMessage(err.message);
+  res.status(500).json({ error: 'internal_server_error', message: sanitizedMessage });
 }
 
 export { sanitizeErrorMessage };
 
 export function securityMiddleware(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: securityMiddleware');
+  const runParameterChecks = (): void => {
+    parameterPollutionProtection(req, res, () => suspiciousRateLimiting(req, res, next));
+  };
+
+  const runInjectionChecks = (): void => {
+    injectionProtection(req, res, runParameterChecks);
+  };
+
+  const runSizeChecks = (): void => {
+    requestSizeLimiting(req, res, runInjectionChecks);
+  };
+
+  contentTypeEnforcement(req, res, runSizeChecks);
 }

@@ -13,7 +13,7 @@
  */
 
 import { Request, Response, NextFunction, RequestHandler } from 'express';
-import { swrGet, swrSet, withSingleFlight, isRedisEnabled } from '../services/cache';
+import { swrGet, swrSet, isRedisEnabled } from '../services/cache';
 
 export interface CacheMiddlewareOptions {
   /** Primary TTL in seconds (stale entries live for TTL + SWR_EXTENSION_SECONDS). */

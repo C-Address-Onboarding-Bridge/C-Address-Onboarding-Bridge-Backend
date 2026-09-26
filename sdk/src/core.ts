@@ -44,7 +44,6 @@ export {
   isNotFoundError,
   isBridgeError,
 } from './errors';
-export { TimeoutError } from './errors';
 export {
   isNativeToken,
   isSacToken,

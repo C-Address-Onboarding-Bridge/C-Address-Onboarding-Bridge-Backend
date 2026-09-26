@@ -94,6 +94,13 @@ export const config = {
   rbac: {
     enabled: process.env.RBAC_ENABLED !== 'false',
   },
+  // src/middleware/idempotency.ts reads config.idempotency.required, but the
+  // section was never added here. The variable and its `false` default are
+  // already documented in .env.example, .env.local.example and
+  // docs/developer-setup.md, so this restores the documented behaviour.
+  idempotency: {
+    required: process.env.IDEMPOTENCY_KEY_REQUIRED === 'true',
+  },
   shutdown: {
     timeoutMs: parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS || '30000', 10),
   },

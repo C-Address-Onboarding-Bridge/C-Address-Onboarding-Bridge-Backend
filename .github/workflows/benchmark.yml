@@ -1,8 +1,11 @@
 name: Performance Benchmarks
 
+# TODO(next-bounty): parked -- manual runs only. Automatic triggers removed
+# because it boots the API and load-tests it with k6 on every PR, but most funding,
+# admin and rate-limit handlers are still `Not implemented` exercise stubs, so
+# the numbers are meaningless. Re-enable once the endpoints are implemented.
 on:
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   benchmark:

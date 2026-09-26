@@ -40,12 +40,10 @@ export interface CreateKeyInput {
 // Keys are stored both here AND in Postgres. On boot, seedLegacyKeys() also
 // populates this map for env-provided keys without round-tripping the DB.
 const keyStore = new Map<string, ApiKeyRecord>();
-
-// Short-lived cache: maps keyHash → ApiKeyRecord so repeated requests don't
-// re-query the DB. Cleared on revoke/update.
-const hashCache = new Map<string, ApiKeyRecord>();
-
+const keyHashIndex = new Map<string, ApiKeyRecord>();
 const auditLog: Array<{ ts: number; keyId: string; ip: string; path: string; method: string }> = [];
+/** Keep the in-memory audit log bounded; oldest entries are dropped first. */
+const MAX_AUDIT_LOG_ENTRIES = 10_000;
 
 // ─── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -202,13 +200,11 @@ function persistRecord(record: ApiKeyRecord): void {
  * both the raw key (shown once) and the stored record.
  */
 export function createApiKey(input: CreateKeyInput): { rawKey: string; record: ApiKeyRecord } {
-  const rawKey = `cab_${crypto.randomBytes(24).toString('hex')}`;
-  const keyHash = hashKey(rawKey);
+  const rawKey = `cab_${crypto.randomBytes(32).toString('hex')}`;
   const now = Date.now();
-
   const record: ApiKeyRecord = {
-    id: generateId(),
-    keyHash,
+    id: crypto.randomUUID(),
+    keyHash: hashKey(rawKey),
     name: input.name,
     createdBy: input.createdBy,
     createdAt: now,
@@ -220,11 +216,8 @@ export function createApiKey(input: CreateKeyInput): { rawKey: string; record: A
     rateLimit: input.rateLimit ?? 'standard',
     revoked: false,
   };
-
   keyStore.set(record.id, record);
-  hashCache.set(keyHash, record);
-  persistRecord(record);
-
+  keyHashIndex.set(record.keyHash, record);
   return { rawKey, record };
 }
 
@@ -234,15 +227,8 @@ export function createApiKey(input: CreateKeyInput): { rawKey: string; record: A
 export function revokeApiKey(id: string): boolean {
   const record = keyStore.get(id);
   if (!record) return false;
-
   record.revoked = true;
   record.updatedAt = Date.now();
-  keyStore.set(id, record);
-
-  // Invalidate hash cache entry
-  hashCache.delete(record.keyHash);
-
-  persistRecord(record);
   return true;
 }
 
@@ -250,15 +236,12 @@ export function revokeApiKey(id: string): boolean {
  * List all keys without exposing keyHash.
  */
 export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {
-  return Array.from(keyStore.values()).map((r) => {
-    const rec: Omit<ApiKeyRecord, 'keyHash'> = {
-      id: r.id, name: r.name, createdBy: r.createdBy, createdAt: r.createdAt,
-      updatedAt: r.updatedAt, lastUsedAt: r.lastUsedAt, scopes: r.scopes,
-      ipWhitelist: r.ipWhitelist, expiresAt: r.expiresAt, rateLimit: r.rateLimit,
-      revoked: r.revoked,
-    };
-    return rec;
-  });
+  // Copy the arrays so callers cannot change a stored key's scopes or IP whitelist.
+  return Array.from(keyStore.values()).map(({ keyHash, ...rest }) => ({
+    ...rest,
+    scopes: [...rest.scopes],
+    ipWhitelist: [...rest.ipWhitelist],
+  }));
 }
 
 /**
@@ -267,13 +250,9 @@ export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {
 export function getApiKey(id: string): Omit<ApiKeyRecord, 'keyHash'> | undefined {
   const record = keyStore.get(id);
   if (!record) return undefined;
-  const rec: Omit<ApiKeyRecord, 'keyHash'> = {
-    id: record.id, name: record.name, createdBy: record.createdBy,
-    createdAt: record.createdAt, updatedAt: record.updatedAt, lastUsedAt: record.lastUsedAt,
-    scopes: record.scopes, ipWhitelist: record.ipWhitelist, expiresAt: record.expiresAt,
-    rateLimit: record.rateLimit, revoked: record.revoked,
-  };
-  return rec;
+  const { keyHash, ...rest } = record;
+  // Copy the arrays so callers cannot change the stored key's scopes or IP whitelist.
+  return { ...rest, scopes: [...rest.scopes], ipWhitelist: [...rest.ipWhitelist] };
 }
 
 /**
@@ -285,14 +264,15 @@ export function updateApiKey(
 ): boolean {
   const record = keyStore.get(id);
   if (!record) return false;
-
-  Object.assign(record, patch, { updatedAt: Date.now() });
-  keyStore.set(id, record);
-
-  // Invalidate hash cache so the updated record is served on next request
-  hashCache.delete(record.keyHash);
-
-  persistRecord(record);
+  // Types are erased at runtime: apply only the updatable fields so a caller
+  // can never overwrite id, keyHash, revoked, etc. Undefined values are
+  // ignored and arrays are copied so later mutation of the patch has no effect.
+  if (patch.name !== undefined) record.name = patch.name;
+  if (patch.scopes !== undefined) record.scopes = [...patch.scopes];
+  if (patch.ipWhitelist !== undefined) record.ipWhitelist = [...patch.ipWhitelist];
+  if (patch.expiresAt !== undefined) record.expiresAt = patch.expiresAt;
+  if (patch.rateLimit !== undefined) record.rateLimit = patch.rateLimit;
+  record.updatedAt = Date.now();
   return true;
 }
 
@@ -306,21 +286,11 @@ export function updateApiKey(
  * through the API are always populated in keyStore at creation time.
  */
 export function resolveRecord(rawKey: string): ApiKeyRecord | undefined {
-  const keyHash = hashKey(rawKey);
-
-  // 1. Check hash cache
-  const cached = hashCache.get(keyHash);
-  if (cached) return cached;
-
-  // 2. Scan keyStore by hash (in-memory)
-  for (const record of keyStore.values()) {
-    if (record.keyHash === keyHash) {
-      hashCache.set(keyHash, record);
-      return record;
-    }
-  }
-
-  return undefined;
+  // Header values can arrive as arrays or be empty; hashing a non-string
+  // throws, so treat anything but a non-empty string as an unknown key.
+  if (typeof rawKey !== 'string' || rawKey.length === 0) return undefined;
+  const hash = hashKey(rawKey);
+  return keyHashIndex.get(hash);
 }
 
 declare module 'express-serve-static-core' {
@@ -337,88 +307,64 @@ declare module 'express-serve-static-core' {
  * must have already been processed by rbacAuth (which attaches apiKeyRecord).
  */
 export function requireScopes(...required: PermissionScope[]) {
-  return (req: ExpressRequest, res: Response, next: NextFunction): void => {
-    const record = req.apiKeyRecord;
-    if (!record) {
-      res.status(401).json({ error: 'unauthorized', message: 'authentication required' });
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const granted = req.resolvedScopes ?? [];
+    const missing = required.filter((scope) => !granted.includes(scope));
+    if (!req.resolvedScopes || missing.length > 0) {
+      // Name the missing scopes so clients can tell which permission to request.
+      res.status(403).json({ error: 'insufficient_scope', required, missing });
       return;
     }
-
-    const missing = required.filter((s) => !record.scopes.includes(s));
-    if (missing.length > 0) {
-      res.status(403).json({ error: 'forbidden', message: `missing required scopes: ${missing.join(', ')}` });
-      return;
-    }
-
     next();
   };
 }
 
-/**
- * Core authentication middleware. Reads the raw API key from the X-API-Key header,
- * resolves it via the in-memory store (populated from Postgres on startup / at key
- * creation), validates expiry, revocation status, and IP whitelist, then attaches
- * the record to req.apiKeyRecord.
- */
-export function rbacAuth(req: ExpressRequest, res: Response, next: NextFunction): void {
-  const rawKey =
-    (req.headers['x-api-key'] as string | undefined) ??
-    (req.headers['authorization'] as string | undefined)?.replace(/^Bearer\s+/i, '');
-
-  if (!rawKey) {
-    res.status(401).json({ error: 'unauthorized', message: 'API key required' });
+export function rbacAuth(req: Request, res: Response, next: NextFunction): void {
+  const header = req.headers['x-api-key'];
+  const apiKey = Array.isArray(header) ? header[0] : header;
+  if (!apiKey) {
+    res.status(401).json({ error: 'missing_api_key' });
     return;
   }
 
-  const record = resolveRecord(rawKey);
+  const record = resolveRecord(apiKey);
   if (!record) {
-    res.status(401).json({ error: 'unauthorized', message: 'invalid API key' });
+    res.status(401).json({ error: 'invalid_api_key' });
     return;
   }
 
   if (record.revoked) {
-    res.status(401).json({ error: 'unauthorized', message: 'API key has been revoked' });
+    res.status(401).json({ error: 'revoked_api_key' });
     return;
   }
 
-  if (record.expiresAt !== null && record.expiresAt < Date.now()) {
-    res.status(401).json({ error: 'unauthorized', message: 'API key has expired' });
+  if (record.expiresAt && Date.now() > record.expiresAt) {
+    res.status(401).json({ error: 'expired_api_key' });
     return;
   }
 
-  const ip = req.ip ?? '';
-  if (!isIpAllowed(ip, record.ipWhitelist)) {
-    res.status(403).json({ error: 'forbidden', message: 'IP address not allowed' });
+  const clientIp = req.ip ?? '0.0.0.0';
+  if (!isIpAllowed(clientIp, record.ipWhitelist)) {
+    res.status(403).json({ error: 'ip_not_allowed' });
     return;
   }
 
-  // Attach record (without keyHash) to the request
-  const safeRecord: Omit<ApiKeyRecord, 'keyHash'> = {
-    id: record.id, name: record.name, createdBy: record.createdBy,
-    createdAt: record.createdAt, updatedAt: record.updatedAt, lastUsedAt: record.lastUsedAt,
-    scopes: record.scopes, ipWhitelist: record.ipWhitelist, expiresAt: record.expiresAt,
-    rateLimit: record.rateLimit, revoked: record.revoked,
-  };
-  req.apiKeyRecord = safeRecord;
-  req.resolvedScopes = record.scopes;
-
-  // Update last-used timestamp — best effort, non-blocking
   record.lastUsedAt = Date.now();
-  const pool = getPool();
-  if (pool) {
-    pool
-      .query(`UPDATE api_keys SET last_used_at = $1 WHERE id = $2`, [record.lastUsedAt, record.id])
-      .catch((err: unknown) => logger.debug({ err }, 'rbacAuth: failed to update last_used_at'));
-  }
+  const { keyHash, ...publicRecord } = record;
+  req.apiKeyRecord = publicRecord;
+  // Copy so downstream middleware cannot alter the stored key's scopes.
+  req.resolvedScopes = [...record.scopes];
 
-  // Append to in-memory audit log
   auditLog.push({
     ts: Date.now(),
     keyId: record.id,
-    ip,
+    ip: clientIp,
     path: req.path,
     method: req.method,
   });
+  if (auditLog.length > MAX_AUDIT_LOG_ENTRIES) {
+    auditLog.splice(0, auditLog.length - MAX_AUDIT_LOG_ENTRIES);
+  }
 
   next();
 }
@@ -427,7 +373,9 @@ export function rbacAuth(req: ExpressRequest, res: Response, next: NextFunction)
  * Return a snapshot of the in-memory audit log.
  */
 export function getAuditLog(): typeof auditLog {
-  return [...auditLog];
+  // Copy each entry too: returning the stored objects would let callers
+  // rewrite recorded audit history.
+  return auditLog.map((entry) => ({ ...entry }));
 }
 
 /**
@@ -436,47 +384,31 @@ export function getAuditLog(): typeof auditLog {
  * Calling this function multiple times with the same key is idempotent.
  */
 export function seedLegacyKeys(rawKeys: string[]): void {
-  for (const rawKey of rawKeys) {
+  const now = Date.now();
+  for (const entry of rawKeys) {
+    // API_KEYS="k1, k2" would otherwise seed " k2", which never matches a
+    // presented key; blank entries must not become valid keys either.
+    if (typeof entry !== 'string') continue;
+    const rawKey = entry.trim();
+    if (rawKey.length === 0) continue;
     const keyHash = hashKey(rawKey);
+    if (keyHashIndex.has(keyHash)) continue;
 
-    // Skip if already seeded (by hash)
-    let alreadyExists = hashCache.has(keyHash);
-    if (!alreadyExists) {
-      for (const r of keyStore.values()) {
-        if (r.keyHash === keyHash) {
-          alreadyExists = true;
-          break;
-        }
-      }
-    }
-    if (alreadyExists) continue;
-
-    const now = Date.now();
     const record: ApiKeyRecord = {
-      id: `legacy_${hashKey(rawKey).slice(0, 16)}`,
+      id: crypto.randomUUID(),
       keyHash,
-      name: `legacy-key-${rawKey.slice(0, 8)}`,
+      name: `Legacy key`,
       createdBy: 'system',
       createdAt: now,
       updatedAt: now,
       lastUsedAt: null,
-      scopes: [
-        'quote:read',
-        'fund:write',
-        'status:read',
-        'offramp:write',
-        'cex:read',
-        'transactions:read',
-        'admin:keys',
-      ],
+      scopes: ['quote:read', 'status:read', 'cex:read', 'transactions:read'],
       ipWhitelist: [],
       expiresAt: null,
       rateLimit: 'standard',
       revoked: false,
     };
-
     keyStore.set(record.id, record);
-    hashCache.set(keyHash, record);
-    persistRecord(record);
+    keyHashIndex.set(keyHash, record);
   }
 }

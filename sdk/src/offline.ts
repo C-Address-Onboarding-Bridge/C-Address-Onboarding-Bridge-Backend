@@ -39,6 +39,9 @@ export class OfflineQueue {
    */
   private readonly storageReady: Promise<void>;
 
+  /** Mirrors OfflineBridgeClient.locale; assigned from options in the ctor. */
+  private readonly locale?: SupportedLocale;
+
   constructor(
     private readonly executeEntry: (entry: QueueEntry) => Promise<unknown>,
     private readonly checkHealth: () => Promise<boolean>,

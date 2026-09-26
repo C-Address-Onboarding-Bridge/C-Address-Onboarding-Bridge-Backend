@@ -58,6 +58,21 @@ call and requires admin auth.
 
 No `migrate` call is needed when the schema has not changed.
 
+### Restoring archived state
+
+The contract renews instance and persistent entries before they approach their
+archive threshold. If an entry has already been archived, include it in the
+transaction footprint and restore it before invoking the contract:
+
+Build a transaction with a `RestoreFootprint` operation for the archived
+entries, submit it with the administrator source account, and then retry the
+contract invocation.
+
+Restore the instance entry before any getter or mutating call that depends on
+contract configuration. Restore individual persistent funding, proposal, or
+analytics entries only when replaying or querying those records; normal calls
+renew entries that are still live.
+
 ---
 
 ### 2. Storage schema change (new or renamed keys / changed value types)

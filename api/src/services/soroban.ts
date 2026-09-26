@@ -240,6 +240,62 @@ export class SorobanService {
     }
   }
 
+  /**
+   * Submits a signed batch funding transaction to the network.
+   *
+   * @param signedXdr - Base64-encoded signed transaction envelope.
+   * @returns Transaction status, hash, and per-recipient results.
+   * @throws {XdrValidationError} If the XDR fails validation.
+   */
+  async submitBatchFundingTransaction(
+    signedXdr: string,
+  ): Promise<SorobanTxResponse & { recipients?: Array<{ address: string; amount: string; status: string }> }> {
+    return tracer.startActiveSpan('soroban.submitBatchFundingTransaction', async (span) => {
+      const start = Date.now();
+      try {
+        const validation = validateXdr(signedXdr);
+        span.setAttributes({
+          'tx.hash': validation.txHash,
+          'tx.source': validation.sourceAccount,
+          'tx.fee': validation.fee,
+          'tx.op_count': validation.operationCount,
+        });
+
+        const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
+        const tx = new Transaction(envelope, this.networkPassphrase);
+
+        const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
+        externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
+
+        if (sendResponse.status === 'PENDING') {
+          return { status: 'pending' as const, hash: validation.txHash };
+        }
+        if (sendResponse.status === 'ERROR') {
+          span.setStatus({ code: SpanStatusCode.ERROR });
+          return {
+            status: 'failed' as const,
+            hash: validation.txHash,
+            error: sendResponse.errorResult?.result().toString() || 'unknown error',
+          };
+        }
+        return { status: 'success' as const, hash: validation.txHash };
+      } catch (err) {
+        if (err instanceof XdrValidationError) {
+          logger.warn(
+            { code: err.code, detail: err.detail },
+            'soroban.submitBatchFundingTransaction: XDR validation rejected',
+          );
+          span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+        } else {
+          span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+        }
+        throw err;
+      } finally {
+        span.end();
+      }
+    });
+  }
+
   getRpcMetrics(): Array<{ url: string; healthy: boolean; consecutiveFailures: number; lastFailureAt: number | null; lastLatencyMs: number | null; totalRequests: number; totalFailures: number }> {
     return rpcPool.getMetrics();
   }

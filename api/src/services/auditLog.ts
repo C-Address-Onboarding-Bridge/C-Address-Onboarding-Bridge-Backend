@@ -3,6 +3,11 @@ import crypto from 'crypto';
 export type AuditEventType =
   | 'transaction_submission'
   | 'transaction_submission_result'
+  // Emitted by src/routes/funding.ts. The call sites were added without the
+  // union being widened, so every one of them failed to typecheck.
+  | 'batch_transaction_submission_result'
+  | 'timelocked_transaction_submission_result'
+  | 'timelocked_claim_result'
   | 'fee_withdrawal'
   | 'admin_operation'
   | 'webhook_delivery';
@@ -74,14 +79,71 @@ function cloneCheckpoint(checkpoint: AuditCheckpoint): AuditCheckpoint {
 }
 
 export function hashPayload(payload: unknown): string {
-  throw new Error('Not implemented: hashPayload');
+  return sha256(stableStringify(payload));
 }
 
 export function verifyAuditChain(
   entries: AuditLogEntry[],
   checkpoints: AuditCheckpoint[] = [],
 ): AuditVerificationResult {
-  throw new Error('Not implemented: verifyAuditChain');
+  const errors: Array<{ sequence?: number; message: string }> = [];
+
+  // Build a map of checkpoints by sequence for O(1) lookup
+  const checkpointMap = new Map<number, AuditCheckpoint>();
+  for (const cp of checkpoints) {
+    checkpointMap.set(cp.sequence, cp);
+  }
+
+  let expectedPreviousHash = GENESIS_HASH;
+
+  for (const entry of entries) {
+    // 1. Verify the previousHash links correctly to the prior entry
+    if (entry.previousHash !== expectedPreviousHash) {
+      errors.push({
+        sequence: entry.sequence,
+        message: 'broken chain link',
+      });
+    }
+
+    // 2. Recompute the entry's hash and compare
+    const recomputed = sha256(
+      entryHashMaterial({
+        sequence: entry.sequence,
+        id: entry.id,
+        timestamp: entry.timestamp,
+        type: entry.type,
+        actor: entry.actor,
+        payload: entry.payload,
+        previousHash: entry.previousHash,
+        retentionUntil: entry.retentionUntil,
+      }),
+    );
+
+    if (recomputed !== entry.hash) {
+      errors.push({
+        sequence: entry.sequence,
+        message: 'entry hash mismatch',
+      });
+    }
+
+    // 3. Verify checkpoint for this sequence, if one exists
+    const checkpoint = checkpointMap.get(entry.sequence);
+    if (checkpoint && checkpoint.hash !== recomputed) {
+      errors.push({
+        sequence: entry.sequence,
+        message: 'checkpoint hash does not match recomputed entry hash',
+      });
+    }
+
+    expectedPreviousHash = entry.hash;
+  }
+
+  return {
+    valid: errors.length === 0,
+    entryCount: entries.length,
+    checkpointCount: checkpoints.length,
+    errors,
+  };
 }
 
 export class IntegrityAuditLogService {
@@ -160,11 +222,17 @@ export class IntegrityAuditLogService {
   }
 
   clearForTest(): void {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('clearForTest() is only available in test mode');
+    }
     this.entries = [];
     this.checkpoints = [];
   }
 
   tamperForTest(sequence: number, payload: Record<string, unknown>): void {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('tamperForTest() is only available in test mode');
+    }
     const entry = this.entries.find((item) => item.sequence === sequence);
     if (entry) entry.payload = payload;
   }

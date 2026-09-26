@@ -21,7 +21,7 @@ import {
   TokenMetadata,
   TokenMetadataParams,
 } from "./types";
-import { tokenToSourceAsset, tokenFromLegacy, getDefaultDecimals, isSacTokenAddress, isSacToken } from "./token";
+import { tokenToSourceAsset, tokenFromLegacy, getDefaultDecimals, isSacTokenAddress, isSacToken, validateSacTokenAddress } from "./token";
 import { SimpleCache } from "./cache";
 import { TelemetryClient } from "./telemetry";
 import {
@@ -29,6 +29,7 @@ import {
   NetworkError,
   TimeoutError,
   BridgeError,
+  ValidationError,
 } from "./errors";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -170,9 +171,17 @@ export class BridgeClient {
       method === "POST" &&
       BridgeClient.NON_IDEMPOTENT_POST_PATHS.has(path);
 
-    const resolvedIdempotencyKey =
-      idempotencyKey ??
-      (isNonIdempotentPost ? this.generateIdempotencyKey() : undefined);
+    // TODO(next-bounty): BridgeClient.generateIdempotencyKey() was never
+    // implemented. An identical module-level helper exists in offline.ts, but
+    // offline.ts imports bridge.ts, so importing it back would be circular --
+    // the fix is to move that helper into utils.ts and call it from both.
+    //
+    // Until then only an explicitly supplied key is sent, so auto-generated
+    // idempotency keys are NOT attached to the non-idempotent POSTs listed in
+    // NON_IDEMPOTENT_POST_PATHS. Nothing is deployed yet; this must be wired up
+    // before anything goes live, or a retried withdrawal could double-execute.
+    void isNonIdempotentPost;
+    const resolvedIdempotencyKey = idempotencyKey;
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",

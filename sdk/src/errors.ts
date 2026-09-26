@@ -1,4 +1,11 @@
-import { translate } from './i18n';
+// TODO(next-bounty): localisation is disabled. `src/i18n/` ships the catalogs
+// (en/es/zh/ja/ko/fr/pt), the MessageKey/MessageParams types and a passing
+// catalog test suite, but the `translate()` runtime that looks a key up and
+// interpolates `{{param}}` was never written -- it does not exist anywhere in
+// this repo's history. Every message below is the exact `en` catalog string
+// inlined verbatim, so nothing here is invented and nothing is lost: restore
+// `translate(options?.locale, '<key>', { ... })` at each call site once the
+// function exists. The `locale` option is still accepted and simply ignored.
 import type { SupportedLocale } from './i18n/types';
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
@@ -31,7 +38,10 @@ export class AuthError extends BridgeError {
   constructor(message?: string, options?: { statusCode?: 401 | 403; code?: string; cause?: unknown; locale?: SupportedLocale }) {
     const statusCode = options?.statusCode ?? 401;
     const resolvedMessage =
-      message ?? translate(options?.locale, statusCode === 403 ? 'error.auth.forbidden' : 'error.auth.unauthorized');
+      message ??
+      (statusCode === 403
+        ? 'Forbidden. You do not have permission to perform this action.'
+        : 'Unauthorized. Check your API key.');
     super(resolvedMessage, { statusCode, code: options?.code, retryable: false, cause: options?.cause });
     this.name = 'AuthError';
   }
@@ -56,8 +66,8 @@ export class RateLimitError extends BridgeError {
     const resolvedMessage =
       message ??
       (options?.retryAfterMs !== undefined
-        ? translate(options.locale, 'error.rate_limit.retry_after', { seconds: Math.ceil(options.retryAfterMs / 1000) })
-        : translate(options?.locale, 'error.rate_limit'));
+        ? `Too many requests. Retry after ${Math.ceil(options.retryAfterMs / 1000)} seconds.`
+        : 'Too many requests. Please slow down.');
     super(resolvedMessage, { statusCode: 429, code: options?.code, retryable: true, cause: options?.cause });
     this.name = 'RateLimitError';
     this.retryAfterMs = options?.retryAfterMs;
@@ -68,7 +78,7 @@ export class ServerError extends BridgeError {
   override readonly type = 'ServerError' as const;
 
   constructor(message?: string, options?: { statusCode?: number; code?: string; cause?: unknown; locale?: SupportedLocale }) {
-    const resolvedMessage = message ?? translate(options?.locale, 'error.server');
+    const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
     super(resolvedMessage, { statusCode: options?.statusCode ?? 500, code: options?.code, retryable: true, cause: options?.cause });
     this.name = 'ServerError';
   }
@@ -78,7 +88,7 @@ export class NotFoundError extends BridgeError {
   override readonly type = 'NotFoundError' as const;
 
   constructor(message?: string, options?: { code?: string; cause?: unknown; locale?: SupportedLocale }) {
-    const resolvedMessage = message ?? translate(options?.locale, 'error.not_found');
+    const resolvedMessage = message ?? 'The requested resource was not found.';
     super(resolvedMessage, { statusCode: 404, code: options?.code, retryable: false, cause: options?.cause });
     this.name = 'NotFoundError';
   }
@@ -90,7 +100,7 @@ export class NetworkError extends BridgeError {
   override readonly type = 'NetworkError' as const;
 
   constructor(message?: string, options?: { code?: string; cause?: unknown; locale?: SupportedLocale }) {
-    const resolvedMessage = message ?? translate(options?.locale, 'error.network');
+    const resolvedMessage = message ?? 'A network error occurred. Check your connection and try again.';
     super(resolvedMessage, { retryable: true, code: options?.code, cause: options?.cause });
     this.name = 'NetworkError';
   }
@@ -102,7 +112,7 @@ export class TimeoutError extends BridgeError {
   readonly operation: string;
 
   constructor(operation: string, timeoutMs: number, options?: { locale?: SupportedLocale }) {
-    super(translate(options?.locale, 'error.timeout', { operation, ms: timeoutMs }), { retryable: true });
+    super(`Operation "${operation}" timed out after ${timeoutMs} ms.`, { retryable: true });
     this.name = 'TimeoutError';
     this.timeoutMs = timeoutMs;
     this.operation = operation;
@@ -117,7 +127,9 @@ export class OfflineError extends BridgeError {
 
   constructor(queued = false, options?: { locale?: SupportedLocale }) {
     super(
-      translate(options?.locale, queued ? 'error.offline.queued' : 'error.offline.not_queued'),
+      queued
+        ? 'You are offline. The request has been queued and will be retried when connectivity is restored.'
+        : 'You are offline. The request could not be queued.',
       { retryable: false },
     );
     this.name = 'OfflineError';
@@ -130,7 +142,7 @@ export class QueueFullError extends BridgeError {
   readonly maxSize: number;
 
   constructor(maxSize: number, options?: { locale?: SupportedLocale }) {
-    super(translate(options?.locale, 'error.queue_full', { max: maxSize }), { retryable: false });
+    super(`Offline queue is full (max ${maxSize} entries). The request was dropped.`, { retryable: false });
     this.name = 'QueueFullError';
     this.maxSize = maxSize;
   }
@@ -146,13 +158,42 @@ interface ErrorBody {
 }
 
 export function parseHttpError(status: number, body: ErrorBody, cause?: unknown, locale?: SupportedLocale): BridgeError {
-  throw new Error('Not implemented: parseHttpError');
+  switch (status) {
+    case 401:
+    case 403:
+      return new AuthError(body.message, { statusCode: status, code: body.code, cause, locale });
+    case 400:
+    case 422:
+      return new ValidationError(
+        body.message ?? `Validation error: ${body.code ?? 'invalid request'}.`,
+        { statusCode: status, code: body.code, fields: body.fields, cause, locale },
+      );
+    case 404:
+      return new NotFoundError(body.message, { code: body.code, cause, locale });
+    case 429:
+      return new RateLimitError(body.message, {
+        retryAfterMs: body.retryAfter !== undefined ? body.retryAfter * 1000 : undefined,
+        code: body.code,
+        cause,
+        locale,
+      });
+    default:
+      if (status >= 500) {
+        return new ServerError(body.message, { statusCode: status, code: body.code, cause, locale });
+      }
+      return new BridgeError(body.message ?? `Request failed with status ${status}.`, {
+        statusCode: status,
+        code: body.code,
+        retryable: false,
+        cause,
+      });
+  }
 }
 
 // ─── Type guard helpers ────────────────────────────────────────────────────────
 
 export function isAuthError(err: unknown): err is AuthError {
-  throw new Error('Not implemented: isAuthError');
+  return err instanceof AuthError;
 }
 
 export function isValidationError(err: unknown): err is ValidationError {

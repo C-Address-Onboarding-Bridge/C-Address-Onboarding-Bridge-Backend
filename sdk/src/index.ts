@@ -44,12 +44,17 @@ export {
 } from './errors';
 export { BridgeEventEmitter } from './events';
 export { OfflineQueue, OfflineBridgeClient } from './offline';
+// TODO(next-bounty): `translate`, `t`, `getCatalog`, `CATALOGS` and
+// DEFAULT_LOCALE are not exported by ./i18n -- the translation runtime was
+// never written (see the note at the top of errors.ts). The catalogs and
+// metadata below are real and still exported. Restore these five once the
+// runtime exists.
 export {
-  translate,
-  t,
-  getCatalog,
-  CATALOGS,
-  DEFAULT_LOCALE,
+  // translate,
+  // t,
+  // getCatalog,
+  // CATALOGS,
+  // DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
   LOCALE_METADATA,
   type SupportedLocale,

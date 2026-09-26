@@ -25,7 +25,27 @@ export interface MoonpayPurchaseParams {
  * @returns Fully-formed URL to open in a browser or WebView.
  */
 export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPurchaseParams): string {
-  throw new Error('Not implemented: createMoonpayWidgetUrl');
+  const query = new URLSearchParams({ apiKey: config.apiKey });
+
+  if (params.walletAddress) query.set('walletAddress', params.walletAddress);
+  if (params.walletNetwork) query.set('walletNetwork', params.walletNetwork);
+  if (params.currencyCode) query.set('currencyCode', params.currencyCode);
+  if (params.baseCurrency) query.set('baseCurrencyCode', params.baseCurrency);
+  if (params.baseCurrencyAmount != null) query.set('baseCurrencyAmount', String(params.baseCurrencyAmount));
+  if (params.email) query.set('email', params.email);
+  if (params.redirectUrl) query.set('redirectUrl', params.redirectUrl);
+
+  const queryString = `?${query.toString()}`;
+
+  const signature = crypto
+    .createHmac('sha256', config.secretKey)
+    .update(queryString)
+    .digest('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  return `https://buy.moonpay.com${queryString}&signature=${signature}`;
 }
 
 /**
@@ -38,7 +58,9 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
  * when the signature has a different byte length than the computed HMAC).
  */
 export function verifyMoonpayWebhook(config: MoonpayConfig, rawBody: string, signature: string): boolean {
-  throw new Error('Not implemented: verifyMoonpayWebhook');
+  const expected = crypto.createHmac('sha256', config.secretKey).update(rawBody).digest();
+  const received = Buffer.from(signature, 'base64');
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
 /**
@@ -54,7 +76,13 @@ export async function getMoonpayBuyQuote(config: MoonpayConfig, params: {
   baseCurrencyAmount: number;
   quoteCurrency: string;
 }): Promise<{
-  throw new Error('Not implemented: getMoonpayBuyQuote');
+  // Restored from d2a6c17^. The "seed learning exercises" stubbing pass wrote
+  // its `throw new Error('Not implemented')` into this *return type* instead of
+  // the function body -- a parse error that broke every test importing this
+  // module. The body below was already implemented and is untouched.
+  quoteCurrencyAmount: number;
+  feeAmount: number;
+  totalAmount: number;
 }> {
   const url = `https://api.moonpay.com/v3/currencies/${params.quoteCurrency}/buy_quote`;
   const query = new URLSearchParams({

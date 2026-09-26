@@ -840,3 +840,14 @@ MIT — see [LICENSE](LICENSE) for details.
 - [Soroban Smart Accounts by OpenZeppelin](https://github.com/OpenZeppelin/soroban-accounts)
 - [Stellar Soroban SDK](https://github.com/stellar/soroban-sdk)
 - [EIP-4337 Account Abstraction](https://eips.ethereum.org/EIPS/eip-4337)
+
+## Handsoff notes
+
+<!-- handsoff-issue-594 -->
+- #594: bug(contract): prune_proposals only accepts admins[0] and stalls behind any long-lived proposal
+
+<!-- handsoff-issue-595 -->
+- #595: design(contract): route_from_exchange accepts any address as an 'exchange'
+
+<!-- handsoff-issue-596 -->
+- #596: test(contract): fix and un-ignore test_full_scenario

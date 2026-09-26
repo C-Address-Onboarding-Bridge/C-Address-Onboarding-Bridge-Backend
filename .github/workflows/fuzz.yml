@@ -16,14 +16,20 @@ jobs:
     - name: Run Fuzz Tests
       run: npm run test --workspace=sdk -- --run tests/fuzz.test.ts
 
+  # These "fuzz targets" are self-contained property-test binaries (their own
+  # main() and an LCG), not libFuzzer targets -- the crate has no libfuzzer-sys
+  # dependency and no `cargo-fuzz = true` metadata, so `cargo fuzz run` rejected
+  # it with "does not look like a cargo-fuzz manifest" on every run. They are
+  # now run the way they are written: `cargo run --release --bin <target>` on
+  # stable, with no nightly toolchain or cargo-fuzz install needed.
   rust-fuzz:
-    name: Rust Fuzz Targets (5-minute budget)
+    name: Rust Property Fuzz Targets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust nightly (required by cargo-fuzz)
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -34,17 +40,14 @@ jobs:
           key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('contracts/onboarding-bridge/fuzz/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-fuzz-
 
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+      - name: Run fuzz_fee_calculation (100k iterations)
+        run: cargo run --release --bin fuzz_fee_calculation
+        working-directory: contracts/onboarding-bridge/fuzz
 
-      - name: Run fuzz_fee_calculation (5 min)
-        run: cargo fuzz run fuzz_fee_calculation -- -max_total_time=300
-        working-directory: contracts/onboarding-bridge
+      - name: Run fuzz_fund_sequence (100k iterations)
+        run: cargo run --release --bin fuzz_fund_sequence
+        working-directory: contracts/onboarding-bridge/fuzz
 
-      - name: Run fuzz_fund_sequence (5 min)
-        run: cargo fuzz run fuzz_fund_sequence -- -max_total_time=300
-        working-directory: contracts/onboarding-bridge
-
-      - name: Run fuzz_admin_ops (5 min)
-        run: cargo fuzz run fuzz_admin_ops -- -max_total_time=300
-        working-directory: contracts/onboarding-bridge
+      - name: Run fuzz_admin_ops (100k iterations)
+        run: cargo run --release --bin fuzz_admin_ops
+        working-directory: contracts/onboarding-bridge/fuzz
