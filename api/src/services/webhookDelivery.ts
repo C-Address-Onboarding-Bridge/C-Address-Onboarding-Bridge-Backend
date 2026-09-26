@@ -8,7 +8,7 @@ export interface WebhookRegistration {
   id: string;
   url: string;
   secret: string;
-  apiKey: string;
+  apiKeyId: string;
   events: string[];
   createdAt: number;
 }
@@ -41,12 +41,12 @@ export class WebhookDeliveryService {
   private dlq: DLQEntry[] = [];
   private deliveryLog: DeliveryAttempt[] = [];
 
-  register(params: { url: string; secret: string; apiKey: string; events: string[] }): WebhookRegistration {
+  register(params: { url: string; secret: string; apiKeyId: string; events: string[] }): WebhookRegistration {
     const registration: WebhookRegistration = {
       id: crypto.randomUUID(),
       url: params.url,
       secret: params.secret,
-      apiKey: params.apiKey,
+      apiKeyId: params.apiKeyId,
       events: params.events,
       createdAt: Date.now(),
     };
@@ -63,8 +63,8 @@ export class WebhookDeliveryService {
     return this.registrations.get(id);
   }
 
-  getRegistrationsByApiKey(apiKey: string): WebhookRegistration[] {
-    return [...this.registrations.values()].filter((r) => r.apiKey === apiKey);
+  getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[] {
+    return [...this.registrations.values()].filter((r) => r.apiKeyId === apiKeyId);
   }
 
   sign(payload: string, secret: string): string {
@@ -78,8 +78,8 @@ export class WebhookDeliveryService {
     await this.attemptDelivery(registration, event, data, payload, signature, 0);
   }
 
-  async deliverToAll(apiKey: string, event: string, data: unknown): Promise<void> {
-    const targets = this.getRegistrationsByApiKey(apiKey).filter(
+  async deliverToAll(apiKeyId: string, event: string, data: unknown): Promise<void> {
+    const targets = this.getRegistrationsByApiKeyId(apiKeyId).filter(
       (r) => r.events.includes(event) || r.events.includes('*'),
     );
     await Promise.all(targets.map((r) => this.deliver(r, event, data)));
@@ -133,8 +133,8 @@ export class WebhookDeliveryService {
       enqueueAudit(
         'webhook_delivery',
         deliveryAuditPayload,
-        registration.apiKey,
-        () => integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKey),
+        registration.apiKeyId,
+        () => integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKeyId),
       );
 
       if (response.ok) {
@@ -165,8 +165,8 @@ export class WebhookDeliveryService {
       enqueueAudit(
         'webhook_delivery',
         errorAuditPayload,
-        registration.apiKey,
-        () => integrityAuditLog.append('webhook_delivery', errorAuditPayload, registration.apiKey),
+        registration.apiKeyId,
+        () => integrityAuditLog.append('webhook_delivery', errorAuditPayload, registration.apiKeyId),
       );
       logger.warn(
         { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
