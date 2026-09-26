@@ -7,7 +7,7 @@ import { requireScopes } from '../middleware/rbac';
 import { PermissionScope } from '../types/auth';
 import { cacheMiddleware } from '../middleware/cache';
 import { CACHE_TTL } from '../utils/constants';
-// import { setFeeRateBps } from '../services/metrics'; // see TODO in GET /
+import { setFeeRateBps } from '../services/metrics';
 
 /** Express router for quote endpoints. Mounted at `/api/v1/quote`. */
 export const quoteRouter = Router();
@@ -37,9 +37,7 @@ quoteRouter.get(
         params.targetAddress,
       );
 
-      // TODO(next-bounty): setFeeRateBps() is a stub that throws; calling it here
-      // turned every successful quote into an error.
-      // setFeeRateBps(quote.feeBps);
+      setFeeRateBps(quote.feeBps);
       res.json(quote);
     } catch (err) {
       next(err);

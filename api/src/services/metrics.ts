@@ -198,8 +198,18 @@ export function recordFundingMetrics(input: FundingMetricInput): void {
   }
 }
 
+/**
+ * Set the current bridge fee rate gauge.
+ *
+ * @param bps Fee rate in basis points (1 bps = 0.01%). Must be a finite,
+ *   non-negative number; invalid values are ignored so a bad config cannot
+ *   corrupt the exported metric.
+ */
 export function setFeeRateBps(bps: number): void {
-  throw new Error('Not implemented: setFeeRateBps');
+  if (!Number.isFinite(bps) || bps < 0) {
+    return;
+  }
+  feeRateGauge.set(bps);
 }
 
 const CB_STATE_MAP: Record<string, number> = { closed: 0, open: 1, 'half-open': 2 };

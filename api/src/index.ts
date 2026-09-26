@@ -27,7 +27,7 @@ import { CircuitBreaker } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
 import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
-// import { setFeeRateBps } from './services/metrics'; // see TODO below
+import { setFeeRateBps } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
@@ -55,11 +55,7 @@ if (config.apiKeys.length > 0) {
   seedLegacyKeys(config.apiKeys);
 }
 
-// TODO(next-bounty): setFeeRateBps() in services/metrics.ts is a
-// `throw new Error('Not implemented')` stub, and this call runs at import time --
-// so requiring this module threw, the server could not boot, and every test that
-// imports the app failed to load. Restore once the metric is implemented.
-// setFeeRateBps(config.soroban.feeBps);
+setFeeRateBps(config.soroban.feeBps);
 
 const app = express();
 
@@ -189,23 +185,21 @@ app.use('/api/v1/admin', rbacAuth, adminRouter);
 app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/metrics', rbacAuth, metricsRouter);
+app.use('/api/v1/metrics', rbacAuth, metricsRouter);
 
-// Bull Board queue dashboard — admin-only, must be mounted before the error handler
-app.use('/admin/queues', rbacAuth, requireScopes('admin:write'), adminRouter);
-
+app.use(xssErrorSanitizer);
 app.use(errorHandler);
 
 const server = app.listen(config.port, () => {
-  logger.info({ port: config.port }, 'API server listening');
+  logger.info({ port: config.port, env: config.env }, 'Server started');
 });
 
 const wss = createWebSocketServer(server);
 server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
 
-registerSignalHandlers(async () => {
+registerSignalHandlers(server, async () => {
   await closePool();
   await shutdownTracing();
 });
 
-export default app;
+export { app, server };
