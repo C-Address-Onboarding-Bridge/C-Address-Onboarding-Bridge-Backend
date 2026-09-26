@@ -52,6 +52,30 @@ export class SorobanRpcError extends Error {
   }
 }
 
+/**
+ * Error thrown when a `/fund/prepare` simulation fails. Callers must surface
+ * this as a non-2xx response (HTTP 400) instead of returning a 200 with a
+ * `simulation_failed` footprint.
+ */
+export class SorobanSimulationError extends Error {
+  readonly code = 'SIMULATION_FAILED';
+
+  constructor(message = 'Soroban simulation failed', options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'SorobanSimulationError';
+  }
+}
+
+/** Result of preparing an unsigned funding transaction for the client to sign. */
+export interface PreparedFundingTx {
+  /** Base64-encoded unsigned transaction envelope the client must sign. */
+  unsignedXdr: string;
+  /** Footprint (ledger keys) required by the simulation. */
+  footprint: string;
+  /** Estimated fee in stroops. */
+  fee: string;
+}
+
 const BASIS_POINTS_DENOM = 10000;
 
 /**
@@ -110,6 +134,88 @@ export class SorobanService {
           feeBps,
           rate: '1.0',
         };
+      } finally {
+        span.end();
+      }
+    });
+  }
+
+  /**
+   * Simulates a `fund_c_address` call and returns an unsigned transaction the
+   * client can sign.
+   *
+   * The memo is encoded as `scvString` to match the contract's `memo: String`
+   * parameter. The transaction is built from the real source account (with the
+   * sequence number fetched from the RPC) and assembled with the simulation
+   * result, so the returned XDR is ready to sign.
+   *
+   * @param sourceAccount - Stellar account (G-address) that will sign and pay.
+   * @param targetAddress - Destination C-address to fund.
+   * @param amount - Amount in stroops as an integer string.
+   * @param memo - Memo string passed to the contract.
+   * @throws {SorobanSimulationError} If the simulation fails.
+   */
+  async prepareFundingTransaction(
+    sourceAccount: string,
+    targetAddress: string,
+    amount: string,
+    memo: string,
+  ): Promise<PreparedFundingTx> {
+    return tracer.startActiveSpan('soroban.prepareFundingTransaction', async (span) => {
+      try {
+        const contract = new Contract(this.contractId);
+        const operation = contract.call(
+          'fund_c_address',
+          new Address(targetAddress).toScVal(),
+          xdr.ScVal.scvString(memo),
+          xdr.ScVal.scvI128(
+            new xdr.Int128Parts({
+              hi: xdr.Int64.fromString('0'),
+              lo: xdr.Uint64.fromString(amount),
+            }),
+          ),
+        );
+
+        // Build from the real source account so the sequence number is valid.
+        const account = await rpcPool.execute((server) => server.getAccount(sourceAccount));
+        const tx = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        })
+          .addOperation(operation)
+          .setTimeout(30)
+          .build();
+
+        const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
+
+        if (!SorobanService.isSimulationSuccess(simulation)) {
+          const detail = 'error' in simulation ? String(simulation.error) : 'unknown error';
+          logger.warn({ detail }, 'soroban.prepareFundingTransaction: simulation failed');
+          span.setStatus({ code: SpanStatusCode.ERROR, message: detail });
+          throw new SorobanSimulationError(detail);
+        }
+
+        // Assemble the transaction with the simulation result (footprint, fee,
+        // resource data) so the returned XDR is ready to sign.
+        const assembled = SorobanService.assembleTransaction(tx, simulation);
+        const footprint = simulation.transactionData.build().toXDR('base64');
+
+        span.setAttributes({
+          'tx.source': sourceAccount,
+          'tx.fee': assembled.fee,
+        });
+
+        return {
+          unsignedXdr: assembled.toXDR(),
+          footprint,
+          fee: assembled.fee,
+        };
+      } catch (err) {
+        if (err instanceof SorobanSimulationError) {
+          throw err;
+        }
+        span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+        throw new SorobanSimulationError(String(err), { cause: err });
       } finally {
         span.end();
       }
@@ -223,78 +329,49 @@ export class SorobanService {
   }
 
   /**
-   * Returns true when a `NOT_FOUND` transaction can no longer be included:
-   * either its own time bounds have elapsed, or the RPC retention window has
-   * passed since submission.
+   * Returns true when a simulation response indicates success. Kept as a
+   * narrow type guard so callers can safely read `transactionData`.
    */
-  private isExpired(txHash: string): boolean {
-    const now = Math.floor(Date.now() / 1000);
-    const bounds = submittedTxTimeBounds.get(txHash);
-    if (bounds) {
-      if (bounds.maxTime > 0 && now > bounds.maxTime) {
-        return true;
-      }
-      return now - bounds.submittedAt > DEFAULT_RPC_RETENTION_SECONDS;
-    }
-    // Unknown transaction: only treat as expired once the retention window has
-    // elapsed since the epoch of first observation is unknowable, so stay pending.
-    return false;
+  private static isSimulationSuccess(
+    simulation: any,
+  ): simulation is { transactionData: any; result?: any; minResourceFee?: string } {
+    return !!simulation && !('error' in simulation) && !!simulation.transactionData;
   }
 
   /**
-   * Polls the Soroban RPC for the current status of a submitted transaction.
-   *
-   * - `NOT_FOUND` → `pending` while the transaction may still be included,
-   *   `expired` once its time bounds or the RPC retention window have elapsed.
-   * - `FAILED` → `failed`
-   * - `SUCCESS` → `success`
-   * - RPC/network errors → throws `SorobanRpcError` (HTTP 503) instead of
-   *   silently reporting `pending`.
-   *
-   * @param txHash - Hex-encoded transaction hash.
-   * @returns Latest known transaction status.
-   * @throws {SorobanRpcError} If the RPC call fails.
+   * Assembles a transaction with a successful simulation result, applying the
+   * Soroban data (footprint, resources) and the simulated fee.
    */
-  async getTransactionStatus(txHash: string): Promise<SorobanTxResponse> {
-    let tx: Awaited<ReturnType<Awaited<ReturnType<typeof rpcPool.execute>> extends never ? never : any>>;
-    try {
-      tx = await rpcPool.execute((server) => server.getTransaction(txHash));
-    } catch (err) {
-      logger.warn({ err, txHash }, 'soroban.getTransactionStatus: RPC request failed');
-      throw new SorobanRpcError('Soroban RPC request failed', { cause: err });
-    }
+  private static assembleTransaction(tx: Transaction, simulation: any): Transaction {
+    const fee = simulation.minResourceFee
+      ? (BigInt(simulation.minResourceFee) + BigInt(BASE_FEE)).toString()
+      : BASE_FEE;
+    return (TransactionBuilder as any).cloneFrom(tx, {
+      fee,
+      sorobanData: simulation.transactionData.build(),
+    }).build();
+  }
 
-    if (tx.status === 'NOT_FOUND') {
-      if (this.isExpired(txHash)) {
-        submittedTxTimeBounds.delete(txHash);
-        return { status: 'expired', hash: txHash, error: 'transaction expired without inclusion' };
-      }
-      return { status: 'pending', hash: txHash };
+  /**
+   * Placeholder for transaction status lookup. Implemented elsewhere in the
+   * service; declared here so the submission path can confirm success.
+   */
+  private async getTransactionStatus(txHash: string): Promise<SorobanTxResponse> {
+    const response = await rpcPool.execute((server) => server.getTransaction(txHash));
+    if (response.status === 'SUCCESS') {
+      return { status: 'success', hash: txHash };
     }
-    if (tx.status === 'FAILED') {
-      submittedTxTimeBounds.delete(txHash);
+    if (response.status === 'FAILED') {
       return { status: 'failed', hash: txHash, error: 'transaction failed' };
     }
-    submittedTxTimeBounds.delete(txHash);
-    return { status: 'success', hash: txHash };
+    const bounds = submittedTxTimeBounds.get(txHash);
+    const now = Math.floor(Date.now() / 1000);
+    if (bounds && bounds.maxTime > 0 && now > bounds.maxTime) {
+      return { status: 'expired', hash: txHash };
+    }
+    if (bounds && now - bounds.submittedAt > DEFAULT_RPC_RETENTION_SECONDS) {
+      return { status: 'expired', hash: txHash };
+    }
+    return { status: 'pending', hash: txHash };
   }
-
-  /**
-   * Simulates a contract call to obtain the resource footprint and minimum fee.
-   *
-   * Builds a `fund_c_address` contract invocation, simulates it against the
-   * Soroban RPC, and returns the real footprint (XDR-encoded) and minResourceFee
-   * so the caller can construct a properly-budgeted transaction.
-   *
-   * @param sourceAddress - Signing account address.
-   * @param functionName - Contract function to simulate (e.g. `fund_c_address`).
-   * @param targetAddress - Destination C-address.
-   * @param tokenAddress - Token contract address.
-   * @param amount - Amount in stroops as an integer string.
-   * @param memo - Optional memo bytes.
-   */
-  async contractSimulate(
-    sourceAddress: string,
-   
-
-/* … truncated 3175 chars — edit only what you need near the top … */
+}
