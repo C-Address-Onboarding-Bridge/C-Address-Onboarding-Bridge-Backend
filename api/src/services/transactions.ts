@@ -34,6 +34,13 @@ export interface FeeConfigState {
   timelockUntil: number | null;
 }
 
+export interface AdminAuditEntry {
+  ts: number;
+  action: string;
+  actor: string;
+  details: Record<string, unknown>;
+}
+
 const seededTransactions: TransactionRecord[] = [
   {
     id: 'tx_1001',
@@ -100,7 +107,7 @@ let feeConfigState: FeeConfigState = {
   timelockUntil: null,
 };
 let accumulatedFees = '1.20';
-const adminAuditLog: Array<{ ts: number; action: string; actor: string; details: Record<string, unknown> }> = [];
+const adminAuditLog: AdminAuditEntry[] = [];
 
 function parseAmount(value: string): number {
   return Number.parseFloat(value);
@@ -158,8 +165,15 @@ export function getTransactionStats() {
   throw new Error('Not implemented: getTransactionStats');
 }
 
+/**
+ * Returns the current fee configuration state.
+ *
+ * The returned object is a snapshot of the in-memory fee config, including
+ * the active `feeBps`, when it was last `updatedAt`, and any pending fee
+ * change scheduled via {@link updateFeeConfig} along with its `timelockUntil`.
+ */
 export function getFeeConfig(): FeeConfigState {
-  throw new Error('Not implemented: getFeeConfig');
+  return { ...feeConfigState };
 }
 
 export function updateFeeConfig(feeBps: number, timelockMs: number): { pendingFeeBps: number; timelockUntil: number } {
@@ -181,10 +195,42 @@ export function withdrawAccumulatedFees(): { withdrawn: string; status: 'complet
   return { withdrawn, status: 'completed' };
 }
 
-export function recordAdminAction(action: string, details: Record<string, unknown>, actor = 'admin') {
-  throw new Error('Not implemented: recordAdminAction');
+/**
+ * Appends an entry to the in-memory admin audit log.
+ *
+ * Records who performed an administrative action, what the action was, and
+ * any structured `details` associated with it. The entry is timestamped at
+ * the moment of the call and returned so callers can echo it back in a
+ * response. Entries are appended in chronological order and are retrievable
+ * via {@link getAdminAuditLog}.
+ *
+ * @param action  Short identifier for the admin action (e.g. `'fee.update'`).
+ * @param details Arbitrary structured metadata describing the action.
+ * @param actor   Identity of the admin performing the action. Defaults to `'admin'`.
+ * @returns The recorded audit entry.
+ */
+export function recordAdminAction(
+  action: string,
+  details: Record<string, unknown>,
+  actor = 'admin',
+): AdminAuditEntry {
+  const entry: AdminAuditEntry = {
+    ts: Date.now(),
+    action,
+    actor,
+    details,
+  };
+  adminAuditLog.push(entry);
+  logger.info({ action, actor }, 'admin action recorded');
+  return entry;
 }
 
-export function getAdminAuditLog() {
-  throw new Error('Not implemented: getAdminAuditLog');
+/**
+ * Returns the recorded admin audit log.
+ *
+ * Backs `GET /api/v1/admin/audit`. Returns a shallow copy of the entries so
+ * callers cannot mutate the internal log, preserving append-only semantics.
+ */
+export function getAdminAuditLog(): AdminAuditEntry[] {
+  return adminAuditLog.map((entry) => ({ ...entry }));
 }

@@ -135,7 +135,27 @@ export function enqueueAudit(
   actor: string,
   syncFallback?: () => void,
 ): void {
-  throw new Error('Not implemented: enqueueAudit');
+  const fallback = syncFallback ?? (() => {});
+
+  if (!config.asyncPipeline.enabled) {
+    fallback();
+    return;
+  }
+
+  const data: AuditLogJobData = { type, payload, actor };
+
+  enqueueAuditLog(data)
+    .then(() => {
+      asyncPipelineEnqueueCounter.inc({ queue: 'async-critical', job: 'audit-log' });
+    })
+    .catch(() => {
+      asyncPipelineDroppedCounter.inc({ queue: 'async-critical', job: 'audit-log' });
+      try {
+        fallback();
+      } catch {
+        // Never let a fallback failure propagate to the caller.
+      }
+    });
 }
 
 /**
