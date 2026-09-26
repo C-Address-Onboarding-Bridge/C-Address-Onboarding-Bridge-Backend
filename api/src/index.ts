@@ -189,12 +189,15 @@ app.use('/api/v1/admin', rbacAuth, adminRouter);
 app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/metrics', rbacAuth, metricsRouter);
+app.use('/api/v1/metrics', rbacAuth, metricsRouter);
 
-// Bull Board queue dashboard — admin-only, must be mounted before the error handler
-app.use('/admin/queues', rbacAuth, requireScopes('admin:write'), adminRouter);
-
+// xssErrorSanitizer only sanitizes the error and forwards it via next(err);
+// it must run BEFORE errorHandler so errorHandler can map status codes
+// (e.g. Zod validation errors -> 400 validation_error) and hide 5xx messages.
+app.use(xssErrorSanitizer);
 app.use(errorHandler);
+
+registerSignalHandlers();
 
 const server = app.listen(config.port, () => {
   logger.info({ port: config.port }, 'API server listening');
@@ -203,9 +206,13 @@ const server = app.listen(config.port, () => {
 const wss = createWebSocketServer(server);
 server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
 
-registerSignalHandlers(async () => {
+async function shutdown() {
+  await gracefulShutdown(server);
   await closePool();
   await shutdownTracing();
-});
+}
 
-export default app;
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+export { app, server };
