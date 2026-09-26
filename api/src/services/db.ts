@@ -4,10 +4,41 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { register } from './metrics';
 
-const pool: Pool | null = null;
+// Lazily initialised pool — null when DATABASE_URL is not configured.
+let _pool: Pool | null = null;
+let _poolInitialised = false;
 
+/**
+ * Return the shared Postgres connection pool, or null when the database is not
+ * configured (DATABASE_URL is empty / missing). The pool is created on first
+ * call and reused thereafter.
+ */
 export function getPool(): Pool | null {
-  throw new Error('Not implemented: getPool');
+  if (_poolInitialised) return _pool;
+  _poolInitialised = true;
+
+  if (!config.database.url) {
+    logger.debug('DATABASE_URL not configured — running without a database');
+    _pool = null;
+    return null;
+  }
+
+  _pool = new Pool({
+    connectionString: config.database.url,
+    min: config.database.poolMin,
+    max: config.database.poolMax,
+    idleTimeoutMillis: config.database.idleTimeoutMs,
+    connectionTimeoutMillis: config.database.connectionTimeoutMs,
+    statement_timeout: config.database.statementTimeoutMs,
+    ssl: config.database.ssl ? { rejectUnauthorized: false } : false,
+  });
+
+  _pool.on('error', (err) => {
+    logger.error({ err }, 'Unexpected error on idle PostgreSQL client');
+  });
+
+  logger.info('PostgreSQL connection pool initialised');
+  return _pool;
 }
 
 export interface PoolMetrics {
@@ -23,7 +54,13 @@ export interface PoolMetrics {
 
 /** Live snapshot of the PostgreSQL pool, or null when the DB is not configured. */
 export function getPoolMetrics(): PoolMetrics | null {
-  throw new Error('Not implemented: getPoolMetrics');
+  const p = getPool();
+  if (!p) return null;
+  const total = p.totalCount;
+  const idle = p.idleCount;
+  const waiting = p.waitingCount;
+  const active = total - idle;
+  return { total, idle, active, waiting };
 }
 
 // ─── Pool metrics ──────────────────────────────────────────────────────────────
@@ -79,6 +116,21 @@ export async function dbHealthCheck(): Promise<{ ok: boolean; latencyMs?: number
   }
 }
 
+/** Close the connection pool — called during graceful shutdown. */
 export async function closePool(): Promise<void> {
-  throw new Error('Not implemented: closePool');
+  if (_pool) {
+    await _pool.end();
+    _pool = null;
+    _poolInitialised = false;
+    logger.info('PostgreSQL connection pool closed');
+  }
+}
+
+/**
+ * Reset the pool singleton — used in tests to force re-initialisation.
+ * @internal
+ */
+export function _resetPool(): void {
+  _pool = null;
+  _poolInitialised = false;
 }
