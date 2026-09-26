@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { config } from '../config';
 
 interface MoonpayWidgetParams {
@@ -8,16 +9,19 @@ interface MoonpayWidgetParams {
   baseCurrencyAmount?: number;
   baseCurrencyCode?: string;
   email?: string;
+  sandbox?: boolean;
 }
 
 /** Handles MoonPay widget URL generation. */
 export class MoonpayService {
   private apiKey: string;
   private secretKey: string;
+  private sandbox: boolean;
 
-  constructor() {
-    this.apiKey = config.moonpay.apiKey;
-    this.secretKey = config.moonpay.secretKey;
+  constructor(options?: { apiKey?: string; secretKey?: string; sandbox?: boolean }) {
+    this.apiKey = options?.apiKey ?? config.moonpay.apiKey;
+    this.secretKey = options?.secretKey ?? config.moonpay.secretKey;
+    this.sandbox = options?.sandbox ?? Boolean(config.moonpay.sandbox);
   }
 
   /**
@@ -44,8 +48,19 @@ export class MoonpayService {
       queryParams.set('email', params.email);
     }
 
-    const baseUrl = 'https://buy.moonpay.com';
-    return `${baseUrl}?${queryParams.toString()}`;
+    const isSandbox = params.sandbox ?? this.sandbox;
+    const baseUrl = isSandbox ? 'https://buy-sandbox.moonpay.com' : 'https://buy.moonpay.com';
+    const queryString = `?${queryParams.toString()}`;
+
+    if (this.secretKey) {
+      const signature = crypto
+        .createHmac('sha256', this.secretKey)
+        .update(queryString)
+        .digest('base64');
+      return `${baseUrl}${queryString}&signature=${encodeURIComponent(signature)}`;
+    }
+
+    return `${baseUrl}${queryString}`;
   }
 
   /**
