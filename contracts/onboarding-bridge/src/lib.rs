@@ -280,6 +280,8 @@ pub enum DataKey {
     HotCount,
     ArchivedHash(u32),
     NextArchiveId,
+    NextArchiveRecordId,
+    ExecutionDelay,
     MinAmount,
     MaxAmount,
     UserVolume(Address, Address),
@@ -521,6 +523,10 @@ impl OnboardingBridge {
         env.storage().instance().set(&DataKey::FundingCount, &0u32);
         env.storage().instance().set(&DataKey::HotCount, &0u32);
         env.storage().instance().set(&DataKey::NextArchiveId, &0u32);
+        env.storage().instance().set(&DataKey::NextArchiveRecordId, &1u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::ExecutionDelay, &execution_delay);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::ProposalNonce, &0u32);
         env.storage()
@@ -1010,7 +1016,8 @@ impl OnboardingBridge {
         }
 
         let mut hash_bytes = Bytes::new(env);
-        for i in 1..=archive_count {
+        let end = start + archive_count - 1;
+        for i in start..=end {
             if let Some(mut record) = env
                 .storage()
                 .persistent()
@@ -1060,6 +1067,9 @@ impl OnboardingBridge {
         env.storage()
             .instance()
             .set(&DataKey::NextArchiveId, &(archive_id + 1));
+        env.storage()
+            .instance()
+            .set(&DataKey::NextArchiveRecordId, &(end + 1));
 
         Archived {
             archive_count,
@@ -1238,15 +1248,16 @@ impl OnboardingBridge {
             return Err(BridgeError::InsufficientApprovals);
         }
 
-        // Enforce a minimum transparency window for sensitive actions.
-        // Prevents a single admin (threshold == 1) from proposing and
-        // immediately executing WithdrawFees, SetFee, or Pause in the same
-        // ledger with no observation window.
+        // Enforce a minimum transparency window for every action that can
+        // move funds, change fees, pause the bridge, or alter governance.
         let sensitive = matches!(
             proposal.action,
             ProposalAction::WithdrawFees(_, _, _)
                 | ProposalAction::SetFee(_)
                 | ProposalAction::Pause
+                | ProposalAction::Unpause
+                | ProposalAction::RotateAdmins(_)
+                | ProposalAction::SetThreshold(_)
         );
         if sensitive {
             if env.ledger().sequence() < proposal.proposed_at + MIN_EXEC_DELAY {
@@ -1325,6 +1336,21 @@ impl OnboardingBridge {
                 0i128
             }
             ProposalAction::WithdrawFees(to, token, amount) => {
+                let token_key = DataKey::AccumulatedFeesByToken(token.clone());
+                let token_accumulated: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&token_key)
+                    .unwrap_or(0);
+                let withdraw_amount = if amount == 0 { token_accumulated } else { amount };
+                assert!(
+                    withdraw_amount <= token_accumulated,
+                    "insufficient accumulated fees"
+                );
+                let remaining = token_accumulated - withdraw_amount;
+                env.storage()
+                    .instance()
+                    .set(&token_key, &remaining);
                 let accumulated: i128 = env
                     .storage()
                     .instance()
@@ -1337,7 +1363,7 @@ impl OnboardingBridge {
                 let remaining = accumulated - withdraw_amount;
                 env.storage()
                     .instance()
-                    .set(&DataKey::AccumulatedFees, &remaining);
+                    .set(&DataKey::AccumulatedFees, &(accumulated - withdraw_amount));
                 let tk = token::Client::new(&env, &token);
                 tk.transfer(&env.current_contract_address(), &to, &withdraw_amount);
                 Withdrawn {

@@ -866,6 +866,7 @@ fn test_pause_and_unpause() {
 
     let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::Unpause, &1000);
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
     assert!(!bridge.is_paused());
 }
@@ -1416,6 +1417,7 @@ fn test_rotate_admins_happy_path() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     let stored = bridge.get_admins();
@@ -1442,6 +1444,7 @@ fn test_rotate_admins_removes_old_admin_privileges() {
         &1000,
     );
     bridge.approve(&removed_admin, &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     // removed_admin is no longer in the admin set — must be rejected.
@@ -1486,6 +1489,7 @@ fn test_rotate_admins_new_admin_can_govern() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     // The newly added admin can now propose/approve/execute.
@@ -1512,6 +1516,7 @@ fn test_rotate_admins_rejects_below_current_threshold() {
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
     bridge.approve(&admins.get_unchecked(2), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 }
 
@@ -1526,6 +1531,7 @@ fn test_rotate_admins_rejects_empty() {
         &ProposalAction::RotateAdmins(empty),
         &1000,
     );
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 }
 
@@ -1542,12 +1548,13 @@ fn test_rotate_admins_rejects_contract_address_as_admin() {
         &ProposalAction::RotateAdmins(new_admins),
         &1000,
     );
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 }
 
 #[test]
 fn test_set_threshold_happy_path() {
-    let (_env, bridge, admins) = setup_env_with_admins(3, 2, 100, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(3, 2, 100, 1000);
 
     let pid = bridge.propose(
         &admins.get_unchecked(0),
@@ -1555,6 +1562,7 @@ fn test_set_threshold_happy_path() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 
     assert_eq!(bridge.get_threshold(), 3);
@@ -1563,7 +1571,7 @@ fn test_set_threshold_happy_path() {
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn test_set_threshold_rejects_zero() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
 
     let pid = bridge.propose(
         &admins.get_unchecked(0),
@@ -1571,13 +1579,14 @@ fn test_set_threshold_rejects_zero() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 }
 
 #[test]
 #[should_panic(expected = "Error(Contract, #4)")]
 fn test_set_threshold_rejects_above_admin_count() {
-    let (_env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
+    let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
 
     let pid = bridge.propose(
         &admins.get_unchecked(0),
@@ -1585,6 +1594,7 @@ fn test_set_threshold_rejects_above_admin_count() {
         &1000,
     );
     bridge.approve(&admins.get_unchecked(1), &pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&pid);
 }
 
@@ -1606,6 +1616,7 @@ fn test_set_threshold_below_active_proposal_approval_count() {
     let threshold_pid = bridge.propose(&proposer, &ProposalAction::SetThreshold(2), &1000);
     bridge.approve(&admins.get_unchecked(1), &threshold_pid);
     bridge.approve(&admins.get_unchecked(2), &threshold_pid);
+    advance_ledger(&env, MIN_EXEC_DELAY);
     bridge.execute(&threshold_pid);
     assert_eq!(bridge.get_threshold(), 2);
 
@@ -2058,8 +2069,15 @@ fn test_archive_old_entries() {
         &2000,
         &String::from_str(&env, "archive2"),
     );
+    bridge.fund_c_address(
+        &source,
+        &target,
+        &token_addr,
+        &3000,
+        &String::from_str(&env, "archive3"),
+    );
 
-    assert_eq!(bridge.funding_count(), 2);
+    assert_eq!(bridge.funding_count(), 3);
 
     let pid = bridge.propose(
         &admins.get_unchecked(0),
@@ -2072,6 +2090,16 @@ fn test_archive_old_entries() {
     assert!(record1.archived);
     let record2 = bridge.funding_record(&2).unwrap();
     assert!(record2.archived);
+    let record3 = bridge.funding_record(&3).unwrap();
+    assert!(!record3.archived);
+
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::ArchiveOldEntries(1),
+        &1000,
+    );
+    bridge.execute(&pid);
+    assert!(bridge.funding_record(&3).unwrap().archived);
 }
 
 #[test]
@@ -2679,13 +2707,14 @@ fn test_funding_with_whitelisted_fee_token_accrues_token_fees() {
         &String::from_str(&env, "fee-token"),
     );
 
-    // fee = 1000 * 1000bps / 10000 = 100; token_fee = 100 * 5000bps / 10000 = 50
+    // Fee accounting is denominated in the actual token held by the bridge;
+    // the optional display rate must not change the withdrawable amount.
     assert_eq!(bridge.accumulated_fees(), 100);
-    assert_eq!(bridge.accumulated_fees_for_token(&token), 50);
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 100);
 }
 
 #[test]
-fn test_funding_with_non_whitelisted_token_does_not_accrue_token_fees() {
+fn test_funding_with_non_whitelisted_token_accrues_token_fees() {
     let (env, bridge, token, _admin) = full_setup(1000);
     let source = Address::generate(&env);
     let target = Address::generate(&env);
@@ -2700,5 +2729,5 @@ fn test_funding_with_non_whitelisted_token_does_not_accrue_token_fees() {
     );
 
     assert_eq!(bridge.accumulated_fees(), 100);
-    assert_eq!(bridge.accumulated_fees_for_token(&token), 0);
+    assert_eq!(bridge.accumulated_fees_for_token(&token), 100);
 }
