@@ -132,5 +132,21 @@ describe('SimpleCache', () => {
       expect(cache.get('key-0')).toBeUndefined();
       expect(cache.get('key-100')).toEqual({ value: 100, stale: false });
     });
+
+    it('refreshes entry position on get so frequently read keys survive eviction (LRU)', () => {
+      const cache = new SimpleCache({ maxEntries: 2 });
+      cache.set('a', 1, 1_000);
+      cache.set('b', 2, 1_000);
+
+      // Access 'a', making it more recently used than 'b'
+      expect(cache.get('a')).toEqual({ value: 1, stale: false });
+
+      // Insert 'c'; 'b' is now least recently used, so 'b' should be evicted, not 'a'
+      cache.set('c', 3, 1_000);
+
+      expect(cache.get('a')).toEqual({ value: 1, stale: false });
+      expect(cache.get('b')).toBeUndefined();
+      expect(cache.get('c')).toEqual({ value: 3, stale: false });
+    });
   });
 });

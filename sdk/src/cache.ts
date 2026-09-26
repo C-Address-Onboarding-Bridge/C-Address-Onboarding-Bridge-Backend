@@ -35,6 +35,10 @@ export class SimpleCache {
     }
 
     const stale = entry.expiresAt <= now;
+    // Refresh position to implement LRU eviction
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+
     if (this.debug) {
       console.debug(`[sdk-cache] ${stale ? 'stale-hit' : 'hit'}: ${key}`);
     }
@@ -42,8 +46,9 @@ export class SimpleCache {
   }
 
   set<T>(key: string, value: T, ttlMs: number, staleWhileRevalidate = false): void {
-    const isNewKey = !this.entries.has(key);
-    if (isNewKey && this.entries.size >= this.maxEntries) {
+    if (this.entries.has(key)) {
+      this.entries.delete(key);
+    } else if (this.entries.size >= this.maxEntries) {
       const oldestKey = this.entries.keys().next().value;
       if (oldestKey) {
         this.entries.delete(oldestKey);
