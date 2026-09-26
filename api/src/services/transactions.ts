@@ -158,8 +158,15 @@ export function getTransactionStats() {
   throw new Error('Not implemented: getTransactionStats');
 }
 
+/**
+ * Returns the current fee configuration state.
+ *
+ * The returned object is a snapshot of the in-memory fee config, including
+ * the active `feeBps`, when it was last `updatedAt`, and any pending fee
+ * change scheduled via {@link updateFeeConfig} along with its `timelockUntil`.
+ */
 export function getFeeConfig(): FeeConfigState {
-  throw new Error('Not implemented: getFeeConfig');
+  return { ...feeConfigState };
 }
 
 export function updateFeeConfig(feeBps: number, timelockMs: number): { pendingFeeBps: number; timelockUntil: number } {
