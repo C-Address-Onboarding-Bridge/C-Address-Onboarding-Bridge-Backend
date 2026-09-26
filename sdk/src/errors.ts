@@ -77,9 +77,9 @@ export class RateLimitError extends BridgeError {
 export class ServerError extends BridgeError {
   override readonly type = 'ServerError' as const;
 
-  constructor(message?: string, options?: { statusCode?: number; code?: string; cause?: unknown; locale?: SupportedLocale }) {
+  constructor(message?: string, options?: { statusCode?: number; code?: string; cause?: unknown; locale?: SupportedLocale; retryable?: boolean }) {
     const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
-    super(resolvedMessage, { statusCode: options?.statusCode ?? 500, code: options?.code, retryable: true, cause: options?.cause });
+    super(resolvedMessage, { statusCode: options?.statusCode ?? 500, code: options?.code, retryable: options?.retryable ?? true, cause: options?.cause });
     this.name = 'ServerError';
   }
 }

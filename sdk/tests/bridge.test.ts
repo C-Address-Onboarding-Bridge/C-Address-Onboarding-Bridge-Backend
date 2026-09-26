@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BridgeClient } from '../src/bridge';
 import { PaginatedResponse, Token } from '../src/types';
+import { ServerError, NetworkError, RateLimitError, AuthError, ValidationError } from '../src/errors';
 import {
   calculateFee,
   calculateReceiveAmount,
@@ -489,6 +490,91 @@ describe('BridgeClient.runDiagnostics', () => {
     });
     expect(result.status).toBe('healthy');
     expect(result.checks).toEqual({});
+  });
+});
+
+describe('BridgeClient request retry & error classification (#679)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not retry when res.json() fails with SyntaxError, wrapping it in non-retryable ServerError', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError('Unexpected token < in JSON at position 0')),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new BridgeClient({
+      baseUrl: 'http://localhost:3001',
+      retry: { maxRetries: 3, baseDelayMs: 10, jitterMs: 0 },
+    });
+
+    let thrownError: unknown;
+    try {
+      await client.health();
+    } catch (err) {
+      thrownError = err;
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(thrownError).toBeDefined();
+    expect(thrownError).toHaveProperty('name', 'ServerError');
+    expect((thrownError as any).retryable).toBe(false);
+    expect((thrownError as any).cause).toBeInstanceOf(SyntaxError);
+  });
+
+  it('shouldRetry only returns true for transient errors (TypeError, retryable BridgeError)', () => {
+    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
+    const shouldRetry = (err: unknown) => (client as any).shouldRetry(err);
+
+    // Network TypeError from fetch
+    expect(shouldRetry(new TypeError('fetch failed'))).toBe(true);
+
+    // Retryable BridgeErrors
+    expect(shouldRetry(new NetworkError('Network error'))).toBe(true);
+    expect(shouldRetry(new RateLimitError('Too many requests'))).toBe(true);
+    expect(shouldRetry(new ServerError('500 server error'))).toBe(true);
+
+    // Non-retryable BridgeErrors
+    expect(shouldRetry(new ServerError('Parse error', { retryable: false }))).toBe(false);
+    expect(shouldRetry(new AuthError('Unauthorized'))).toBe(false);
+    expect(shouldRetry(new ValidationError('Bad request'))).toBe(false);
+
+    // Abort errors
+    expect(shouldRetry(new DOMException('Aborted', 'AbortError'))).toBe(false);
+    const abortErr = new Error('Aborted');
+    abortErr.name = 'AbortError';
+    expect(shouldRetry(abortErr)).toBe(false);
+
+    // Programming errors
+    expect(shouldRetry(new SyntaxError('Unexpected token'))).toBe(false);
+    expect(shouldRetry(new ReferenceError('x is not defined'))).toBe(false);
+    expect(shouldRetry(new RangeError('Invalid length'))).toBe(false);
+    expect(shouldRetry(new Error('Unknown generic error'))).toBe(false);
+  });
+
+  it('retries when fetch throws network TypeError and succeeds on subsequent attempt', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ status: 'ok' }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new BridgeClient({
+      baseUrl: 'http://localhost:3001',
+      retry: { maxRetries: 2, baseDelayMs: 5, jitterMs: 0 },
+    });
+
+    const res = await client.health();
+    expect(res).toEqual({ status: 'ok' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

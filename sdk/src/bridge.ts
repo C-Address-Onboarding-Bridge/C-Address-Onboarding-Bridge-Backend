@@ -30,6 +30,7 @@ import {
   TimeoutError,
   BridgeError,
   ValidationError,
+  ServerError,
 } from "./errors";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -98,8 +99,8 @@ export class BridgeClient {
     if (err instanceof DOMException && err.name === "AbortError") return false;
     if (err instanceof Error && err.name === "AbortError") return false;
     if (err instanceof BridgeError) return err.retryable;
-    // Non-bridge errors (network-level) are retryable
-    return true;
+    if (err instanceof TypeError) return true;
+    return false;
   }
 
   private computeDelay(attempt: number): number {
@@ -235,7 +236,14 @@ export class BridgeClient {
           throw bridgeErr;
         }
 
-        return res.json() as Promise<T>;
+        try {
+          return (await res.json()) as T;
+        } catch (parseErr) {
+          throw new ServerError(
+            `Failed to parse response from ${method} ${path}: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+            { statusCode: res.status, cause: parseErr, retryable: false },
+          );
+        }
       } catch (error) {
         // Re-wrap abort as TimeoutError
         if (
