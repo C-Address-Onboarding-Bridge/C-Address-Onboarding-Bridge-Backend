@@ -145,7 +145,7 @@ app.use(requestTracker);
 // app.use(loggingMiddleware);
 
 app.use('/api/webhook', express.text({ type: '*/*' }));
-app.use('/api', express.json({ limit: '32kb' }));
+app.use('/api', express.json({ limit: '128kb' }));
 
 app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);

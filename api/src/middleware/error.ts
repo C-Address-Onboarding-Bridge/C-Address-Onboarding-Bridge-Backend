@@ -1,18 +1,19 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { logger } from '../logger';
+import { XdrValidationError } from '../services/xdrValidator';
 
 /**
  * Application-level error with an explicit HTTP status code.
  * Throw this from route handlers to produce a structured JSON error response.
  */
 export class AppError extends Error {
-  constructor(
-    public statusCode: number,
-    message: string,
-  ) {
+  public statusCode: number;
+
+  constructor(statusCode: number, message: string) {
     super(message);
     this.name = 'AppError';
+    this.statusCode = statusCode;
   }
 }
 
@@ -34,6 +35,24 @@ export function errorHandler(
     res.status(400).json({
       error: 'validation_error',
       details: err.errors,
+    });
+    return;
+  }
+
+  if (err instanceof XdrValidationError) {
+    logger.warn({ code: err.code, detail: err.detail }, 'XDR validation error');
+    res.status(400).json({
+      error: err.code,
+      message: err.detail,
+    });
+    return;
+  }
+
+  if ((err as any).type === 'entity.too.large' || (err as any).status === 413) {
+    logger.warn({ err }, 'Payload too large');
+    res.status(413).json({
+      error: 'XDR_TOO_LARGE',
+      message: 'Request payload exceeds maximum allowed size',
     });
     return;
   }
