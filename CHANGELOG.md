@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Versioning middleware deduplicated; CIDR /0 mask corrected; IPv6 CIDR support added
 - Webhook log headers masked; request-body redaction filter applied consistently
 - Dead middleware and configuration code removed
+- CORS methods expanded to include `DELETE` and `PATCH` for admin key and webhook management
+- Webhook IP rate limit isolation preventing provider webhook traffic from exhausting customer API rate limits
+- WebSocket status polling integrated with shared Redis cache to prevent RPC amplification
 
 [Unreleased]: https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/releases/tag/v0.1.0
