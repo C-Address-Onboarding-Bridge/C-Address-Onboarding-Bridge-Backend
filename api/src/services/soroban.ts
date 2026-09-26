@@ -24,6 +24,20 @@ export interface SorobanTxResponse {
   error?: string;
 }
 
+/**
+ * Error thrown when the Soroban RPC asks the caller to retry later
+ * (`TRY_AGAIN_LATER`). The transaction was NOT accepted, so callers must
+ * surface this as a retryable failure (HTTP 503) rather than a success.
+ */
+export class SorobanRetryableError extends Error {
+  readonly code = 'TRY_AGAIN_LATER';
+
+  constructor(message = 'Soroban RPC is congested; retry later') {
+    super(message);
+    this.name = 'SorobanRetryableError';
+  }
+}
+
 const BASIS_POINTS_DENOM = 10000;
 
 /** Wraps the Soroban RPC server and bridge contract interactions. */
@@ -84,6 +98,7 @@ export class SorobanService {
    * @param signedXdr - Base64-encoded signed transaction envelope.
    * @returns Transaction status and hash.
    * @throws {XdrValidationError} If the XDR fails any validation rule.
+   * @throws {SorobanRetryableError} If the RPC returns `TRY_AGAIN_LATER`.
    */
   async submitFundingTransaction(
     signedXdr: string,
@@ -101,27 +116,7 @@ export class SorobanService {
           'tx.op_count': validation.operationCount,
         });
 
-        // ── Submission ───────────────────────────────────────────────────────
-        // Re-parse from the validated string (Transaction constructor already
-        // ran inside validateXdr; we need the object for sendTransaction).
-        const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
-        const tx = new Transaction(envelope, this.networkPassphrase);
-
-        const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
-        externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
-
-        if (sendResponse.status === 'PENDING') {
-          return { status: 'pending' as const, hash: validation.txHash };
-        }
-        if (sendResponse.status === 'ERROR') {
-          span.setStatus({ code: SpanStatusCode.ERROR });
-          return {
-            status: 'failed' as const,
-            hash: validation.txHash,
-            error: sendResponse.errorResult?.result().toString() || 'unknown error',
-          };
-        }
-        return { status: 'success' as const, hash: validation.txHash };
+        return await this.submitValidatedXdr(signedXdr, validation.txHash, span, start);
       } catch (err) {
         if (err instanceof XdrValidationError) {
           logger.warn(
@@ -137,6 +132,53 @@ export class SorobanService {
         span.end();
       }
     });
+  }
+
+  /**
+   * Shared submission path used by both single and batch funding flows.
+   *
+   * Re-parses the validated XDR, sends it to the RPC pool, and maps the
+   * Soroban response status to the API's `SorobanTxResponse`:
+   *
+   * - `PENDING` / `DUPLICATE` → `pending` (accepted or already in flight)
+   * - `ERROR` → `failed`
+   * - `TRY_AGAIN_LATER` → throws `SorobanRetryableError` (HTTP 503)
+   * - anything else → confirmed via `getTransaction` before reporting success
+   */
+  private async submitValidatedXdr(
+    signedXdr: string,
+    txHash: string,
+    span: ReturnType<typeof tracer.startActiveSpan> extends never ? never : any,
+    start: number,
+  ): Promise<SorobanTxResponse> {
+    const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
+    const tx = new Transaction(envelope, this.networkPassphrase);
+
+    const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
+    externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
+
+    if (sendResponse.status === 'PENDING' || sendResponse.status === 'DUPLICATE') {
+      return { status: 'pending' as const, hash: txHash };
+    }
+    if (sendResponse.status === 'ERROR') {
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      return {
+        status: 'failed' as const,
+        hash: txHash,
+        error: sendResponse.errorResult?.result().toString() || 'unknown error',
+      };
+    }
+    if (sendResponse.status === 'TRY_AGAIN_LATER') {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: 'TRY_AGAIN_LATER' });
+      throw new SorobanRetryableError();
+    }
+
+    // Only report success once the network confirms the transaction.
+    const confirmed = await this.getTransactionStatus(txHash);
+    if (confirmed.status === 'success') {
+      return { status: 'success' as const, hash: txHash };
+    }
+    return confirmed;
   }
 
   /**
@@ -219,86 +261,54 @@ export class SorobanService {
         .setTimeout(30)
         .build();
 
-      const simulation = await rpcPool.execute((server) =>
-        server.simulateTransaction(tx),
-      );
+      const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
 
       if ('error' in simulation && simulation.error) {
-        return { footprint: 'error', minResourceFee: '0' };
+        throw new Error(`simulation failed: ${simulation.error}`);
       }
 
-      if ('transactionData' in simulation && simulation.transactionData) {
-        const footprint = simulation.transactionData.build().toXDR('base64');
-        const minResourceFee = simulation.minResourceFee || '0';
-        return { footprint, minResourceFee };
-      }
+      const footprint = 'footprint' in simulation && simulation.footprint
+        ? simulation.footprint.toXDR('base64')
+        : 'not_available';
+      const minResourceFee = 'minResourceFee' in simulation && simulation.minResourceFee
+        ? String(simulation.minResourceFee)
+        : '0';
 
-      return { footprint: 'pending', minResourceFee: '0' };
+      return { footprint, minResourceFee };
     } catch (err) {
-      logger.error({ err: String(err) }, 'contract simulation failed');
-      return { footprint: 'simulation_failed', minResourceFee: '0' };
+      logger.warn({ err }, 'soroban.contractSimulate failed');
+      return { footprint: 'not_available', minResourceFee: '0' };
     }
   }
 
   /**
-   * Submits a signed batch funding transaction to the network.
+   * Submits a batch of signed funding transactions.
    *
-   * @param signedXdr - Base64-encoded signed transaction envelope.
-   * @returns Transaction status, hash, and per-recipient results.
-   * @throws {XdrValidationError} If the XDR fails validation.
+   * Delegates to the shared submission path so status mapping (including
+   * `TRY_AGAIN_LATER` and `DUPLICATE`) stays consistent with the single
+   * funding flow.
+   *
+   * @param signedXdrs - Base64-encoded signed transaction envelopes.
+   * @returns Per-transaction status and hash.
    */
   async submitBatchFundingTransaction(
-    signedXdr: string,
-  ): Promise<SorobanTxResponse & { recipients?: Array<{ address: string; amount: string; status: string }> }> {
-    return tracer.startActiveSpan('soroban.submitBatchFundingTransaction', async (span) => {
-      const start = Date.now();
+    signedXdrs: string[],
+  ): Promise<SorobanTxResponse[]> {
+    return tracer.startActiveSpan('soroban.submitBatchFundingTransaction', async (span): Promise<SorobanTxResponse[]> => {
       try {
-        const validation = validateXdr(signedXdr);
-        span.setAttributes({
-          'tx.hash': validation.txHash,
-          'tx.source': validation.sourceAccount,
-          'tx.fee': validation.fee,
-          'tx.op_count': validation.operationCount,
-        });
-
-        const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
-        const tx = new Transaction(envelope, this.networkPassphrase);
-
-        const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
-        externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
-
-        if (sendResponse.status === 'PENDING') {
-          return { status: 'pending' as const, hash: validation.txHash };
+        const results: SorobanTxResponse[] = [];
+        for (const signedXdr of signedXdrs) {
+          const start = Date.now();
+          const validation = validateXdr(signedXdr);
+          results.push(await this.submitValidatedXdr(signedXdr, validation.txHash, span, start));
         }
-        if (sendResponse.status === 'ERROR') {
-          span.setStatus({ code: SpanStatusCode.ERROR });
-          return {
-            status: 'failed' as const,
-            hash: validation.txHash,
-            error: sendResponse.errorResult?.result().toString() || 'unknown error',
-          };
-        }
-        return { status: 'success' as const, hash: validation.txHash };
+        return results;
       } catch (err) {
-        if (err instanceof XdrValidationError) {
-          logger.warn(
-            { code: err.code, detail: err.detail },
-            'soroban.submitBatchFundingTransaction: XDR validation rejected',
-          );
-          span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-        } else {
-          span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
-        }
+        span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
         throw err;
       } finally {
         span.end();
       }
     });
   }
-
-  getRpcMetrics(): Array<{ url: string; healthy: boolean; consecutiveFailures: number; lastFailureAt: number | null; lastLatencyMs: number | null; totalRequests: number; totalFailures: number }> {
-    return rpcPool.getMetrics();
-  }
 }
-
-export const sorobanService = new SorobanService();
