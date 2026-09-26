@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { logger } from '../index';
+import { logger } from '../logger';
 import { hashPayload, integrityAuditLog } from './auditLog';
 import { enqueueAudit } from './asyncPipeline';
 import { enqueueWebhookRetry } from '../jobs/queue';
