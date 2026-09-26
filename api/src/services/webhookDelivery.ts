@@ -53,6 +53,13 @@ const RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
 const DELIVERY_TIMEOUT_MS = 10_000;
 
 /**
+ * Recommended freshness window (in milliseconds) for receivers verifying the
+ * `X-Webhook-Timestamp` header. Deliveries whose timestamp falls outside this
+ * window should be rejected to prevent replay attacks.
+ */
+export const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
+
+/**
  * Returns true when the given IP literal falls in a private, loopback,
  * link-local, or cloud-metadata range that must never be reachable via a
  * user-supplied webhook URL (SSRF protection).
@@ -164,15 +171,21 @@ export class WebhookDeliveryService {
     return [...this.registrations.values()].filter((r) => r.apiKey === apiKey);
   }
 
-  sign(payload: string, secret: string): string {
-    return crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  /**
+   * Signs a webhook delivery. The signed message is `${timestamp}.${payload}`
+   * so the timestamp is bound to the body and cannot be tampered with or
+   * replayed independently of the payload.
+   */
+  sign(payload: string, secret: string, timestamp: number): string {
+    return crypto.createHmac('sha256', secret).update(`${timestamp}.${payload}`).digest('hex');
   }
 
   async deliver(registration: WebhookRegistration, event: string, data: unknown): Promise<void> {
-    const payload = JSON.stringify({ event, data, timestamp: Date.now() });
-    const signature = this.sign(payload, registration.secret);
+    const timestamp = Date.now();
+    const payload = JSON.stringify({ event, data, timestamp });
+    const signature = this.sign(payload, registration.secret, timestamp);
 
-    await this.attemptDelivery(registration, event, data, payload, signature, 0);
+    await this.attemptDelivery(registration, event, data, payload, signature, timestamp, 0);
   }
 
   async deliverToAll(apiKey: string, event: string, data: unknown): Promise<void> {
@@ -202,6 +215,7 @@ export class WebhookDeliveryService {
     data: unknown,
     payload: string,
     signature: string,
+    timestamp: number,
     attemptNumber: number,
   ): Promise<void> {
     const attempt: DeliveryAttempt = {
@@ -226,6 +240,7 @@ export class WebhookDeliveryService {
         headers: {
           'Content-Type': 'application/json',
           'X-Webhook-Signature': `sha256=${signature}`,
+          'X-Webhook-Timestamp': String(timestamp),
           'X-Webhook-Event': event,
           'X-Webhook-Attempt': String(attemptNumber + 1),
         },
@@ -240,75 +255,6 @@ export class WebhookDeliveryService {
       const deliveryAuditPayload = {
         payloadHash: hashPayload(payload),
         destination: registration.url,
-        registrationId: registration.id,
-        event,
-        attemptNumber: attemptNumber + 1,
-        statusCode: response.status,
-        result: response.ok ? 'success' : 'failed',
-      };
-      enqueueAudit(
-        'webhook_delivery',
-        deliveryAuditPayload,
-        registration.apiKey,
-        () => integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKey),
-      );
+        registration
 
-      if (response.ok) {
-        logger.info(
-          { registrationId: registration.id, url: registration.url, event, attempt: attemptNumber + 1 },
-          'webhook delivered',
-        );
-        this.deliveryLog.push(attempt);
-        return;
-      }
-
-      attempt.error = `HTTP ${response.status}`;
-      logger.warn(
-        { registrationId: registration.id, url: registration.url, event, status: response.status, attempt: attemptNumber + 1 },
-        'webhook delivery failed with non-2xx status',
-      );
-    } catch (err) {
-      attempt.error = err instanceof Error ? err.message : 'unknown error';
-      logger.warn(
-        { registrationId: registration.id, url: registration.url, event, err: attempt.error, attempt: attemptNumber + 1 },
-        'webhook delivery threw',
-      );
-    }
-
-    this.deliveryLog.push(attempt);
-
-    if (attemptNumber < RETRY_DELAYS_MS.length) {
-      enqueueWebhookRetry({
-        registrationId: registration.id,
-        event,
-        data,
-        attemptNumber: attemptNumber + 1,
-        delayMs: RETRY_DELAYS_MS[attemptNumber],
-      });
-      return;
-    }
-
-    this.dlq.push({
-      id: crypto.randomUUID(),
-      registration,
-      payload: data,
-      event,
-      attempts: this.deliveryLog.filter((a) => a.registrationId === registration.id),
-      failedAt: Date.now(),
-    });
-    logger.error(
-      { registrationId: registration.id, url: registration.url, event },
-      'webhook delivery exhausted retries, moved to DLQ',
-    );
-  }
-
-  getDeliveryLog(): DeliveryAttempt[] {
-    return [...this.deliveryLog];
-  }
-
-  getDLQ(): DLQEntry[] {
-    return [...this.dlq];
-  }
-}
-
-export const webhookDeliveryService = new WebhookDeliveryService();
+/* … truncated 2102 chars — edit only what you need near the top … */
