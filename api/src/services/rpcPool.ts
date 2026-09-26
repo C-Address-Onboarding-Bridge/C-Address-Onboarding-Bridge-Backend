@@ -42,7 +42,7 @@ export class RpcPool {
       totalFailures: 0,
     }));
 
-    if (this.providers.length > 1) {
+    if (this.providers.length > 0) {
       this.startHealthChecks(rpc.healthCheckIntervalMs);
     }
   }
@@ -131,7 +131,7 @@ export class RpcPool {
         const untried = allProviders.find((p) => !tried.has(p.url));
         if (!untried) break;
         tried.add(untried.url);
-        provider.totalRequests++;
+        untried.totalRequests++;
         const start = Date.now();
         try {
           const result = await fn(untried.server);

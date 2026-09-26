@@ -112,4 +112,37 @@ describe('RpcPool', () => {
     expect(visited).toHaveLength(3);
     pool.destroy();
   });
+
+  it('increments totalRequests on the untried provider when failover falls back from already tried provider', async () => {
+    const pool = new RpcPool();
+    (pool as any).providers.forEach((p: any) => {
+      p.healthy = false;
+    });
+
+    let attempts = 0;
+    const result = await pool.execute(async (_server) => {
+      attempts++;
+      if (attempts === 1) throw new Error('fallback provider 0 failed');
+      return 'recovered-by-untried';
+    });
+
+    expect(result).toBe('recovered-by-untried');
+    const updatedMetrics = pool.getMetrics();
+    expect(updatedMetrics[0].totalRequests).toBe(1);
+    expect(updatedMetrics[1].totalRequests).toBe(1);
+    pool.destroy();
+  });
+
+  it('starts recovery health checks for single-provider pools', async () => {
+    const { config } = await import('../config');
+    const originalUrls = config.soroban.rpcUrls;
+    try {
+      config.soroban.rpcUrls = ['https://rpc-single.example.com'];
+      const pool = new RpcPool();
+      expect((pool as any).healthCheckTimer).not.toBeNull();
+      pool.destroy();
+    } finally {
+      config.soroban.rpcUrls = originalUrls;
+    }
+  });
 });
