@@ -19,7 +19,12 @@
  * 10. Duplicate hash       — reject replayed transactions (in-process nonce window)
  */
 
-import { xdr, Transaction, FeeBumpTransaction, StrKey } from '@stellar/stellar-sdk';
+import {
+  Transaction,
+  FeeBumpTransaction,
+  TransactionBuilder,
+  StrKey,
+} from '@stellar/stellar-sdk';
 import NodeCache from 'node-cache';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -148,27 +153,47 @@ function decodeBase64(xdrString: string): Buffer {
   return Buffer.from(stripped, 'base64');
 }
 
+/**
+ * Parse a base64-encoded envelope into a plain `Transaction`.
+ *
+ * `TransactionBuilder.fromXDR` is the only SDK entry point that understands
+ * both `TransactionEnvelope` and `FeeBumpTransactionEnvelope`. The previous
+ * implementation used `new Transaction(envelope, passphrase)`, which throws for
+ * fee-bump envelopes — making the `instanceof FeeBumpTransaction` branch dead
+ * code and rejecting every fee-bump transaction with `XDR_PARSE_FAILED`.
+ *
+ * For fee bumps we validate the fee source address and unwrap the inner
+ * transaction so the remaining rules run against the transaction that actually
+ * carries the operations.
+ */
 function parseEnvelope(
   rawBuf: Buffer,
   networkPassphrase: string,
 ): Transaction {
-  let tx: Transaction;
+  let parsed: Transaction | FeeBumpTransaction;
   try {
-    const envelope = xdr.TransactionEnvelope.fromXDR(rawBuf);
-    const inner = new Transaction(envelope, networkPassphrase);
-    // Fee bump transactions wrap an inner transaction — unwrap it.
-    if (inner instanceof FeeBumpTransaction) {
-      tx = inner.innerTransaction;
-    } else {
-      tx = inner;
-    }
+    parsed = TransactionBuilder.fromXDR(rawBuf, networkPassphrase);
   } catch (err) {
     throw new XdrValidationError(
       'XDR_PARSE_FAILED',
       `XDR envelope could not be decoded: ${String(err)}`,
     );
   }
-  return tx;
+
+  if (parsed instanceof FeeBumpTransaction) {
+    // The fee source is the account paying for the inner transaction — it must
+    // be a well-formed Stellar address.
+    const feeSource = parsed.feeSource;
+    if (!isValidStellarAddress(feeSource)) {
+      throw new XdrValidationError(
+        'INVALID_SOURCE_ACCOUNT',
+        `Fee-bump fee source is not a valid Stellar address: ${feeSource}`,
+      );
+    }
+    return parsed.innerTransaction;
+  }
+
+  return parsed;
 }
 
 /**
@@ -218,29 +243,6 @@ function checkFee(tx: Transaction): void {
   if (isNaN(fee) || fee < MIN_FEE_STROOPS) {
     throw new XdrValidationError(
       'FEE_TOO_LOW',
-      `Transaction fee ${tx.fee} stroops is below the minimum of ${MIN_FEE_STROOPS}`,
-    );
-  }
-  if (fee > MAX_FEE_STROOPS) {
-    throw new XdrValidationError(
-      'FEE_TOO_HIGH',
-      `Transaction fee ${tx.fee} stroops exceeds the maximum of ${MAX_FEE_STROOPS}`,
-    );
-  }
-}
+      `Transaction fee ${tx.fee} s
 
-function checkTimeBounds(tx: Transaction): void {
-  const nowSec = Math.floor(Date.now() / 1000);
-  const bounds = tx.timeBounds;
-
-  if (!bounds) {
-    // No time bounds — the transaction never expires. Warn but allow; the
-    // Soroban network will apply its own ledger validity window.
-    logger.warn({ txHash: tx.hash().toString('hex') }, 'xdr-validator: transaction has no time bounds (never expires)');
-    return;
-  }
-
-  const minTime = typeof bounds.minTime === 'string' ? parseInt(bounds.minTime, 10) : Number(bounds.minTime);
-  const maxTime = typeof bounds.maxT
-
-/* … truncated 4968 chars — edit only what you need near the top … */
+/* … truncated 894 chars — edit only what you need near the top … */
