@@ -44,17 +44,10 @@ jobs:
         run: cargo run --release --bin fuzz_fee_calculation
         working-directory: contracts/onboarding-bridge/fuzz
 
-      # TODO(next-bounty): both targets below panic before exercising anything.
-      #   fuzz_fund_sequence -> HostError: Error(Storage, MissingValue). The
-      #     harness never sets up storage the contract now requires.
-      #   fuzz_admin_ops -> "execution too soon: minimum delay not elapsed". It
-      #     calls execute() without advancing the ledger past the governance
-      #     timelock (same cause as the ignored test_full_scenario).
-      # Update the harnesses to match the current contract, then restore.
-      # - name: Run fuzz_fund_sequence
-      #   run: cargo run --release --bin fuzz_fund_sequence
-      #   working-directory: contracts/onboarding-bridge/fuzz
-      #
-      # - name: Run fuzz_admin_ops
-      #   run: cargo run --release --bin fuzz_admin_ops
-      #   working-directory: contracts/onboarding-bridge/fuzz
+      - name: Run fuzz_fund_sequence (100k iterations)
+        run: cargo run --release --bin fuzz_fund_sequence
+        working-directory: contracts/onboarding-bridge/fuzz
+
+      - name: Run fuzz_admin_ops (100k iterations)
+        run: cargo run --release --bin fuzz_admin_ops
+        working-directory: contracts/onboarding-bridge/fuzz
