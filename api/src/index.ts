@@ -11,6 +11,7 @@ import { quoteRouter } from './routes/quote';
 import { statusRouter } from './routes/status';
 import { offrampRouter } from './routes/offramp';
 import { cexRouter } from './routes/cex';
+import { tokenRouter } from './routes/token';
 import { moonpayWebhookRouter, transakWebhookRouter } from './routes/webhook';
 import { webhookAdminRouter } from './routes/webhookAdmin';
 import { apiKeysRouter } from './routes/apiKeys';
@@ -31,6 +32,7 @@ import { correlationMiddleware } from './middleware/correlation';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
+import { requestSigningMiddleware } from './middleware/requestSigning';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
 import { closePool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
@@ -145,6 +147,8 @@ app.use('/api', express.json({ limit: '32kb' }));
 
 app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
+// Issue #673: Verify request signing headers
+app.use('/api', requestSigningMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
 app.use('/api', tierRateLimitMiddleware);
 
@@ -171,6 +175,9 @@ app.use('/api/v1/offramp', rbacAuth, requireScopes('offramp:write'), offrampRout
 app.use('/api/v2/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
 app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
 app.use('/api/v2/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
+// Issue #672: Token metadata endpoint
+app.use('/api/v1/token', rbacAuth, requireScopes('quote:read'), tokenRouter);
+app.use('/api/v2/token', rbacAuth, requireScopes('quote:read'), tokenRouter);
 app.use('/api/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
 app.use('/api/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
 app.use('/api/status', rbacAuth, requireScopes('status:read'), statusRouter);
