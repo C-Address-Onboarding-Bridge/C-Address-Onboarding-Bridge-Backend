@@ -52,7 +52,22 @@ export function tokenFromLegacy(tokenAddress?: string, sourceAsset?: string): To
  * @returns Human-readable amount (e.g. `"1.000000"`).
  */
 export function formatTokenAmount(amount: string, decimals: number): string {
-  throw new Error('Not implemented: formatTokenAmount');
+  // #663: Convert raw amount to human-readable decimal string using BigInt
+  const bn = BigInt(amount);
+  const divisor = BigInt(10) ** BigInt(decimals);
+
+  // Get integer and fractional parts
+  const integer = bn / divisor;
+  const remainder = bn % divisor;
+
+  // Format fractional part with leading zeros
+  const fractionalStr = remainder.toString().padStart(decimals, '0');
+
+  // Combine with decimal point
+  if (decimals === 0) {
+    return integer.toString();
+  }
+  return `${integer}.${fractionalStr}`;
 }
 
 /**
@@ -63,7 +78,23 @@ export function formatTokenAmount(amount: string, decimals: number): string {
  * @returns Raw integer amount as a string (e.g. `"1500000"` for 6 decimals).
  */
 export function parseTokenAmount(amount: string, decimals: number): string {
-  throw new Error('Not implemented: parseTokenAmount');
+  // #663: Parse decimal string to raw amount using BigInt
+  const parts = amount.split('.');
+  const integerPart = parts[0] || '0';
+  const fractionalPart = parts[1] || '';
+
+  // Validate fractional digits don't exceed decimals
+  if (fractionalPart.length > decimals) {
+    throw new Error(`Too many decimal places: expected at most ${decimals}, got ${fractionalPart.length}`);
+  }
+
+  // Pad fractional part to the right with zeros
+  const paddedFractional = fractionalPart.padEnd(decimals, '0');
+
+  // Combine integer and fractional parts
+  const rawAmount = BigInt(integerPart) * (BigInt(10) ** BigInt(decimals)) + BigInt(paddedFractional);
+
+  return rawAmount.toString();
 }
 
 /**
@@ -72,5 +103,9 @@ export function parseTokenAmount(amount: string, decimals: number): string {
  * but should be queried via `getTokenMetadata` for accuracy.
  */
 export function getDefaultDecimals(token: Token): number {
-  throw new Error('Not implemented: getDefaultDecimals');
+  // #664: Return default decimals based on token type
+  if (isNativeToken(token)) {
+    return 7; // XLM uses 7 decimals (stroops)
+  }
+  return 6; // SAC tokens default to 6 decimals
 }
