@@ -109,9 +109,11 @@ app.get('/health', async (_req, res) => {
   }
 
   const health = await getHealthStatus();
-  const statusCode = health.status === 'unhealthy' ? 503 : health.status === 'degraded' ? 207 : 200;
+  // #659: Return 200 for degraded (not 207 WebDAV status). Only 503 for unhealthy.
+  const statusCode = health.status === 'unhealthy' ? 503 : 200;
 
   res.status(statusCode).json({
+    status: health.status,
     ...health,
     circuits,
     cache: { redis: isRedisEnabled(), metrics: getCacheMetrics() },
@@ -148,18 +150,12 @@ app.use('/api', securityMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
 app.use('/api', tierRateLimitMiddleware);
 
-app.get('/api/v1/deprecations', (_req, res) => {
-  res.json({
-    version: 'v1',
-    deprecated: true,
-    sunset: '2027-12-31',
-    features: ['legacy quote endpoints', 'legacy funding routing', 'legacy status polling'],
-  });
-});
+// #660: Removed misleading deprecation endpoint — v1 and v2 are identical until one diverges
 
 // OpenAPI spec + Swagger UI interactive docs
 app.use('/api', docsRouter);
 
+// #660: Remove unversioned aliases to enforce explicit versioning
 app.use('/api/v1/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
 app.use('/api/telemetry', telemetryRateLimit, telemetryRouter);
 app.use('/api/v2/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
@@ -171,11 +167,6 @@ app.use('/api/v1/offramp', rbacAuth, requireScopes('offramp:write'), offrampRout
 app.use('/api/v2/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
 app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
 app.use('/api/v2/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
-app.use('/api/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
-app.use('/api/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
-app.use('/api/status', rbacAuth, requireScopes('status:read'), statusRouter);
-app.use('/api/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
-app.use('/api/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
 
 app.use('/api/webhook/moonpay', moonpayWebhookRouter);
 app.use('/api/webhook/transak', transakWebhookRouter);
