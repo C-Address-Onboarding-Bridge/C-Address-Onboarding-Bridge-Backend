@@ -62,7 +62,9 @@ export const config = {
   },
   /** Comma-separated list of accepted `X-API-Key` values. Auth is disabled when empty. */
   apiKeys: (process.env.API_KEYS || '').split(',').filter(Boolean),
-  /** Comma-separated list of allowed CORS origins. All origins are allowed when empty. */
+  /** Comma-separated list of allowed CORS origins. Defaults to no origins (safe default).
+   * #655: Forgetting to set CORS_ORIGINS in production no longer allows any origin.
+   * Explicitly configure with comma-separated list to enable cross-origin requests. */
   corsOrigins: (process.env.CORS_ORIGINS || '')
     .split(',')
     .map((o) => o.trim())
