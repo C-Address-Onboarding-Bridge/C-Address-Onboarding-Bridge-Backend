@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { SimpleCache } from '../src/cache';
 
@@ -132,5 +133,108 @@ describe('SimpleCache', () => {
       expect(cache.get('key-0')).toBeUndefined();
       expect(cache.get('key-100')).toEqual({ value: 100, stale: false });
     });
+=======
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SimpleCache } from '../src/cache';
+
+const LONG_TTL = 60_000;
+
+describe('SimpleCache LRU eviction', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a frequently-read key alive under insertion pressure', () => {
+    const cache = new SimpleCache({ maxEntries: 3 });
+
+    cache.set('A', 'a', LONG_TTL);
+    cache.set('B', 'b', LONG_TTL);
+    cache.set('C', 'c', LONG_TTL);
+
+    // Keep reading A while inserting fresh keys to force evictions.
+    for (let i = 0; i < 10; i++) {
+      expect(cache.get<string>('A')?.value).toBe('a');
+      cache.set(`X${i}`, `x${i}`, LONG_TTL);
+    }
+
+    // A was the most-recently read key on every iteration, so it must survive.
+    // The other original keys (B, C) were never touched and should be evicted.
+    expect(cache.get<string>('A')?.value).toBe('a');
+
+    const survivors = ['B', 'C'].filter((k) => cache.get<string>(k) !== undefined);
+    expect(survivors.length).toBeLessThan(2);
+  });
+
+  it('refreshes LRU position even for a stale-but-not-expired read', () => {
+    const cache = new SimpleCache({ maxEntries: 3 });
+    cache.set('A', 'a', LONG_TTL, true); // staleWhileRevalidate → staleUntil = 2*ttl
+    cache.set('B', 'b', LONG_TTL);
+    cache.set('C', 'c', LONG_TTL);
+
+    // Advance past expiresAt but before staleUntil: get('A') returns stale:true,
+    // and should still count as a "use" for LRU purposes.
+    vi.setSystemTime(LONG_TTL + 1);
+    const staleRead = cache.get<string>('A');
+    expect(staleRead?.value).toBe('a');
+    expect(staleRead?.stale).toBe(true);
+
+    // Force an eviction. The stale-but-recently-read A must survive; B or C
+    // (whichever is oldest by now) should be evicted instead.
+    cache.set('D', 'd', LONG_TTL);
+    expect(cache.get<string>('A')?.value).toBe('a');
+  });
+
+  it('treats overwriting an existing key as a use', () => {
+    const cache = new SimpleCache({ maxEntries: 3 });
+    cache.set('A', 'a', LONG_TTL);
+    cache.set('B', 'b', LONG_TTL);
+    cache.set('C', 'c', LONG_TTL);
+
+    // Overwrite A. Under LRU, A is now the most-recently used key.
+    cache.set('A', 'a2', LONG_TTL);
+
+    // Insert a fresh key to force exactly one eviction. A must survive.
+    cache.set('D', 'd', LONG_TTL);
+    expect(cache.get<string>('A')?.value).toBe('a2');
+
+    // Sanity: exactly one of the untouched original keys was evicted.
+    const untouched = ['B', 'C'].filter((k) => cache.get<string>(k) !== undefined);
+    expect(untouched.length).toBe(1);
+  });
+
+  it('does not evict an unrelated entry when overwriting at capacity', () => {
+    const cache = new SimpleCache({ maxEntries: 2 });
+    cache.set('A', 'a', LONG_TTL);
+    cache.set('B', 'b', LONG_TTL);
+
+    // Overwrite A while the cache is full. Neither A nor B should be missing.
+    cache.set('A', 'a2', LONG_TTL);
+
+    expect(cache.get<string>('A')?.value).toBe('a2');
+    expect(cache.get<string>('B')?.value).toBe('b');
+  });
+
+  it('still evicts expired entries without reinserting them', () => {
+    const cache = new SimpleCache({ maxEntries: 2 });
+    cache.set('A', 'a', 100);
+    cache.set('B', 'b', LONG_TTL);
+
+    vi.setSystemTime(101);
+    // Reading an expired entry should evict it, not refresh it.
+    expect(cache.get<string>('A')).toBeUndefined();
+
+    // A is gone; B remains; inserting C and D must not have to compete with A.
+    cache.set('C', 'c', LONG_TTL);
+    cache.set('D', 'd', LONG_TTL);
+    expect(cache.get<string>('B')?.value).toBe('b');
+    expect(cache.get<string>('C')?.value).toBe('c');
+    expect(cache.get<string>('D')?.value).toBe('d');
+>>>>>>> Stashed changes
   });
 });

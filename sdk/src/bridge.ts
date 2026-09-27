@@ -235,7 +235,14 @@ export class BridgeClient {
           throw bridgeErr;
         }
 
-        return res.json() as Promise<T>;
+        try {
+          return (await res.json()) as T;
+        } catch (parseErr) {
+          throw new ServerError(
+            `${method} ${path} returned a non-JSON response (status ${res.status})`,
+            { statusCode: res.status, retryable: false, cause: parseErr },
+          );
+        }
       } catch (error) {
         // Re-wrap abort as TimeoutError
         if (
