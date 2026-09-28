@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 
 process.env.NODE_ENV = 'test';
 
-import { register, httpRequestCounter, httpRequestDuration, activeRequestsGauge, circuitBreakerState } from '../services/metrics';
+import { register, httpRequestCounter, httpRequestDuration, activeRequestsGauge, circuitBreakerState, updateCircuitBreakerMetrics } from '../services/metrics';
 
 describe('metrics service', () => {
   it('register has default metrics', async () => {
@@ -32,6 +32,12 @@ describe('metrics service', () => {
 
   it('circuitBreakerState gauge works', async () => {
     circuitBreakerState.set({ service: 'soroban' }, 0);
+    const output = await register.metrics();
+    expect(output).toContain('circuit_breaker_state');
+  });
+
+  it('updateCircuitBreakerMetrics exports breaker state to the gauge', async () => {
+    updateCircuitBreakerMetrics();
     const output = await register.metrics();
     expect(output).toContain('circuit_breaker_state');
   });

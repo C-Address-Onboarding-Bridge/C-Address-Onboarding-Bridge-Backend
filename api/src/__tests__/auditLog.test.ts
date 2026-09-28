@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { IntegrityAuditLogService, integrityAuditLog, verifyAuditChain } from '../services/auditLog';
 import { createApiKey } from '../middleware/rbacAuth';
+import { WebhookDeliveryService } from '../services/webhookDelivery';
 
 /**
  * TODO(next-bounty): the tests marked `.skip` in this file assert behaviour that
@@ -54,6 +55,38 @@ describe('IntegrityAuditLogService', () => {
     const result = verifyAuditChain(exported.entries, exported.checkpoints);
 
     expect(result.valid).toBe(true);
+  });
+});
+
+describe('webhook audit actor', () => {
+  it('records the API key id, not the raw key, as the webhook delivery actor', async () => {
+    const { rawKey, record } = createApiKey({ name: 'webhook-owner', createdBy: 'test', scopes: ['webhooks:write'] });
+
+    const registration = {
+      id: 'reg-1',
+      url: 'https://example.com/hook',
+      events: ['transfer.completed'],
+      apiKey: record.id,
+      createdAt: new Date().toISOString(),
+      active: true,
+    };
+
+    const originalFetch = global.fetch;
+    global.fetch = (async () => ({ ok: true, status: 200 } as Response)) as any;
+
+    try {
+      const service = new WebhookDeliveryService('test-secret');
+      await service.deliver(registration, 'transfer.completed', { amount: '1' });
+    } finally {
+      global.fetch = originalFetch;
+    }
+
+    const exported = integrityAuditLog.exportJson();
+    const serialized = JSON.stringify(exported);
+
+    expect(serialized).not.toContain(rawKey);
+    expect(exported.entries).toHaveLength(1);
+    expect(exported.entries[0].actor).toBe(record.id);
   });
 });
 
