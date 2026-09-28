@@ -149,7 +149,6 @@ app.use('/api', express.json({ limit: '32kb' }));
 app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
-app.use('/api', tierRateLimitMiddleware);
 
 app.get('/api/v1/deprecations', (_req, res) => {
   res.json({
@@ -163,50 +162,37 @@ app.get('/api/v1/deprecations', (_req, res) => {
 // OpenAPI spec + Swagger UI interactive docs
 app.use('/api', docsRouter);
 
-app.use('/api/v1/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
+// Tier rate limiting must run AFTER rbacAuth so req.apiKeyRecord is populated
+// and resolveTier can honor the key's configured tier (e.g. 'high' = 500/window).
+app.use('/api/v1/quote', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, quoteRouter);
 app.use('/api/telemetry', telemetryRateLimit, telemetryRouter);
-app.use('/api/v2/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
-app.use('/api/v1/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
-app.use('/api/v2/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
-app.use('/api/v1/status', rbacAuth, requireScopes('status:read'), statusRouter);
-app.use('/api/v2/status', rbacAuth, requireScopes('status:read'), statusRouter);
-app.use('/api/v1/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
-app.use('/api/v2/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
-app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
-app.use('/api/v2/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
-app.use('/api/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
-app.use('/api/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
-app.use('/api/status', rbacAuth, requireScopes('status:read'), statusRouter);
-app.use('/api/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
-app.use('/api/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
+app.use('/api/v2/quote', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, quoteRouter);
+app.use('/api/v1/fund', rbacAuth, requireScopes('fund:write'), tierRateLimitMiddleware, fundingRouter);
+app.use('/api/v2/fund', rbacAuth, requireScopes('fund:write'), tierRateLimitMiddleware, fundingRouter);
+app.use('/api/v1/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
+app.use('/api/v2/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
+app.use('/api/v1/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
+app.use('/api/v2/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
+app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
+app.use('/api/v2/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
+app.use('/api/quote', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, quoteRouter);
+app.use('/api/fund', rbacAuth, requireScopes('fund:write'), tierRateLimitMiddleware, fundingRouter);
+app.use('/api/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
+app.use('/api/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
+app.use('/api/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
 
 app.use('/api/webhook/moonpay', moonpayWebhookRouter);
 app.use('/api/webhook/transak', transakWebhookRouter);
 
-app.use('/api/v1/webhooks', rbacAuth, webhookAdminRouter);
-app.use('/api/v1/keys', rbacAuth, apiKeysRouter);
-app.use('/api/v1/transactions', rbacAuth, transactionsRouter);
-app.use('/api/v1/admin', rbacAuth, adminRouter);
+app.use('/api/v1/webhooks', rbacAuth, tierRateLimitMiddleware, webhookAdminRouter);
+app.use('/api/v1/keys', rbacAuth, tierRateLimitMiddleware, apiKeysRouter);
+app.use('/api/v1/transactions', rbacAuth, tierRateLimitMiddleware, transactionsRouter);
+app.use('/api/v1/admin', rbacAuth, tierRateLimitMiddleware, adminRouter);
 
 // Cache metrics endpoint – dedicated JSON view of cache health
-app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
+app.use('/api/v1/cache/metrics', rbacAuth, tierRateLimitMiddleware, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/api/v1/metrics', rbacAuth, metricsRouter);
+app.use('
 
-app.use(xssErrorSanitizer);
-app.use(errorHandler);
-
-const server = app.listen(config.port, () => {
-  logger.info({ port: config.port, env: config.env }, 'Server started');
-});
-
-const wss = createWebSocketServer(server);
-server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
-
-registerSignalHandlers(async () => {
-  await shutdownTracing();
-  await closePool();
-});
-
-export { app, server, wss };
+/* … truncated 579 chars — edit only what you need near the top … */
