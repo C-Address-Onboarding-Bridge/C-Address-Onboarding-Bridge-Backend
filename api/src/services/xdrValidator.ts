@@ -135,11 +135,23 @@ export function clearSeenHashes(): void {
   seenHashes.flushAll();
 }
 
-/** Returns true if the hash has been seen before; records it if not. */
-function checkAndRecordHash(txHash: string): boolean {
-  if (seenHashes.has(txHash)) return true;
+/**
+ * Returns true if the hash has already been recorded as seen. This is a pure
+ * read — it does NOT record the hash. Recording is deferred until the RPC has
+ * actually accepted the transaction (see `recordSeenHash`), so a failed
+ * submission (RPC down, TRY_AGAIN_LATER, etc.) does not poison the cache and
+ * block the client's retry of the same signed transaction.
+ */
+export function hasSeenHash(txHash: string): boolean {
+  return seenHashes.has(txHash);
+}
+
+/**
+ * Records a transaction hash as seen. Call this only after the RPC has accepted
+ * the transaction (status PENDING or DUPLICATE), never before submission.
+ */
+export function recordSeenHash(txHash: string): void {
   seenHashes.set(txHash, true);
-  return false;
 }
 
 // ── Stellar address helper ────────────────────────────────────────────────────
