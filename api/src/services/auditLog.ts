@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { getPool } from './db';
 
 export type AuditEventType =
   | 'transaction_submission'
@@ -151,10 +152,108 @@ export class IntegrityAuditLogService {
   private checkpoints: AuditCheckpoint[] = [];
   private readonly checkpointInterval: number;
   private readonly checkpointUrl?: string;
+  private initialized = false;
 
   constructor(options: { checkpointInterval?: number; checkpointUrl?: string } = {}) {
     this.checkpointInterval = options.checkpointInterval ?? Number.parseInt(process.env.AUDIT_CHECKPOINT_INTERVAL || String(DEFAULT_CHECKPOINT_INTERVAL), 10);
     this.checkpointUrl = options.checkpointUrl ?? process.env.AUDIT_CHECKPOINT_URL;
+  }
+
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+    await this.loadFromDatabase();
+    this.initialized = true;
+  }
+
+  private async loadFromDatabase(): Promise<void> {
+    const pool = getPool();
+    if (!pool) return;
+
+    try {
+      const entriesResult = await pool.query(
+        'SELECT sequence, id, timestamp, type, actor, payload, previous_hash, hash, retention_until FROM audit_log_entries ORDER BY sequence ASC',
+      );
+
+      for (const row of entriesResult.rows) {
+        const entry: AuditLogEntry = {
+          sequence: Number(row.sequence),
+          id: row.id,
+          timestamp: Number(row.created_at),
+          type: row.event_type as AuditEventType,
+          actor: row.actor,
+          payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
+          previousHash: row.previous_hash,
+          hash: row.hash,
+          retentionUntil: Number(row.retention_until),
+        };
+        this.entries.push(entry);
+      }
+
+      const checkpointsResult = await pool.query(
+        'SELECT sequence, hash, published_at, publisher, publication_ref FROM audit_log_checkpoints ORDER BY sequence ASC',
+      );
+
+      for (const row of checkpointsResult.rows) {
+        const checkpoint: AuditCheckpoint = {
+          sequence: Number(row.sequence),
+          hash: row.hash,
+          timestamp: Number(row.published_at),
+          publisher: row.publisher as 'local' | 'trusted-timestamp',
+          publicationRef: row.publication_ref,
+        };
+        this.checkpoints.push(checkpoint);
+      }
+    } catch (err) {
+      console.warn('Failed to load audit log from database:', err);
+    }
+  }
+
+  private async saveEntryToDatabase(entry: AuditLogEntry): Promise<void> {
+    const pool = getPool();
+    if (!pool) return;
+
+    try {
+      await pool.query(
+        `INSERT INTO audit_log_entries
+         (sequence, id, event_type, actor, payload, previous_hash, hash, created_at, retention_until)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          entry.sequence,
+          entry.id,
+          entry.type,
+          entry.actor,
+          JSON.stringify(entry.payload),
+          entry.previousHash,
+          entry.hash,
+          entry.timestamp,
+          entry.retentionUntil,
+        ],
+      );
+    } catch (err) {
+      console.warn('Failed to save audit entry to database:', err);
+    }
+  }
+
+  private async saveCheckpointToDatabase(checkpoint: AuditCheckpoint): Promise<void> {
+    const pool = getPool();
+    if (!pool) return;
+
+    try {
+      await pool.query(
+        `INSERT INTO audit_log_checkpoints
+         (sequence, hash, published_at, publisher, publication_ref)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          checkpoint.sequence,
+          checkpoint.hash,
+          checkpoint.timestamp,
+          checkpoint.publisher,
+          checkpoint.publicationRef,
+        ],
+      );
+    } catch (err) {
+      console.warn('Failed to save checkpoint to database:', err);
+    }
   }
 
   append(type: AuditEventType, payload: Record<string, unknown>, actor = 'system'): AuditLogEntry {
@@ -175,6 +274,7 @@ export class IntegrityAuditLogService {
     };
 
     this.entries.push(entry);
+    void this.saveEntryToDatabase(entry);
 
     if (this.checkpointInterval > 0 && entry.sequence % this.checkpointInterval === 0) {
       void this.publishCheckpoint(entry);
@@ -267,6 +367,7 @@ export class IntegrityAuditLogService {
       publicationRef,
     };
     this.checkpoints.push(checkpoint);
+    void this.saveCheckpointToDatabase(checkpoint);
     return cloneCheckpoint(checkpoint);
   }
 }
