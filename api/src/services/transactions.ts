@@ -42,6 +42,14 @@ export interface AdminAuditEntry {
   details: Record<string, unknown>;
 }
 
+export interface TransactionStats {
+  total: number;
+  byStatus: Record<TransactionStatus, number>;
+  totalVolume: string;
+  totalFees: string;
+  averageAmount: string;
+}
+
 const seededTransactions: TransactionRecord[] = [
   {
     id: 'tx_1001',

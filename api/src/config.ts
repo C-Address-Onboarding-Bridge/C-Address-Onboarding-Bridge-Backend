@@ -16,29 +16,14 @@ function requireEnv(key: string): string {
   return val;
 }
 
-/**
- * Parse the TRUST_PROXY environment variable into a value suitable for
- * `app.set('trust proxy', ...)`.
- *
- * Accepts:
- *  - a hop count, e.g. `1` or `2`
- *  - a comma-separated list of IPs/CIDRs, e.g. `10.0.0.0/8,192.168.1.1`
- *  - a boolean-ish string (`true`/`false`)
- *
- * Defaults to `false` (trust proxy disabled) so that deployments without a
- * load balancer keep using the socket address as `req.ip`.
- */
-export function parseTrustProxy(raw: string | undefined): boolean | number | string[] {
-  const value = (raw || '').trim();
-  if (!value) return false;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  if (/^\d+$/.test(value)) return parseInt(value, 10);
-  const list = value
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  return list.length > 0 ? list : false;
+function requireEnvInProduction(key: string): string {
+  const val = process.env[key];
+  if (!val && process.env.NODE_ENV === 'production') throw new ConfigError(key);
+  return val || '';
+}
+
+function isValidContractId(id: string): boolean {
+  return /^C[A-Z2-7]{55}$/.test(id);
 }
 
 /** Centralised runtime configuration derived from environment variables. */
@@ -57,7 +42,12 @@ export const config = {
       .map((u) => u.trim())
       .filter(Boolean),
     networkPassphrase: process.env.SOROBAN_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
-    bridgeContractId: process.env.BRIDGE_CONTRACT_ID || '',
+    bridgeContractId: (() => {
+      const id = requireEnvInProduction('BRIDGE_CONTRACT_ID');
+      if (!id && process.env.NODE_ENV !== 'test') return id;
+      if (id && !isValidContractId(id)) throw new ConfigError(`BRIDGE_CONTRACT_ID must be a valid Stellar contract address (C + 55 base32 chars)`);
+      return id;
+    })(),
     feeBps: parseInt(process.env.BRIDGE_FEE_BPS || '30', 10),
     rpc: {
       healthCheckIntervalMs: parseInt(process.env.RPC_HEALTH_CHECK_INTERVAL_MS || '30000', 10),
