@@ -198,14 +198,41 @@ export function recordFundingMetrics(input: FundingMetricInput): void {
   }
 }
 
+/**
+ * Set the current bridge fee rate gauge.
+ *
+ * @param bps Fee rate in basis points (1 bps = 0.01%). Must be a finite,
+ *   non-negative number; invalid values are ignored so a bad config cannot
+ *   corrupt the exported metric.
+ */
 export function setFeeRateBps(bps: number): void {
-  throw new Error('Not implemented: setFeeRateBps');
+  if (!Number.isFinite(bps) || bps < 0) {
+    return;
+  }
+  feeRateGauge.set(bps);
 }
 
 const CB_STATE_MAP: Record<string, number> = { closed: 0, open: 1, 'half-open': 2 };
 
+/**
+ * Export the current state of every registered circuit breaker to Prometheus.
+ *
+ * Each entry in `circuits` maps a service name to a breaker exposing
+ * `getState()`. The state string is translated to its numeric gauge value via
+ * {@link CB_STATE_MAP} (0=closed, 1=open, 2=half-open). Unknown states are
+ * skipped so an unexpected value cannot corrupt the exported metric.
+ *
+ * @param circuits Map of service name → circuit breaker instance.
+ */
 export function updateCircuitBreakerMetrics(circuits: Map<string, { getState(): string }>): void {
-  throw new Error('Not implemented: updateCircuitBreakerMetrics');
+  for (const [service, breaker] of circuits.entries()) {
+    const state = breaker.getState();
+    const value = CB_STATE_MAP[state];
+    if (value === undefined) {
+      continue;
+    }
+    circuitBreakerState.set({ service }, value);
+  }
 }
 
 // ─── Async Pipeline metrics ───────────────────────────────────────────────────

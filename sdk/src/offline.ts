@@ -201,15 +201,8 @@ export class OfflineQueue {
   }
 }
 
-// ─── Idempotency key generator (module-level, shared with OfflineBridgeClient) ─
-
-function generateIdempotencyKey(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+// Import shared idempotency key generator from utils
+import { generateIdempotencyKey } from './utils';
 
 export class OfflineBridgeClient extends BridgeClient {
   readonly offlineQueue: OfflineQueue;

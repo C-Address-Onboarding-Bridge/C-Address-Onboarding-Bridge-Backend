@@ -15,6 +15,7 @@ vi.mock('../logger', () => {
 });
 
 import { errorHandler, AppError } from '../middleware/error';
+import { xssErrorSanitizer } from '../middleware/security';
 
 function makeReq(): Request {
   return {} as Request;
@@ -91,5 +92,49 @@ describe('errorHandler', () => {
     errorHandler(err, req, res, vi.fn() as never);
 
     expect(vi.mocked(logger.error)).toHaveBeenCalled();
+  });
+});
+
+describe('xssErrorSanitizer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('sanitizes the error and forwards it via next instead of responding', () => {
+    const req = makeReq();
+    const { res, statusMock, jsonMock } = makeRes();
+    const next = vi.fn();
+    const err = new Error('<script>alert(1)</script>boom');
+
+    xssErrorSanitizer(err, req, res, next as never);
+
+    expect(statusMock).not.toHaveBeenCalled();
+    expect(jsonMock).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
+    const forwarded = next.mock.calls[0][0] as Error;
+    expect(forwarded).toBeInstanceOf(Error);
+    expect(forwarded.message).not.toContain('<script>');
+  });
+
+  it('forwards ZodError unchanged so errorHandler can map it to 400 validation_error', () => {
+    const req = makeReq();
+    const { res, statusMock, jsonMock } = makeRes();
+    const next = vi.fn();
+
+    const schema = z.object({ name: z.string() });
+    let err: Error | null = null;
+    try {
+      schema.parse({});
+    } catch (e) {
+      err = e as Error;
+    }
+
+    expect(err).toBeInstanceOf(ZodError);
+    xssErrorSanitizer(err as Error, req, res, next as never);
+
+    expect(statusMock).not.toHaveBeenCalled();
+    expect(jsonMock).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(next.mock.calls[0][0]).toBe(err);
   });
 });

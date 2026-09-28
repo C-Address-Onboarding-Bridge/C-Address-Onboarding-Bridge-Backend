@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
-import { logger } from '../index';
+import { logger } from '../logger';
+import { getCacheClient } from '../services/cache';
 import { maskHeaders } from './logging';
 
 export interface WebhookVerifier {
@@ -9,14 +10,6 @@ export interface WebhookVerifier {
 }
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000;
-const replayNonces = new Map<string, number>();
-
-function purgeExpiredNonces(): void {
-  const cutoff = Date.now() - REPLAY_WINDOW_MS;
-  for (const [nonce, ts] of replayNonces) {
-    if (ts < cutoff) replayNonces.delete(nonce);
-  }
-}
 
 function hmacSha256Base64(secret: string, payload: string): string {
   return crypto.createHmac('sha256', secret).update(payload, 'utf8').digest('base64');
@@ -32,10 +25,25 @@ function timingSafeCompare(a: string, b: string): boolean {
 }
 
 export const moonpayVerifier: WebhookVerifier = {
-  headerName: 'x-moonpay-signature',
+  headerName: 'moonpay-signature-v2',
   verify(payload, signature, secret) {
-    const expected = hmacSha256Base64(secret, payload);
-    return timingSafeCompare(expected, signature);
+    const signaturePart = signature.split(',').find((part) => part.startsWith('s='));
+    if (!signaturePart) return false;
+
+    const s = signaturePart.slice(2);
+    const tPart = signature.split(',').find((part) => part.startsWith('t='));
+    if (!tPart) return false;
+
+    const t = tPart.slice(2);
+    const timestamp = parseInt(t, 10);
+    const now = Date.now();
+    const age = now - timestamp * 1000;
+
+    if (age > REPLAY_WINDOW_MS || age < -30_000) return false;
+
+    const signedPayload = `${t}.${payload}`;
+    const expected = hmacSha256Base64(secret, signedPayload);
+    return timingSafeCompare(expected, s);
   },
 };
 
@@ -58,19 +66,26 @@ export function registerWebhookVerifier(provider: string, verifier: WebhookVerif
   VERIFIERS[provider] = { verifier, secret };
 }
 
-const failedAttempts = new Map<string, { count: number; windowStart: number }>();
-const FAIL_WINDOW_MS = 60_000;
-const FAIL_LIMIT = 10;
-
-function recordFailedAttempt(ip: string): boolean {
-  const now = Date.now();
-  const entry = failedAttempts.get(ip);
-  if (!entry || now - entry.windowStart > FAIL_WINDOW_MS) {
-    failedAttempts.set(ip, { count: 1, windowStart: now });
+async function checkReplaySignature(provider: string, signature: string): Promise<boolean> {
+  const redis = getCacheClient();
+  if (!redis) {
+    logger.warn({ provider }, 'redis not configured, replay detection disabled');
     return false;
   }
-  entry.count++;
-  return entry.count > FAIL_LIMIT;
+
+  const key = `webhook:replay:${provider}:${crypto.createHash('sha256').update(signature).digest('hex')}`;
+  const ttlSeconds = Math.ceil(REPLAY_WINDOW_MS / 1000);
+
+  try {
+    const exists = await redis.get(key);
+    if (exists) return true;
+
+    await redis.setex(key, ttlSeconds, '1');
+    return false;
+  } catch (err) {
+    logger.warn({ provider, err }, 'replay check failed, allowing webhook');
+    return false;
+  }
 }
 
 function buildWebhookVerifier(provider: string) {
@@ -96,47 +111,25 @@ function buildWebhookVerifier(provider: string) {
 
     const payload = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
 
-    // Timestamp validation: Transak embeds timestamp in payload JSON; extract if present
-    try {
-      const parsed = JSON.parse(payload) as Record<string, unknown>;
-      const ts = parsed.webhookTimestamp ?? parsed.timestamp ?? parsed.createdAt;
-      if (ts && typeof ts === 'number') {
-        const age = Date.now() - ts;
-        if (age > REPLAY_WINDOW_MS || age < -30_000) {
-          logger.warn({ ip, provider, ts, age }, 'webhook timestamp outside acceptable window');
-          res.status(401).json({ error: 'unauthorized', message: 'webhook timestamp expired or invalid' });
-          return;
-        }
-      }
-    } catch {
-      // not JSON or no timestamp — proceed to HMAC check
-    }
-
-    // Replay attack prevention using signature as nonce
-    purgeExpiredNonces();
-    if (replayNonces.has(signature)) {
-      logger.warn({ ip, provider, path: req.path }, 'webhook replay detected');
-      res.status(401).json({ error: 'unauthorized', message: 'webhook already processed' });
-      return;
-    }
-
     const valid = verifier.verify(payload, signature, secret);
     if (!valid) {
-      const blocked = recordFailedAttempt(ip);
       logger.warn(
-        { ip, provider, path: req.path, userAgent: req.headers['user-agent'], blocked },
+        { ip, provider, path: req.path, userAgent: req.headers['user-agent'] },
         'webhook signature verification failed',
       );
-      if (blocked) {
-        res.status(429).json({ error: 'rate_limited', message: 'too many failed verification attempts' });
-        return;
-      }
       res.status(401).json({ error: 'unauthorized', message: 'invalid webhook signature' });
       return;
     }
 
-    replayNonces.set(signature, Date.now());
-    next();
+    (async () => {
+      const isReplay = await checkReplaySignature(provider, signature);
+      if (isReplay) {
+        logger.warn({ ip, provider, path: req.path }, 'webhook replay detected');
+        res.status(401).json({ error: 'unauthorized', message: 'webhook already processed' });
+        return;
+      }
+      next();
+    })().catch(() => next());
   };
 }
 

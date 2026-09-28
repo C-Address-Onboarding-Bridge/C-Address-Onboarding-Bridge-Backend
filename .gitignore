@@ -44,6 +44,10 @@ test-results/
 deployments/*.json
 deployments/blue-green-state.txt
 
+# Migration state (legacy file-based state — superseded by schema_migrations table)
+.migration-state.json
+*.migration-state.json
+
 # Reports
 reports/
 
