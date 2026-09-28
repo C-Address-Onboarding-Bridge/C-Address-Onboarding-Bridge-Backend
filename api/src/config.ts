@@ -16,17 +16,38 @@ function requireEnv(key: string): string {
   return val;
 }
 
+function requireEnvInProduction(key: string): string {
+  const val = process.env[key];
+  if (!val && process.env.NODE_ENV === 'production') throw new ConfigError(key);
+  return val || '';
+}
+
+function isValidContractId(id: string): boolean {
+  return /^C[A-Z2-7]{55}$/.test(id);
+}
+
 /** Centralised runtime configuration derived from environment variables. */
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   host: process.env.HOST || '0.0.0.0',
+  /**
+   * Express `trust proxy` setting. Controls how `req.ip` is derived when the
+   * API sits behind a load balancer / reverse proxy. Without this, IP
+   * allowlists, IP rate limits and IP bans all key off the proxy address.
+   */
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   soroban: {
     rpcUrls: (process.env.SOROBAN_RPC_URLS || process.env.SOROBAN_RPC_URL || 'https://soroban-rpc.testnet.stellar.org')
       .split(',')
       .map((u) => u.trim())
       .filter(Boolean),
     networkPassphrase: process.env.SOROBAN_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
-    bridgeContractId: process.env.BRIDGE_CONTRACT_ID || '',
+    bridgeContractId: (() => {
+      const id = requireEnvInProduction('BRIDGE_CONTRACT_ID');
+      if (!id && process.env.NODE_ENV !== 'test') return id;
+      if (id && !isValidContractId(id)) throw new ConfigError(`BRIDGE_CONTRACT_ID must be a valid Stellar contract address (C + 55 base32 chars)`);
+      return id;
+    })(),
     feeBps: parseInt(process.env.BRIDGE_FEE_BPS || '30', 10),
     rpc: {
       healthCheckIntervalMs: parseInt(process.env.RPC_HEALTH_CHECK_INTERVAL_MS || '30000', 10),
@@ -165,9 +186,6 @@ export const config = {
      */
     backpressureThreshold: parseInt(process.env.ASYNC_BACKPRESSURE_THRESHOLD || '1000', 10),
     /**
-     * How long (ms) the in-process analytics buffer accumulates events before
-     * flushing them as a single batched BullMQ job.
-     */
-    bufferFlushMs: parseInt(process.env.ASYNC_BUFFER_FLUSH_MS || '100', 10),
-  },
-};
+     * How long (ms) the in-process analytics buffer accumulate
+
+/* … truncated 162 chars — edit only what you need near the top … */

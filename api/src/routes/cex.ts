@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { C_ADDRESS_REGEX } from '../utils/constants';
 import { cexService } from '../services/cex';
 import { exchangeRoutingCount } from '../services/metrics';
-import { buildCacheKey, CACHE_TTL, getOrCompute, cacheDel } from '../services/cache';
 
 /** Express router for CEX withdrawal routing. Mounted at `/api/v1/cex`. */
 export const cexRouter = Router();
@@ -66,41 +65,73 @@ const routeSchema = z.object({
   memo: z.string().max(64).optional(),
 });
 
+/**
+ * In-flight idempotency registry for withdrawal requests.
+ *
+ * Withdrawals are mutating operations and MUST NOT be served from a shared
+ * response cache: a cache keyed only on the routing inputs would (a) return a
+ * stale result for a second legitimate withdrawal with identical parameters
+ * within the TTL and (b) leak one tenant's withdrawal id to another API key
+ * sending the same parameters. Instead we de-duplicate only *concurrent*
+ * identical requests from the same caller, and drop the entry as soon as the
+ * exchange call settles so subsequent requests always hit the exchange.
+ */
+const inFlightWithdrawals = new Map<string, Promise<Awaited<ReturnType<typeof cexService.routeWithdrawal>>>>();
+
+/**
+ * Build an idempotency key scoped to the authenticated caller so that two
+ * different API keys can never observe each other's withdrawal results.
+ */
+function buildIdempotencyKey(req: Request, body: z.infer<typeof routeSchema>): string {
+  const anyReq = req as Request & {
+    apiKey?: { id?: unknown; key?: unknown };
+    auth?: { apiKeyId?: unknown; id?: unknown };
+  };
+  const caller =
+    anyReq.apiKey?.id ??
+    anyReq.apiKey?.key ??
+    anyReq.auth?.apiKeyId ??
+    anyReq.auth?.id ??
+    'anonymous';
+  return [
+    String(caller),
+    body.exchange,
+    body.sourceAsset,
+    body.amount,
+    body.targetCAddress,
+    body.targetNetwork,
+  ].join(':');
+}
+
 cexRouter.post('/route', requireCexWithdrawScope, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = routeSchema.parse(req.body);
 
-    // Cache key covers all deterministic routing inputs; memo is intentionally
-    // excluded because it is a caller-supplied label that doesn't affect routing.
-    const cacheKey = buildCacheKey(
-      'cex',
-      `${body.exchange}:${body.sourceAsset}:${body.amount}:${body.targetCAddress}:${body.targetNetwork}`,
-    );
+    const idempotencyKey = buildIdempotencyKey(req, body);
+
+    // De-duplicate only concurrent identical requests from the same caller.
+    // The entry is removed once the exchange call settles, so a later
+    // legitimate withdrawal with the same parameters is always re-executed.
+    let pending = inFlightWithdrawals.get(idempotencyKey);
+    if (!pending) {
+      pending = cexService.routeWithdrawal(body);
+      inFlightWithdrawals.set(idempotencyKey, pending);
+      pending.finally(() => {
+        inFlightWithdrawals.delete(idempotencyKey);
+      });
+    }
+
+    const result = await pending;
 
     // routeWithdrawal can resolve with {status: 'failed', ...} when the exchange API fails.
-    // We only cache successful results to avoid poisoning the cache with transient failures.
-    const result = await getOrCompute(
-      cacheKey,
-      CACHE_TTL.cex,
-      () => cexService.routeWithdrawal(body),
-    );
-
-    // If the result indicates failure, don't use the cached value and retry next time.
+    // Surface that as a 502 so callers don't treat a failed withdrawal as created.
     if (result.status === 'failed') {
-      // Clear this cache entry so the next request will retry the exchange API.
-      // Use setImmediate to avoid blocking the response.
-      setImmediate(() => {
-        cacheDel(cacheKey).catch(() => {
-          // Errors in cache deletion don't affect the client response.
-        });
-      });
       exchangeRoutingCount.inc({ exchange: body.exchange, status: 'failed' });
-      res.status(201).json(result);
+      res.status(502).json(result);
       return;
     }
 
     exchangeRoutingCount.inc({ exchange: body.exchange, status: 'success' });
-    res.setHeader('X-Cache', res.getHeader('X-Cache') ?? 'MISS');
     res.status(201).json(result);
   } catch (err) {
     const exchange = (req.body as { exchange?: string })?.exchange ?? 'unknown';
