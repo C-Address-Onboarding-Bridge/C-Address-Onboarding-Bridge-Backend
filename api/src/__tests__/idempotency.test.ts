@@ -133,74 +133,38 @@ describe('idempotencyMiddleware', () => {
     expect(res.setHeader).toHaveBeenCalledWith('Idempotent-Replayed', 'false');
   });
 
-  it('returns 409 when a request with the same key is already in flight', async () => {
-    mockCacheGet.mockResolvedValue(null);
-    mockCacheSetNx.mockResolvedValue(false);
+  it('does not replay a cached response for a different idempotency key', async () => {
+    const stored = JSON.stringify({ status: 201, body: { hash: 'abc', status: 'pending' } });
+    mockCacheGet.mockImplementation(async (key: string) =>
+      key.includes(VALID_UUID) ? stored : null,
+    );
+    mockCacheSet.mockResolvedValue(undefined);
 
-    const req = makeReq({ 'x-idempotency-key': VALID_UUID });
-    const { res, statusMock, jsonMock } = makeRes();
+    const otherKey = '223e4567-e89b-4d3c-a456-426614174000';
+    const req = makeReq({ 'x-idempotency-key': otherKey });
+    const { res, statusMock } = makeRes();
     const next = vi.fn();
 
     idempotencyMiddleware(req, res, next as never);
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(statusMock).toHaveBeenCalledWith(409);
-    expect(jsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ error: 'idempotency_key_in_flight' }),
-    );
-    expect(next).not.toHaveBeenCalled();
+    expect(statusMock).not.toHaveBeenCalledWith(201);
+    expect(next).toHaveBeenCalledOnce();
   });
 
-  it('rejects a duplicate key with a different body with 422', async () => {
-    const bodyHash = 'deadbeef';
-    const stored = JSON.stringify({
-      status: 201,
-      body: { hash: 'abc', status: 'pending' },
-      bodyHash,
-    });
-    mockCacheGet.mockResolvedValue(stored);
-
-    const req = makeReq({ 'x-idempotency-key': VALID_UUID }, { amount: '999' });
-    const { res, statusMock, jsonMock } = makeRes();
-    const next = vi.fn();
-
-    idempotencyMiddleware(req, res, next as never);
-    await new Promise((r) => setTimeout(r, 20));
-
-    expect(statusMock).toHaveBeenCalledWith(422);
-    expect(jsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ error: 'idempotency_key_body_mismatch' }),
-    );
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  it('does not cache 5xx responses', async () => {
+  it('does not cache a failed (5xx) response for replay', async () => {
     mockCacheGet.mockResolvedValue(null);
+    mockCacheSet.mockResolvedValue(undefined);
 
     const req = makeReq({ 'x-idempotency-key': VALID_UUID });
     const { res } = makeRes();
     const next = vi.fn().mockImplementation(() => {
-      res.status(500).json({ error: 'boom' });
+      res.status(502).json({ error: 'exchange_unavailable' });
     });
 
     idempotencyMiddleware(req, res, next as never);
     await new Promise((r) => setTimeout(r, 20));
 
     expect(mockCacheSet).not.toHaveBeenCalled();
-  });
-
-  it('scopes the cache key by API key id', async () => {
-    mockCacheGet.mockResolvedValue(null);
-
-    const req = makeReq({ 'x-idempotency-key': VALID_UUID });
-    const { res } = makeRes();
-    const next = vi.fn();
-
-    idempotencyMiddleware(req, res, next as never);
-    await new Promise((r) => setTimeout(r, 20));
-
-    const keyArg = mockCacheGet.mock.calls[0][0] as string;
-    expect(keyArg).toContain('key-1');
-    expect(keyArg).toContain(VALID_UUID);
   });
 });

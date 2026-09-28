@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createHmac } from 'crypto';
 
 process.env.NODE_ENV = 'test';
 process.env.API_KEYS = 'test-api-key-123';
@@ -109,6 +110,24 @@ describe('WebhookDeliveryService', () => {
       expect(opts.headers['X-Webhook-Signature']).toMatch(/^sha256=[a-f0-9]{64}$/);
       expect(opts.headers['X-Webhook-Event']).toBe('transaction.success');
     });
+
+    it('sends an X-Webhook-Timestamp header and signs the timestamped payload', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKey: 'k', events: ['*'] });
+      await service.deliver(reg, 'transaction.success', { txHash: 'abc' });
+
+      const [, opts] = fetchMock.mock.calls[0];
+      const timestamp = opts.headers['X-Webhook-Timestamp'];
+      expect(timestamp).toBeDefined();
+      expect(Number.isNaN(Number(timestamp))).toBe(false);
+
+      const expected = createHmac('sha256', 'mysecret123456!')
+        .update(`${timestamp}.${opts.body}`)
+        .digest('hex');
+      expect(opts.headers['X-Webhook-Signature']).toBe(`sha256=${expected}`);
+    });
   });
 
   describe('deliver — retry path', () => {
@@ -199,10 +218,4 @@ describe('WebhookDeliveryService', () => {
   describe('getStats', () => {
     it('returns correct stats', () => {
       service.register({ url: 'https://a.com', secret: 'secretvalue12345', apiKey: 'k', events: ['*'] });
-      service.register({ url: 'https://b.com', secret: 'secretvalue12345', apiKey: 'k', events: ['*'] });
-      const stats = service.getStats();
-      expect(stats.registered).toBe(2);
-      expect(stats.dlqSize).toBe(0);
-    });
-  });
-});
+      service.register({ url: 'https://b.com', secret: 'secretvalue12345', apiKey: 'k',

@@ -224,17 +224,15 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
         nonce,
       }).toString();
 
-      const sha256Hash = crypto.createHash('sha256').update(nonce + body).digest();
-      const message = Buffer.concat([Buffer.from(path), sha256Hash]);
       const signature = crypto
-        .createHmac('sha512', Buffer.from(config.apiSecret ?? '', 'base64'))
-        .update(message)
+        .createHmac('sha256', Buffer.from(config.apiSecret ?? '', 'base64'))
+        .update(path + crypto.createHash('sha256').update(nonce + body).digest())
         .digest('base64');
 
       const res = await postToExchange(`${config.apiBaseUrl}${path}`, {
-        'Content-Type': 'application/x-www-form-urlencoded',
         'API-Key': config.apiKey ?? '',
         'API-Sign': signature,
+        'Content-Type': 'application/x-www-form-urlencoded',
       }, body);
 
       if (!res.ok) {
