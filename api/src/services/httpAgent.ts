@@ -3,7 +3,7 @@ import https from 'https';
 import { Gauge } from 'prom-client';
 import { SorobanRpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
-import { logger } from '../index';
+import { logger } from '../logger';
 import { register } from './metrics';
 
 /**

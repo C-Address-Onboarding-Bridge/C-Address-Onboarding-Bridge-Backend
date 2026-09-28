@@ -992,6 +992,7 @@ dependencies = [
 name = "onboarding-bridge-fuzz"
 version = "0.0.1"
 dependencies = [
+ "getrandom",
  "onboarding-bridge",
  "soroban-sdk",
 ]

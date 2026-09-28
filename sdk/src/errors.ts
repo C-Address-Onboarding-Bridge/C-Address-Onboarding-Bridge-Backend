@@ -1,12 +1,30 @@
-// TODO(next-bounty): localisation is disabled. `src/i18n/` ships the catalogs
-// (en/es/zh/ja/ko/fr/pt), the MessageKey/MessageParams types and a passing
-// catalog test suite, but the `translate()` runtime that looks a key up and
-// interpolates `{{param}}` was never written -- it does not exist anywhere in
-// this repo's history. Every message below is the exact `en` catalog string
-// inlined verbatim, so nothing here is invented and nothing is lost: restore
-// `translate(options?.locale, '<key>', { ... })` at each call site once the
-// function exists. The `locale` option is still accepted and simply ignored.
-import type { SupportedLocale } from './i18n/types';
+import type { SupportedLocale, MessageKey, MessageParams } from './i18n/types';
+import { MESSAGE_CATALOGS, SUPPORTED_LOCALES } from './i18n';
+
+// ─── Localization ─────────────────────────────────────────────────────────────
+
+/** Translate a message key to a localized string with parameter interpolation. */
+export function translate<K extends MessageKey>(
+  locale: SupportedLocale | undefined,
+  key: K,
+  params?: MessageParams[K],
+): string {
+  const resolvedLocale = locale && SUPPORTED_LOCALES.includes(locale) ? locale : 'en';
+  const catalog = MESSAGE_CATALOGS[resolvedLocale];
+  let message = catalog[key] ?? MESSAGE_CATALOGS.en[key] ?? key;
+
+  if (params) {
+    for (const [param, value] of Object.entries(params)) {
+      message = message.replace(new RegExp(`{{${param}}}`, 'g'), String(value));
+    }
+  }
+
+  return message;
+}
+
+// Re-export for public API
+export { MESSAGE_CATALOGS, SUPPORTED_LOCALES };
+export type { SupportedLocale, MessageKey, MessageParams };
 
 // ─── Base ─────────────────────────────────────────────────────────────────────
 
@@ -77,9 +95,25 @@ export class RateLimitError extends BridgeError {
 export class ServerError extends BridgeError {
   override readonly type = 'ServerError' as const;
 
+<<<<<<< Updated upstream
   constructor(message?: string, options?: { statusCode?: number; code?: string; cause?: unknown; locale?: SupportedLocale }) {
     const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
     super(resolvedMessage, { statusCode: options?.statusCode ?? 500, code: options?.code, retryable: true, cause: options?.cause });
+=======
+  /**
+   * @param options.retryable Override the default retryability. Defaults to
+   *   `true` for ordinary 5xx responses. Set to `false` when the server fault
+   *   is non-transient — e.g. a malformed success body that would fail on every
+   *   retry — so the client does not re-send the request.
+   */
+  constructor(message: string, options?: { statusCode?: number; code?: string; retryable?: boolean; cause?: unknown }) {
+    super(message, {
+      statusCode: options?.statusCode ?? 500,
+      code: options?.code,
+      retryable: options?.retryable ?? true,
+      cause: options?.cause,
+    });
+>>>>>>> Stashed changes
     this.name = 'ServerError';
   }
 }
@@ -197,29 +231,29 @@ export function isAuthError(err: unknown): err is AuthError {
 }
 
 export function isValidationError(err: unknown): err is ValidationError {
-  throw new Error('Not implemented: isValidationError');
+  return err instanceof ValidationError;
 }
 
 export function isRateLimitError(err: unknown): err is RateLimitError {
-  throw new Error('Not implemented: isRateLimitError');
+  return err instanceof RateLimitError;
 }
 
 export function isServerError(err: unknown): err is ServerError {
-  throw new Error('Not implemented: isServerError');
+  return err instanceof ServerError;
 }
 
 export function isNetworkError(err: unknown): err is NetworkError {
-  throw new Error('Not implemented: isNetworkError');
+  return err instanceof NetworkError;
 }
 
 export function isTimeoutError(err: unknown): err is TimeoutError {
-  throw new Error('Not implemented: isTimeoutError');
+  return err instanceof TimeoutError;
 }
 
 export function isNotFoundError(err: unknown): err is NotFoundError {
-  throw new Error('Not implemented: isNotFoundError');
+  return err instanceof NotFoundError;
 }
 
 export function isBridgeError(err: unknown): err is BridgeError {
-  throw new Error('Not implemented: isBridgeError');
+  return err instanceof BridgeError;
 }

@@ -1,5 +1,6 @@
 import { Token, TokenMetadata } from './types';
 import { ValidationError } from './errors';
+import { StrKey } from 'stellar-sdk';
 
 // ─── Token Type Guards ────────────────────────────────────────────────────────
 
@@ -17,29 +18,48 @@ export function isSacToken(token: Token): token is { type: 'sac'; contractId: st
 
 /** Returns `true` if the string is a valid SAC token contract address (C-address). */
 export function isSacTokenAddress(address: string): boolean {
-  throw new Error('Not implemented: isSacTokenAddress');
+  return StrKey.isValidContract(address);
 }
 
 /** Validates a SAC token address and throws a typed error if invalid. */
 export function validateSacTokenAddress(address: string): void {
-  throw new Error('Not implemented: validateSacTokenAddress');
+  if (!isSacTokenAddress(address)) {
+    throw new ValidationError('Invalid SAC token address', {
+      contractId: `Must be a valid contract address (C-address), got: ${address}`,
+    });
+  }
 }
 
 /** Returns `true` if the string is a valid token identifier (either `"native"` or a C-address). */
 export function isValidTokenIdentifier(identifier: string): boolean {
-  throw new Error('Not implemented: isValidTokenIdentifier');
+  return identifier === 'native' || isSacTokenAddress(identifier);
 }
 
 // ─── Token Serialization ────────────────────────────────────────────────────
 
 /** Serializes a Token into the format expected by the bridge API. */
 export function tokenToSourceAsset(token: Token): string {
-  throw new Error('Not implemented: tokenToSourceAsset');
+  if (isNativeToken(token)) {
+    return 'native';
+  }
+  if (isSacToken(token)) {
+    return token.contractId;
+  }
+  throw new Error(`Unknown token type: ${(token as any).type}`);
 }
 
 /** Derives a Token from legacy string parameters. Defaults to native XLM. */
 export function tokenFromLegacy(tokenAddress?: string, sourceAsset?: string): Token {
-  throw new Error('Not implemented: tokenFromLegacy');
+  // Use tokenAddress if provided and valid, fall back to sourceAsset, then native
+  const identifier = tokenAddress || sourceAsset;
+
+  if (!identifier || identifier === 'native') {
+    return { type: 'native' };
+  }
+
+  // Validate and return as SAC token
+  validateSacTokenAddress(identifier);
+  return { type: 'sac', contractId: identifier };
 }
 
 // ─── Amount Formatting / Parsing ──────────────────────────────────────────────
@@ -52,7 +72,14 @@ export function tokenFromLegacy(tokenAddress?: string, sourceAsset?: string): To
  * @returns Human-readable amount (e.g. `"1.000000"`).
  */
 export function formatTokenAmount(amount: string, decimals: number): string {
-  throw new Error('Not implemented: formatTokenAmount');
+  // Handle zero case
+  if (amount === '0') return '0';
+
+  const padded = amount.padStart(decimals + 1, '0');
+  const integerPart = padded.slice(0, -decimals) || '0';
+  const fractionalPart = padded.slice(-decimals);
+
+  return `${integerPart}.${fractionalPart}`;
 }
 
 /**
@@ -63,7 +90,11 @@ export function formatTokenAmount(amount: string, decimals: number): string {
  * @returns Raw integer amount as a string (e.g. `"1500000"` for 6 decimals).
  */
 export function parseTokenAmount(amount: string, decimals: number): string {
-  throw new Error('Not implemented: parseTokenAmount');
+  const parts = amount.split('.');
+  const integerPart = parts[0] || '0';
+  const fractionalPart = (parts[1] || '').padEnd(decimals, '0').slice(0, decimals);
+
+  return (integerPart + fractionalPart).replace(/^0+(?=.)/, '');
 }
 
 /**
@@ -72,5 +103,9 @@ export function parseTokenAmount(amount: string, decimals: number): string {
  * but should be queried via `getTokenMetadata` for accuracy.
  */
 export function getDefaultDecimals(token: Token): number {
-  throw new Error('Not implemented: getDefaultDecimals');
+  if (isNativeToken(token)) {
+    return 7; // XLM stroops
+  }
+  // SAC tokens default to 6 (USDC-like)
+  return 6;
 }

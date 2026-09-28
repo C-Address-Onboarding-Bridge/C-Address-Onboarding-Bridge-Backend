@@ -28,7 +28,7 @@ import { CircuitBreaker } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
 import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
-// import { setFeeRateBps } from './services/metrics'; // see TODO below
+import { setFeeRateBps, updateCircuitBreakerMetrics } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
@@ -39,6 +39,7 @@ import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
 import { createWebSocketServer, handleUpgrade } from './services/websocket';
+import { integrityAuditLog } from './services/auditLog';
 import { cacheMetricsRouter } from './routes/cacheMetrics';
 
 export { logger } from './logger';
@@ -57,23 +58,33 @@ if (config.apiKeys.length > 0) {
   seedLegacyKeys(config.apiKeys);
 }
 
-// TODO(next-bounty): setFeeRateBps() in services/metrics.ts is a
-// `throw new Error('Not implemented')` stub, and this call runs at import time --
-// so requiring this module threw, the server could not boot, and every test that
-// imports the app failed to load. Restore once the metric is implemented.
-// setFeeRateBps(config.soroban.feeBps);
+setFeeRateBps(config.soroban.feeBps);
 
 const app = express();
 
 app.set('logger', logger);
 
+// Trust the configured reverse proxy so req.ip reflects the real client
+// (X-Forwarded-For) instead of the load balancer. Without this, IP allowlists,
+// IP rate limits, IP bans and webhook failure tracking all key off the proxy.
+app.set('trust proxy', config.trustProxy);
+
 app.use(helmet());
 app.use(
   cors({
-    origin: config.corsOrigins.length > 0 ? config.corsOrigins : '*',
+    // #655: Safe default: no origins allowed when CORS_ORIGINS not set.
+    // Only allow specified origins; never default to '*' (all origins).
+    origin: config.corsOrigins.length > 0 ? config.corsOrigins : false,
     methods: ['GET', 'POST', 'DELETE', 'PATCH'],
   })
 );
+
+// Log the effective CORS policy at startup for debugging and security audits
+if (config.corsOrigins.length === 0) {
+  logger.warn('CORS: No origins configured. Cross-origin requests from browsers will be blocked.');
+} else {
+  logger.info(`CORS: Allowed origins: ${config.corsOrigins.join(', ')}`);
+}
 
 app.use(compressionMiddleware);
 app.use(versionCompatibility);
@@ -91,9 +102,7 @@ app.use((req, res, next) => {
     const labels = { method: req.method, path: route, status: String(res.statusCode) };
     httpRequestCounter.inc(labels);
     httpRequestDuration.observe(labels, (Date.now() - start) / 1000);
-    // TODO(next-bounty): updateCircuitBreakerMetrics() is still a stub that throws.
-    // It runs in every response's 'finish' handler, so it failed every request.
-    // updateCircuitBreakerMetrics(circuitBreakers);
+    updateCircuitBreakerMetrics(circuitBreakers);
   });
   next();
 });
@@ -111,9 +120,11 @@ app.get('/health', async (_req, res) => {
   }
 
   const health = await getHealthStatus();
-  const statusCode = health.status === 'unhealthy' ? 503 : health.status === 'degraded' ? 207 : 200;
+  // #659: Return 200 for degraded (not 207 WebDAV status). Only 503 for unhealthy.
+  const statusCode = health.status === 'unhealthy' ? 503 : 200;
 
   res.status(statusCode).json({
+    status: health.status,
     ...health,
     circuits,
     cache: { redis: isRedisEnabled(), metrics: getCacheMetrics() },
@@ -145,74 +156,51 @@ app.use(loggingMiddleware);
 app.use('/api/webhook', express.text({ type: '*/*' }));
 app.use('/api', express.json({ limit: '32kb' }));
 
+// suspiciousRateLimiting is mounted exactly once here. It only counts requests
+// that actually tripped a detector (see middleware/security.ts), so normal
+// traffic is never throttled.
 app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
 // Issue #673: Verify request signing headers
 app.use('/api', requestSigningMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
-app.use('/api', tierRateLimitMiddleware);
 
-app.get('/api/v1/deprecations', (_req, res) => {
-  res.json({
-    version: 'v1',
-    deprecated: true,
-    sunset: '2027-12-31',
-    features: ['legacy quote endpoints', 'legacy funding routing', 'legacy status polling'],
-  });
-});
+// #660: Removed misleading deprecation endpoint — v1 and v2 are identical until one diverges
 
 // OpenAPI spec + Swagger UI interactive docs
 app.use('/api', docsRouter);
 
-app.use('/api/v1/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
+// Tier rate limiting must run AFTER rbacAuth so req.apiKeyRecord is populated
+// and resolveTier can honor the key's configured tier (e.g. 'high' = 500/window).
+app.use('/api/v1/quote', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, quoteRouter);
 app.use('/api/telemetry', telemetryRateLimit, telemetryRouter);
-app.use('/api/v2/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
-app.use('/api/v1/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
-app.use('/api/v2/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
-app.use('/api/v1/status', rbacAuth, requireScopes('status:read'), statusRouter);
-app.use('/api/v2/status', rbacAuth, requireScopes('status:read'), statusRouter);
-app.use('/api/v1/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
-app.use('/api/v2/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
-app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
-app.use('/api/v2/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
-// Issue #672: Token metadata endpoint
-app.use('/api/v1/token', rbacAuth, requireScopes('quote:read'), tokenRouter);
-app.use('/api/v2/token', rbacAuth, requireScopes('quote:read'), tokenRouter);
-app.use('/api/quote', rbacAuth, requireScopes('quote:read'), quoteRouter);
-app.use('/api/fund', rbacAuth, requireScopes('fund:write'), fundingRouter);
-app.use('/api/status', rbacAuth, requireScopes('status:read'), statusRouter);
-app.use('/api/offramp', rbacAuth, requireScopes('offramp:write'), offrampRouter);
-app.use('/api/cex', rbacAuth, requireScopes('cex:read'), cexRouter);
+app.use('/api/v2/quote', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, quoteRouter);
+app.use('/api/v1/fund', rbacAuth, requireScopes('fund:write'), tierRateLimitMiddleware, fundingRouter);
+app.use('/api/v2/fund', rbacAuth, requireScopes('fund:write'), tierRateLimitMiddleware, fundingRouter);
+app.use('/api/v1/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
+app.use('/api/v2/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
+app.use('/api/v1/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
+app.use('/api/v2/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
+app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
+app.use('/api/v2/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
+app.use('/api/quote', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, quoteRouter);
+app.use('/api/fund', rbacAuth, requireScopes('fund:write'), tierRateLimitMiddleware, fundingRouter);
+app.use('/api/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
+app.use('/api/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
+app.use('/api/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
 
 app.use('/api/webhook/moonpay', moonpayWebhookRouter);
 app.use('/api/webhook/transak', transakWebhookRouter);
 
-app.use('/api/v1/webhooks', rbacAuth, webhookAdminRouter);
-app.use('/api/v1/keys', rbacAuth, apiKeysRouter);
-app.use('/api/v1/transactions', rbacAuth, transactionsRouter);
-app.use('/api/v1/admin', rbacAuth, adminRouter);
+app.use('/api/v1/webhooks', rbacAuth, tierRateLimitMiddleware, webhookAdminRouter);
+app.use('/api/v1/keys', rbacAuth, tierRateLimitMiddleware, apiKeysRouter);
+app.use('/api/v1/transactions', rbacAuth, tierRateLimitMiddleware, transactionsRouter);
+app.use('/api/v1/admin', rbacAuth, tierRateLimitMiddleware, adminRouter);
 
 // Cache metrics endpoint – dedicated JSON view of cache health
-app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
+app.use('/api/v1/cache/metrics', rbacAuth, tierRateLimitMiddleware, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/metrics', rbacAuth, metricsRouter);
+app.use('
 
-// Bull Board queue dashboard — admin-only, must be mounted before the error handler
-app.use('/admin/queues', rbacAuth, requireScopes('admin:write'), adminRouter);
-
-app.use(errorHandler);
-
-const server = app.listen(config.port, () => {
-  logger.info({ port: config.port }, 'API server listening');
-});
-
-const wss = createWebSocketServer(server);
-server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
-
-registerSignalHandlers(async () => {
-  await closePool();
-  await shutdownTracing();
-});
-
-export default app;
+/* … truncated 579 chars — edit only what you need near the top … */
