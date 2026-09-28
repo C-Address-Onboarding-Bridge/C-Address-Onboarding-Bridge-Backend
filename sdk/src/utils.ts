@@ -52,7 +52,9 @@ function validateFeeBps(feeBps: number): void {
  * @throws {ValidationError} If `feeBps` is not an integer, or is outside `[0, 10000]`.
  */
 export function calculateFee(amount: bigint, feeBps: number): bigint {
-  throw new Error('Not implemented: calculateFee');
+  // #665: Validate feeBps and calculate fee with truncation
+  validateFeeBps(feeBps);
+  return (amount * BigInt(feeBps)) / BigInt(10000);
 }
 
 /**
@@ -64,7 +66,9 @@ export function calculateFee(amount: bigint, feeBps: number): bigint {
  * @throws {ValidationError} If `feeBps` is not an integer, or is outside `[0, 10000]`.
  */
 export function calculateReceiveAmount(amount: bigint, feeBps: number): bigint {
-  throw new Error('Not implemented: calculateReceiveAmount');
+  // #665: Calculate receive amount as total - fee
+  const fee = calculateFee(amount, feeBps);
+  return amount - fee;
 }
 
 /**
@@ -76,7 +80,18 @@ export function calculateReceiveAmount(amount: bigint, feeBps: number): bigint {
  * formatStellarAmount('500')      // '0.0000500'
  */
 export function formatStellarAmount(amount: string): string {
-  throw new Error('Not implemented: formatStellarAmount');
+  // #666: Format stroops to XLM (7 decimal places) using BigInt
+  const bn = BigInt(amount);
+  const divisor = BigInt(10000000); // 10^7
+
+  // Get integer and fractional parts
+  const integer = bn / divisor;
+  const remainder = bn % divisor;
+
+  // Format fractional part with leading zeros
+  const fractionalStr = remainder.toString().padStart(7, '0');
+
+  return `${integer}.${fractionalStr}`;
 }
 
 /**
