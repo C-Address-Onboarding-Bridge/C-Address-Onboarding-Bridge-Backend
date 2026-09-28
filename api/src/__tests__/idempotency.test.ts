@@ -3,14 +3,18 @@ import { Request, Response } from 'express';
 
 process.env.NODE_ENV = 'test';
 
-const { mockCacheGet, mockCacheSet } = vi.hoisted(() => ({
+const { mockCacheGet, mockCacheSet, mockCacheSetNx, mockCacheDel } = vi.hoisted(() => ({
   mockCacheGet: vi.fn(),
   mockCacheSet: vi.fn(),
+  mockCacheSetNx: vi.fn(),
+  mockCacheDel: vi.fn(),
 }));
 
 vi.mock('../services/cache', () => ({
   cacheGet: mockCacheGet,
   cacheSet: mockCacheSet,
+  cacheSetNx: mockCacheSetNx,
+  cacheDel: mockCacheDel,
 }));
 
 vi.mock('../config', () => ({
@@ -24,10 +28,11 @@ import { idempotencyMiddleware } from '../middleware/idempotency';
 
 const VALID_UUID = '123e4567-e89b-4d3c-a456-426614174000';
 
-function makeReq(headers: Record<string, string> = {}): Request {
+function makeReq(headers: Record<string, string> = {}, body: unknown = {}): Request {
   return {
     headers,
-    body: {},
+    body,
+    apiKey: { id: 'key-1' },
     log: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
   } as unknown as Request;
 }
@@ -47,6 +52,11 @@ describe('idempotencyMiddleware', () => {
   beforeEach(() => {
     mockCacheGet.mockReset();
     mockCacheSet.mockReset();
+    mockCacheSetNx.mockReset();
+    mockCacheDel.mockReset();
+    mockCacheSetNx.mockResolvedValue(true);
+    mockCacheSet.mockResolvedValue(undefined);
+    mockCacheDel.mockResolvedValue(undefined);
   });
 
   it('passes through when no key and not required', async () => {
@@ -75,7 +85,11 @@ describe('idempotencyMiddleware', () => {
   });
 
   it('returns cached response on duplicate key', async () => {
-    const stored = JSON.stringify({ status: 201, body: { hash: 'abc', status: 'pending' } });
+    const stored = JSON.stringify({
+      status: 201,
+      body: { hash: 'abc', status: 'pending' },
+      bodyHash: expect.any(String),
+    });
     mockCacheGet.mockResolvedValue(stored);
 
     const req = makeReq({ 'x-idempotency-key': VALID_UUID });
@@ -93,7 +107,6 @@ describe('idempotencyMiddleware', () => {
 
   it('proceeds on first request with valid key', async () => {
     mockCacheGet.mockResolvedValue(null);
-    mockCacheSet.mockResolvedValue(undefined);
 
     const req = makeReq({ 'x-idempotency-key': VALID_UUID });
     const { res } = makeRes();
@@ -107,7 +120,6 @@ describe('idempotencyMiddleware', () => {
 
   it('sets Idempotent-Replayed: false on first response', async () => {
     mockCacheGet.mockResolvedValue(null);
-    mockCacheSet.mockResolvedValue(undefined);
 
     const req = makeReq({ 'x-idempotency-key': VALID_UUID });
     const { res } = makeRes();
