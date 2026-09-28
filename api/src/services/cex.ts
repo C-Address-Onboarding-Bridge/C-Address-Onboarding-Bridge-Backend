@@ -225,128 +225,126 @@ export class CexRoutingService {
     try {
       const { query, headers } = this.signBinance(
         {
-          coin: req.sourceAsset,
-          amount: toWholeUnits(req.amount, req.sourceAsset),
+          coin: req.sourceAsset.toUpperCase(),
           address: req.targetCAddress,
+          amount: toWholeUnits(req.amount, req.sourceAsset),
           network: req.targetNetwork,
           addressTag: memo,
         },
         config.cex.binance.apiSecret,
       );
+
       const res = await this.postToExchange(
-        `https://api.binance.com/sapi/v1/capital/withdraw/apply?${query}`,
+        `${config.cex.binance.baseUrl}/sapi/v1/capital/withdraw/apply?${query}`,
         headers,
         '',
       );
 
       if (!res.ok) {
-        const errBody = await res.text();
-        console.error(`binance withdrawal failed: ${errBody}`);
-        return this.fallbackResponse('bin', req);
+        const text = await res.text();
+        throw new Error(`binance withdrawal failed (${res.status}): ${text}`);
       }
 
-      const data = await res.json() as { id?: string; txId?: string };
+      const data = (await res.json()) as { id?: string };
       return {
         status: 'pending',
-        withdrawalId: `bin-${data.id || Date.now()}`,
-        exchangeTxId: data.txId,
-        estimatedArrival: '5-30 minutes',
-        fee: '0.0001',
+        withdrawalId: data.id || `binance-${Date.now()}`,
+        exchangeTxId: data.id,
       };
     } catch (err) {
-      console.error('binance API error:', err);
-      return this.fallbackResponse('bin', req);
+      return {
+        status: 'failed',
+        withdrawalId: `binance-${Date.now()}`,
+      };
     }
   }
 
   private async handleCoinbase(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    const memo = req.memo || `bridge:coinbase:${req.targetCAddress.slice(-8)}`;
     const requestPath = '/v2/accounts/withdrawals';
+    const body = JSON.stringify({
+      type: 'crypto',
+      to: req.targetCAddress,
+      amount: toWholeUnits(req.amount, req.sourceAsset),
+      currency: req.sourceAsset.toUpperCase(),
+      network: req.targetNetwork,
+      destination_tag: req.memo,
+    });
 
     try {
-      const body = JSON.stringify({
-        type: 'send',
-        to: req.targetCAddress,
-        amount: toWholeUnits(req.amount, req.sourceAsset),
-        currency: req.sourceAsset,
-        description: memo,
-      });
       const headers = this.signCoinbase(requestPath, body);
       const res = await this.postToExchange(
-        `https://api.coinbase.com${requestPath}`,
+        `${config.cex.coinbase.baseUrl}${requestPath}`,
         headers,
         body,
       );
 
       if (!res.ok) {
-        const errBody = await res.text();
-        console.error(`coinbase withdrawal failed: ${errBody}`);
-        return this.fallbackResponse('cb', req);
+        const text = await res.text();
+        throw new Error(`coinbase withdrawal failed (${res.status}): ${text}`);
       }
 
-      const data = await res.json() as { data?: { id?: string } };
+      const data = (await res.json()) as { data?: { id?: string } };
       return {
         status: 'pending',
-        withdrawalId: `cb-${data.data?.id || Date.now()}`,
-        estimatedArrival: '10-60 minutes',
-        fee: '0.0001',
+        withdrawalId: data.data?.id || `coinbase-${Date.now()}`,
+        exchangeTxId: data.data?.id,
       };
     } catch (err) {
-      console.error('coinbase API error:', err);
-      return this.fallbackResponse('cb', req);
+      return {
+        status: 'failed',
+        withdrawalId: `coinbase-${Date.now()}`,
+      };
     }
   }
 
   private async handleKraken(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    const memo = req.memo || `bridge:kraken:${req.targetCAddress.slice(-8)}`;
     const path = '/0/private/Withdraw';
 
     try {
       const { body, headers } = this.signKraken(path, {
-        asset: req.sourceAsset,
-        amount: toWholeUnits(req.amount, req.sourceAsset),
+        asset: req.sourceAsset.toUpperCase(),
         key: req.targetCAddress,
-        address: req.targetCAddress,
-        memo,
+        amount: toWholeUnits(req.amount, req.sourceAsset),
       });
+
       const res = await this.postToExchange(
-        `https://api.kraken.com${path}`,
+        `${config.cex.kraken.baseUrl}${path}`,
         headers,
         body,
       );
 
       if (!res.ok) {
-        const errBody = await res.text();
-        console.error(`kraken withdrawal failed: ${errBody}`);
-        return this.fallbackResponse('kr', req);
+        const text = await res.text();
+        throw new Error(`kraken withdrawal failed (${res.status}): ${text}`);
       }
 
-      const data = await res.json() as { result?: { refid?: string } };
+      const data = (await res.json()) as { result?: { refid?: string } };
       return {
         status: 'pending',
-        withdrawalId: `kr-${data.result?.refid || Date.now()}`,
-        estimatedArrival: '10-60 minutes',
-        fee: '0.0001',
+        withdrawalId: data.result?.refid || `kraken-${Date.now()}`,
+        exchangeTxId: data.result?.refid,
       };
     } catch (err) {
-      console.error('kraken API error:', err);
-      return this.fallbackResponse('kr', req);
+      return {
+        status: 'failed',
+        withdrawalId: `kraken-${Date.now()}`,
+      };
     }
   }
 
   private async handleGeneric(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    const memo = req.memo || `bridge:generic:${req.targetCAddress.slice(-8)}`;
+    const url = `${config.cex.generic.baseUrl}/withdraw`;
+    const body = JSON.stringify({
+      asset: req.sourceAsset.toUpperCase(),
+      amount: toWholeUnits(req.amount, req.sourceAsset),
+      address: req.targetCAddress,
+      network: req.targetNetwork,
+      memo: req.memo,
+    });
 
     try {
-      const body = JSON.stringify({
-        asset: req.sourceAsset,
-        amount: toWholeUnits(req.amount, req.sourceAsset),
-        address: req.targetCAddress,
-        network: req.targetNetwork,
-        memo,
-      });
       const res = await this.postToExchange(
-        `${config.cex.generic.baseUrl}/withdrawals`,
+        url,
         {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${config.cex.generic.apiKey}`,
@@ -355,30 +353,21 @@ export class CexRoutingService {
       );
 
       if (!res.ok) {
-        const errBody = await res.text();
-        console.error(`generic withdrawal failed: ${errBody}`);
-        return this.fallbackResponse('gen', req);
+        const text = await res.text();
+        throw new Error(`generic withdrawal failed (${res.status}): ${text}`);
       }
 
-      const data = await res.json() as { id?: string };
+      const data = (await res.json()) as { id?: string };
       return {
         status: 'pending',
-        withdrawalId: `gen-${data.id || Date.now()}`,
-        estimatedArrival: '5-30 minutes',
-        fee: '0.0001',
+        withdrawalId: data.id || `generic-${Date.now()}`,
+        exchangeTxId: data.id,
       };
     } catch (err) {
-      console.error('generic API error:', err);
-      return this.fallbackResponse('gen', req);
+      return {
+        status: 'failed',
+        withdrawalId: `generic-${Date.now()}`,
+      };
     }
-  }
-
-  private fallbackResponse(prefix: string, req: CexWithdrawalRequest): CexWithdrawalResponse {
-    return {
-      status: 'pending',
-      withdrawalId: `${prefix}-${Date.now()}`,
-      estimatedArrival: '5-30 minutes',
-      fee: '0.0001',
-    };
   }
 }
