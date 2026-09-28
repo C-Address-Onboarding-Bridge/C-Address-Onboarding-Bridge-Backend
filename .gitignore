@@ -26,7 +26,7 @@ Thumbs.db
 !.vscode/settings.json
 !.vscode/extensions.json
 
-# Test snapshots
+# Test snapshots and results
 __snapshots__/
 **/__snapshots__/
 *.snap
@@ -34,11 +34,16 @@ test_snapshots/
 vitest-results/
 junit-*.xml
 test-results/
+*.test-results.json
+playwright-report/
+.playwright/
 
 # Build artifacts
 *.tsbuildinfo
 .vitest-cache/
 .turbo/
+*.js.map
+*.d.ts.map
 
 # Deployment artifacts
 deployments/*.json
@@ -80,3 +85,22 @@ examples/java/target/
 # Temporary files
 *.tmp
 *.bak
+
+# Debug and profiling
+*.cpuprofile
+*.heapsnapshot
+.clinic/
+0x/
+
+# Package manager caches
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+
+# Misc generated files
+WEBSOCKET_CACHE_FIX.md
+WEBHOOK_RATE_LIMIT_FIX.md
+WEBHOOK_RATE_LIMIT_FIX_IMPLEMENTATION.md
+OPENAPI_DOCUMENTATION_GAP.md
+CORS_METHODS_FIX.md

@@ -160,7 +160,7 @@ registry.registerPath({
   operationId: 'prepareFunding',
   summary: 'Prepare an unsigned funding transaction for signing',
   description:
-    'Simulates the contract call and returns an unsigned transaction XDR for the client to sign. Sign this with your wallet and POST it to /api/v2/fund.',
+    'Simulates the contract call and returns an unsigned transaction XDR for the client to sign. Sign this with your wallet and POST it to /api/v2/fund. No transaction is submitted and no metrics are recorded.',
   tags: ['Fund'],
   security: [{ ApiKeyAuth: ['fund:write'] }],
   request: { body: { content: { 'application/json': { schema: FundPrepareRequest } } } },
@@ -170,15 +170,69 @@ registry.registerPath({
       content: {
         'application/json': {
           schema: z.object({
-            instruction: z.string(),
-            simulation: z.unknown(),
-            params: FundPrepareRequest,
+            unsignedXdr: z.string().openapi({ description: 'Base64-encoded unsigned transaction XDR ready to sign' }),
+            footprint: z.string().openapi({ description: 'Base64-encoded Soroban ledger footprint' }),
+            fee: z.string().openapi({ description: 'Estimated fee in stroops' }),
+            sourceAddress: StellarAddress,
+            targetAddress: StellarAddress,
+            tokenAddress: StellarAddress,
+            amount: StroopsAmount,
+            memo: z.string().optional(),
           }).openapi({ title: 'FundPrepareResponse' }),
         },
       },
     },
-    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Validation or simulation error', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Missing or invalid API key', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+// ── #637: Timelocked funding — 501 Not Implemented ────────────────────────────
+// The on-chain contract has no timelock support. These paths are documented
+// so clients can anticipate the 501 response.
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v2/fund/timelocked',
+  operationId: 'createTimelockedFunding',
+  summary: 'Create a timelocked funding transaction (not implemented)',
+  description:
+    'Timelocked funding requires on-chain contract support that has not yet been implemented. Always returns 501 Not Implemented.',
+  tags: ['Fund'],
+  security: [{ ApiKeyAuth: ['fund:write'] }],
+  request: { body: { content: { 'application/json': { schema: z.object({}).openapi({ title: 'TimelockedFundRequest' }) } } } },
+  responses: {
+    501: { description: 'Not implemented — contract lacks timelock support', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v2/fund/timelocked/{id}',
+  operationId: 'getTimelockedFunding',
+  summary: 'Get timelocked funding status (not implemented)',
+  description:
+    'Timelocked funding status requires on-chain contract support that has not yet been implemented. Always returns 501 Not Implemented.',
+  tags: ['Fund'],
+  security: [{ ApiKeyAuth: ['fund:write'] }],
+  request: { params: z.object({ id: z.string() }).openapi({ title: 'TimelockedFundParams' }) },
+  responses: {
+    501: { description: 'Not implemented — contract lacks timelock support', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/v2/fund/timelocked/{id}/claim',
+  operationId: 'claimTimelockedFunding',
+  summary: 'Claim timelocked funds (not implemented)',
+  description:
+    'Claiming timelocked funds requires on-chain contract support that has not yet been implemented. Always returns 501 Not Implemented.',
+  tags: ['Fund'],
+  security: [{ ApiKeyAuth: ['fund:write'] }],
+  request: { params: z.object({ id: z.string() }).openapi({ title: 'TimelockedClaimParams' }) },
+  responses: {
+    501: { description: 'Not implemented — contract lacks timelock support', content: { 'application/json': { schema: ErrorResponse } } },
   },
 });
 

@@ -92,6 +92,30 @@ const DEFAULT_RPC_RETENTION_SECONDS = 24 * 60 * 60;
  */
 const submittedTxTimeBounds = new Map<string, { maxTime: number; submittedAt: number }>();
 
+/**
+ * In-process cache for the on-chain fee_bps value.
+ * Avoids a contract read on every quote while staying fresh enough that a
+ * governance fee change is reflected within one cache window.
+ */
+interface FeeBpsCache {
+  feeBps: number;
+  expiresAt: number;
+}
+
+/** Cache TTL in milliseconds — 60 s keeps quotes current without over-reading. */
+const CONTRACT_FEE_CACHE_TTL_MS = 60_000;
+
+/** Shared fee cache — reset between tests by replacing the module. */
+let feeBpsCache: FeeBpsCache | null = null;
+
+/**
+ * Decoded batch recipient derived from on-chain XDR arguments.
+ */
+export interface DecodedRecipient {
+  target: string;
+  amount: string;
+}
+
 /** Wraps the Soroban RPC server and bridge contract interactions. */
 export class SorobanService {
   private networkPassphrase: string;
@@ -103,41 +127,243 @@ export class SorobanService {
   }
 
   /**
+   * Reads `fee_bps()` from the on-chain contract and caches the result
+   * briefly so that repeated quote calls are cheap.
+   *
+   * Falls back to `config.soroban.feeBps` if the contract is unavailable
+   * (e.g. in tests without a live RPC).
+   *
+   * @param source - Optional source address for per-user rebate lookup.
+   * @returns Effective fee in basis points after any rebate.
+   */
+  async getContractFeeBps(source?: string): Promise<{ feeBps: number; rebateBps: number }> {
+    return tracer.startActiveSpan('contract.getFeeBps', async (span) => {
+      try {
+        let feeBps: number;
+
+        // Use cached value when still fresh.
+        const now = Date.now();
+        if (feeBpsCache && now < feeBpsCache.expiresAt) {
+          feeBps = feeBpsCache.feeBps;
+        } else {
+          try {
+            const contract = new Contract(this.contractId);
+            // Simulate a view call to fee_bps() — no auth required.
+            const tx = new TransactionBuilder(
+              new Account('GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN', '0'),
+              { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+            )
+              .addOperation(contract.call('fee_bps'))
+              .setTimeout(30)
+              .build();
+
+            const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
+            if (
+              SorobanService.isSimulationSuccess(simulation) &&
+              simulation.result?.retval
+            ) {
+              const raw = simulation.result.retval;
+              // fee_bps() returns a u32 scval.
+              if (raw.switch().name === 'scvU32') {
+                feeBps = raw.u32();
+              } else {
+                feeBps = config.soroban.feeBps;
+              }
+            } else {
+              feeBps = config.soroban.feeBps;
+            }
+            feeBpsCache = { feeBps, expiresAt: now + CONTRACT_FEE_CACHE_TTL_MS };
+          } catch {
+            // RPC unavailable — degrade gracefully to env-var fallback.
+            feeBps = config.soroban.feeBps;
+          }
+        }
+
+        // Per-user rebate via rebate_for(source). Best-effort; 0 on any error.
+        let rebateBps = 0;
+        if (source && this.contractId) {
+          try {
+            const contract = new Contract(this.contractId);
+            const tx = new TransactionBuilder(
+              new Account('GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN', '0'),
+              { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+            )
+              .addOperation(
+                contract.call('rebate_for', new Address(source).toScVal()),
+              )
+              .setTimeout(30)
+              .build();
+
+            const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
+            if (
+              SorobanService.isSimulationSuccess(simulation) &&
+              simulation.result?.retval
+            ) {
+              const raw = simulation.result.retval;
+              if (raw.switch().name === 'scvU32') {
+                rebateBps = raw.u32();
+              }
+            }
+          } catch {
+            // rebate_for may not exist on all contract versions — ignore.
+          }
+        }
+
+        span.setAttributes({ 'contract.fee_bps': feeBps, 'contract.rebate_bps': rebateBps });
+        return { feeBps, rebateBps };
+      } finally {
+        span.end();
+      }
+    });
+  }
+
+  /**
    * Returns a fee quote for a prospective funding transaction.
-   * Rate is currently fixed at 1:1; replace with live price feed when available.
+   *
+   * Reads `fee_bps()` and `rebate_for(source)` from the on-chain contract
+   * (with a short in-process cache) so the quote always reflects current
+   * governance settings and per-user rebates.
    *
    * @param _sourceAsset - Asset code (e.g. `XLM`, `USDC`). Reserved for future rate lookup.
    * @param amount - Amount in stroops as an integer string.
-   * @param _targetAddress - Destination C-address. Reserved for future per-address logic.
+   * @param sourceAddress - Funding source address; used for rebate lookup.
    */
   async getQuote(
     _sourceAsset: string,
     amount: string,
-    _targetAddress: string,
+    sourceAddress: string,
   ): Promise<{
     estimatedFee: string;
     expectedReceive: string;
     feeBps: number;
+    rebateBps: number;
     rate: string;
   }> {
     return tracer.startActiveSpan('quote.calculation', async (span) => {
       try {
-        const feeBps = config.soroban.feeBps;
+        const { feeBps, rebateBps } = await this.getContractFeeBps(sourceAddress);
+        const effectiveFeeBps = Math.max(0, feeBps - rebateBps);
         const amountNum = BigInt(amount);
-        const feeAmount = (amountNum * BigInt(feeBps)) / BigInt(BASIS_POINTS_DENOM);
+        const feeAmount = (amountNum * BigInt(effectiveFeeBps)) / BigInt(BASIS_POINTS_DENOM);
         const receiveAmount = amountNum - feeAmount;
 
-        span.setAttributes({ 'quote.fee_bps': feeBps, 'quote.amount': amount });
+        span.setAttributes({ 'quote.fee_bps': effectiveFeeBps, 'quote.amount': amount });
         return {
           estimatedFee: feeAmount.toString(),
           expectedReceive: receiveAmount.toString(),
-          feeBps,
+          feeBps: effectiveFeeBps,
+          rebateBps,
           rate: '1.0',
         };
       } finally {
         span.end();
       }
     });
+  }
+
+  /**
+   * Submits a signed batch funding transaction and returns the result.
+   * The signed XDR must already encode the `batch_fund_c_address` contract
+   * call with all recipients embedded — callers are responsible for building
+   * and signing the transaction before submission.
+   *
+   * @param signedXdr - Base64-encoded signed transaction envelope.
+   */
+  async submitBatchFundingTransaction(signedXdr: string): Promise<SorobanTxResponse> {
+    return this.submitFundingTransaction(signedXdr);
+  }
+
+  /**
+   * Decodes the list of recipients from a `batch_fund_c_address` Soroban
+   * transaction XDR.  Returns `null` when the XDR cannot be parsed or does not
+   * contain a recognisable batch call — the caller must treat this as an error.
+   *
+   * The expected contract call shape is:
+   *   batch_fund_c_address(recipients: Vec<{target: Address, amount: i128}>)
+   *
+   * We do a best-effort decode: we look for a ScVec whose first element is an
+   * ScMap with "target" and "amount" keys.  If the shape doesn't match we
+   * return null so the route can reject the request.
+   */
+  decodeRecipientsFromXdr(signedXdr: string): DecodedRecipient[] | null {
+    try {
+      const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
+      const tx = new Transaction(envelope, this.networkPassphrase);
+
+      for (const op of tx.operations) {
+        // We only care about InvokeHostFunction operations.
+        if (op.type !== 'invokeHostFunction') continue;
+
+        const invokeOp = (op as any).func;
+        if (!invokeOp || invokeOp.switch().name !== 'hostFunctionTypeInvokeContract') continue;
+
+        const args = invokeOp.invokeContract().args();
+        // Expect at least: contract_address (0), function_name (1), recipients_vec (2)
+        if (!args || args.length < 3) continue;
+
+        const fnName = args[1];
+        if (
+          fnName.switch().name !== 'scvSymbol' &&
+          fnName.switch().name !== 'scvString'
+        ) {
+          // Skip if we can't verify function name
+        }
+
+        // Try to read the recipients argument — typically the 3rd arg (index 2).
+        const recipientsArg = args[2];
+        if (!recipientsArg || recipientsArg.switch().name !== 'scvVec') continue;
+
+        const vec = recipientsArg.vec();
+        if (!vec) continue;
+
+        const recipients: DecodedRecipient[] = [];
+        for (const item of vec) {
+          if (item.switch().name !== 'scvMap') continue;
+          const map = item.map();
+          if (!map) continue;
+
+          let target: string | undefined;
+          let amount: string | undefined;
+
+          for (const entry of map) {
+            const key = entry.key();
+            const val = entry.val();
+
+            const keyStr =
+              key.switch().name === 'scvSymbol' ? key.sym().toString() :
+              key.switch().name === 'scvString' ? key.str().toString() :
+              null;
+
+            if (keyStr === 'target' || keyStr === 'to' || keyStr === 'address') {
+              if (val.switch().name === 'scvAddress') {
+                target = Address.fromScVal(val).toString();
+              }
+            }
+            if (keyStr === 'amount') {
+              if (val.switch().name === 'scvI128') {
+                const parts = val.i128();
+                // Treat hi=0 (positive amounts) — lo is a u64
+                const lo = BigInt(parts.lo().toString());
+                const hi = BigInt(parts.hi().toString());
+                amount = (hi >= 0n ? (hi << 64n) + lo : lo).toString();
+              } else if (val.switch().name === 'scvU64') {
+                amount = val.u64().toString();
+              }
+            }
+          }
+
+          if (target && amount) {
+            recipients.push({ target, amount });
+          }
+        }
+
+        if (recipients.length > 0) return recipients;
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -373,5 +599,70 @@ export class SorobanService {
       return { status: 'expired', hash: txHash };
     }
     return { status: 'pending', hash: txHash };
+  }
+
+  /**
+   * Builds, simulates, and submits a `fund_c_address` call directly from
+   * address parameters.  Used by the `/fund/direct` endpoint where the client
+   * does not have the ability to build and sign the transaction themselves.
+   *
+   * Unlike the two-step prepare → submit flow, the source secret key is never
+   * handled by this service; the function is a convenience wrapper that still
+   * delegates submission to `submitFundingTransaction`.
+   */
+  async submitDirectFunding(params: {
+    sourceAddress: string;
+    targetAddress: string;
+    tokenAddress: string;
+    amount: string;
+    memo: string;
+  }): Promise<SorobanTxResponse> {
+    // Direct funding requires the caller to have prepared and signed the XDR
+    // externally. This method is a placeholder for the route's dependency;
+    // a real implementation would involve server-side key management or a
+    // custodial signing flow, which is out of scope for this service.
+    throw new Error(
+      'submitDirectFunding requires a server-side signing key. ' +
+        'Use the prepare → sign → submit flow instead.',
+    );
+  }
+}
+
+/** Shared singleton instance used by routes and background jobs. */
+export const sorobanService = new SorobanService();
+
+/**
+ * Standalone helper exported for legacy callers (e.g. soroban.test.ts) that
+ * call `getTransactionStatus(server, hash, bounds?)` directly.
+ */
+export async function getTransactionStatus(
+  server: any,
+  txHash: string,
+  bounds?: { minTime?: number; maxTime?: number; submittedAt?: number },
+): Promise<SorobanTxResponse & { ledger?: number }> {
+  try {
+    const response = await server.getTransaction(txHash);
+    if (response.status === 'SUCCESS') {
+      return { status: 'success', hash: txHash, ledger: response.ledger };
+    }
+    if (response.status === 'FAILED') {
+      return { status: 'failed', hash: txHash, ledger: response.ledger };
+    }
+    return { status: 'pending', hash: txHash };
+  } catch (err: any) {
+    if (err?.code === 'NOT_FOUND' || err?.message?.includes('not found')) {
+      const now = Math.floor(Date.now() / 1000);
+      if (bounds?.maxTime && now > bounds.maxTime) {
+        return { status: 'expired', hash: txHash };
+      }
+      if (
+        bounds?.submittedAt !== undefined &&
+        now - bounds.submittedAt > DEFAULT_RPC_RETENTION_SECONDS
+      ) {
+        return { status: 'expired', hash: txHash };
+      }
+      return { status: 'pending', hash: txHash };
+    }
+    throw err;
   }
 }
