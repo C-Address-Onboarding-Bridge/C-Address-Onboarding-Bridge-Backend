@@ -70,10 +70,19 @@ app.set('trust proxy', config.trustProxy);
 app.use(helmet());
 app.use(
   cors({
-    origin: config.corsOrigins.length > 0 ? config.corsOrigins : '*',
+    // #655: Safe default: no origins allowed when CORS_ORIGINS not set.
+    // Only allow specified origins; never default to '*' (all origins).
+    origin: config.corsOrigins.length > 0 ? config.corsOrigins : false,
     methods: ['GET', 'POST', 'DELETE', 'PATCH'],
   })
 );
+
+// Log the effective CORS policy at startup for debugging and security audits
+if (config.corsOrigins.length === 0) {
+  logger.warn('CORS: No origins configured. Cross-origin requests from browsers will be blocked.');
+} else {
+  logger.info(`CORS: Allowed origins: ${config.corsOrigins.join(', ')}`);
+}
 
 app.use(compressionMiddleware);
 app.use(versionCompatibility);
