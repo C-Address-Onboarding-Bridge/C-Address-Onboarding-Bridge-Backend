@@ -1,4 +1,5 @@
 export { BridgeClient, type BridgeClientConfig } from './bridge';
+export { SDK_VERSION } from './version';
 export type {
   BridgeStatus,
   RequestParams,

@@ -49,6 +49,7 @@
   },
   "sideEffects": false,
   "scripts": {
+    "prebuild": "node scripts/sync-version.mjs",
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json && tsc -p tsconfig.umd.json",
     "build:strict-consumer": "tsc -p tests/fixtures/strict-consumer/tsconfig.json",
     "build:bundle": "node scripts/build-bundle.mjs",
