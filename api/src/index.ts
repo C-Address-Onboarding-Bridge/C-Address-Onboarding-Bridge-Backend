@@ -11,6 +11,7 @@ import { quoteRouter } from './routes/quote';
 import { statusRouter } from './routes/status';
 import { offrampRouter } from './routes/offramp';
 import { cexRouter } from './routes/cex';
+import { tokenRouter } from './routes/token';
 import { moonpayWebhookRouter, transakWebhookRouter } from './routes/webhook';
 import { webhookAdminRouter } from './routes/webhookAdmin';
 import { apiKeysRouter } from './routes/apiKeys';
@@ -31,6 +32,7 @@ import { setFeeRateBps, updateCircuitBreakerMetrics } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
+import { requestSigningMiddleware } from './middleware/requestSigning';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
 import { closePool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
@@ -159,6 +161,8 @@ app.use('/api', express.json({ limit: '32kb' }));
 // traffic is never throttled.
 app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
+// Issue #673: Verify request signing headers
+app.use('/api', requestSigningMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
 
 // #660: Removed misleading deprecation endpoint — v1 and v2 are identical until one diverges

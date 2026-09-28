@@ -182,7 +182,8 @@ export class BridgeClient {
     };
     if (this.apiKey) headers["X-API-Key"] = this.apiKey;
     if (resolvedIdempotencyKey) {
-      headers["Idempotency-Key"] = resolvedIdempotencyKey;
+      // Issue #671: Use x-idempotency-key (lowercase) to match API middleware expectations
+      headers["x-idempotency-key"] = resolvedIdempotencyKey;
     }
 
     let attempt = 0;
