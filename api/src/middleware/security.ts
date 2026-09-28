@@ -146,14 +146,53 @@ export function requestSizeLimiting(req: Request, res: Response, next: NextFunct
 
 const FREE_TEXT_FIELDS = new Set(['memo', 'description', 'notes', 'comment', 'message']);
 
+/**
+ * Fields whose values are binary/encoded payloads (base64 XDR, hex hashes,
+ * addresses). These are validated structurally elsewhere, and their byte
+ * sequences can legitimately match SQL/XSS regexes (e.g. padded base64
+ * ending in `...onQx=` trips /on\w+\s*=/). Skip pattern checks for them.
+ */
+const ENCODED_FIELDS = new Set([
+  'signedxdr',
+  'xdr',
+  'envelope',
+  'envelopexdr',
+  'transactionxdr',
+  'hash',
+  'txhash',
+  'transactionhash',
+  'signature',
+  'signatures',
+  'publickey',
+  'address',
+  'fromaddress',
+  'toaddress',
+  'sourceaccount',
+  'destinationaccount',
+  'contractid',
+  'assetissuer',
+  'assetcode',
+]);
+
 function isFreetextField(fieldPath: string): boolean {
   const fieldName = fieldPath.split('.').pop()?.toLowerCase() ?? '';
   return FREE_TEXT_FIELDS.has(fieldName);
 }
 
+function isEncodedField(fieldPath: string): boolean {
+  const fieldName = fieldPath.split('.').pop()?.toLowerCase() ?? '';
+  return ENCODED_FIELDS.has(fieldName);
+}
+
 export function injectionProtection(req: Request, res: Response, next: NextFunction): void {
-  function checkForInjection(obj: unknown, path = '', isInFreetextField = false): { match: RegExp; field: string } | null {
+  function checkForInjection(obj: unknown, path = '', isInFreetextField = false, isInEncodedField = false): { match: RegExp; field: string } | null {
     if (typeof obj === 'string') {
+      // Encoded/binary fields (base64 XDR, hashes, addresses) are validated
+      // structurally elsewhere; their bytes can match SQL/XSS regexes by
+      // coincidence, so skip pattern checks entirely for them.
+      if (isInEncodedField) {
+        return null;
+      }
       // Skip SQL patterns for freetext fields; always check NoSQL and XSS
       if (!isInFreetextField && detectPatterns([obj], SQL_PATTERNS)) {
         return { match: SQL_PATTERNS.find((p) => testPattern(p, obj)) as RegExp, field: path || 'unknown' };
@@ -169,7 +208,7 @@ export function injectionProtection(req: Request, res: Response, next: NextFunct
 
     if (Array.isArray(obj)) {
       for (let i = 0; i < obj.length; i++) {
-        const result = checkForInjection(obj[i], `${path}[${i}]`, isInFreetextField);
+        const result = checkForInjection(obj[i], `${path}[${i}]`, isInFreetextField, isInEncodedField);
         if (result) return result;
       }
       return null;
@@ -186,7 +225,8 @@ export function injectionProtection(req: Request, res: Response, next: NextFunct
       for (const [key, value] of Object.entries(objMap)) {
         const fieldPath = path ? `${path}.${key}` : key;
         const isFreetextCheckField = isInFreetextField || isFreetextField(fieldPath);
-        const result = checkForInjection(value, fieldPath, isFreetextCheckField);
+        const isEncodedCheckField = isInEncodedField || isEncodedField(fieldPath);
+        const result = checkForInjection(value, fieldPath, isFreetextCheckField, isEncodedCheckField);
         if (result) return result;
       }
       return null;
@@ -220,63 +260,16 @@ const suspiciousIpCounts = new Map<string, { count: number; windowStart: number 
 const SUSPICIOUS_WINDOW_MS = 60_000;
 const SUSPICIOUS_THRESHOLD = 10;
 
-export function suspiciousRateLimiting(req: Request, res: Response, next: NextFunction): void {
-  const ip = req.ip?.trim() || '0.0.0.0';
-  const isRateLimited = flagSuspiciousRequest(ip);
-
-  if (!isRateLimited) {
-    next();
-    return;
-  }
-
-  if (res.headersSent) {
-    next();
-    return;
-  }
-
-  res.status(429).json({ error: 'rate_limited', message: 'Too many suspicious requests' });
-}
-
-export function flagSuspiciousRequest(ip: string): boolean {
+/**
+ * Track suspicious request counts per IP within a rolling window.
+ */
+export function trackSuspiciousRequest(ip: string): boolean {
   const now = Date.now();
-  const record = suspiciousIpCounts.get(ip);
-
-  if (record && now - record.windowStart <= SUSPICIOUS_WINDOW_MS) {
-    record.count += 1;
-    return record.count >= SUSPICIOUS_THRESHOLD;
-  }
-
-  if (!record || now - record.windowStart > SUSPICIOUS_WINDOW_MS) {
+  const entry = suspiciousIpCounts.get(ip);
+  if (!entry || now - entry.windowStart > SUSPICIOUS_WINDOW_MS) {
     suspiciousIpCounts.set(ip, { count: 1, windowStart: now });
+    return false;
   }
-
-  return false;
-}
-
-export function xssErrorSanitizer(err: Error, _req: Request, res: Response, next: NextFunction): void {
-  if (res.headersSent) {
-    next(err);
-    return;
-  }
-
-  const sanitizedMessage = sanitizeErrorMessage(err.message);
-  res.status(500).json({ error: 'internal_server_error', message: sanitizedMessage });
-}
-
-export { sanitizeErrorMessage };
-
-export function securityMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const runParameterChecks = (): void => {
-    parameterPollutionProtection(req, res, () => suspiciousRateLimiting(req, res, next));
-  };
-
-  const runInjectionChecks = (): void => {
-    injectionProtection(req, res, runParameterChecks);
-  };
-
-  const runSizeChecks = (): void => {
-    requestSizeLimiting(req, res, runInjectionChecks);
-  };
-
-  contentTypeEnforcement(req, res, runSizeChecks);
+  entry.count += 1;
+  return entry.count >= SUSPICIOUS_THRESHOLD;
 }

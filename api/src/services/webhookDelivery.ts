@@ -154,17 +154,17 @@ export class WebhookDeliveryService {
       events: params.events,
       createdAt: Date.now(),
     };
-    this.registrations.set(registration.id, registration);
+    this.store.saveRegistration(registration);
     logger.info({ registrationId: registration.id, url: params.url }, 'webhook registered');
     return registration;
   }
 
   unregister(id: string): boolean {
-    return this.registrations.delete(id);
+    return this.store.deleteRegistration(id);
   }
 
   getRegistration(id: string): WebhookRegistration | undefined {
-    return this.registrations.get(id);
+    return this.store.getRegistration(id);
   }
 
   getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[] {
@@ -274,7 +274,7 @@ export class WebhookDeliveryService {
           { registrationId: registration.id, url: registration.url, event, attempt: attemptNumber + 1 },
           'webhook delivered',
         );
-        this.deliveryLog.push(attempt);
+        this.recordAttempt(attempt);
         return;
       }
 
@@ -306,7 +306,7 @@ export class WebhookDeliveryService {
       );
     }
 
-    this.deliveryLog.push(attempt);
+    this.recordAttempt(attempt);
 
     if (attemptNumber < RETRY_DELAYS_MS.length) {
       const delay = RETRY_DELAYS_MS[attemptNumber];
@@ -336,7 +336,9 @@ export class WebhookDeliveryService {
   }
 
   private moveToDLQ(registration: WebhookRegistration, event: string, data: unknown): void {
-    const attempts = this.deliveryLog.filter((a) => a.registrationId === registration.id && a.event === event);
+    const attempts = this.store
+      .listDeliveryAttempts()
+      .filter((a) => a.registrationId === registration.id && a.event === event);
     const entry: DLQEntry = {
       id: crypto.randomUUID(),
       registration,
@@ -345,7 +347,7 @@ export class WebhookDeliveryService {
       attempts,
       failedAt: Date.now(),
     };
-    this.dlq.push(entry);
+    this.store.saveDLQEntry(entry);
     logger.error(
       { registrationId: registration.id, url: registration.url, event, dlqId: entry.id },
       'webhook moved to dead letter queue after max retries',
@@ -353,29 +355,26 @@ export class WebhookDeliveryService {
   }
 
   getDLQ(): DLQEntry[] {
-    return [...this.dlq];
+    return this.store.listDLQEntries();
   }
 
   getDLQEntry(id: string): DLQEntry | undefined {
-    return this.dlq.find((e) => e.id === id);
+    return this.store.getDLQEntry(id);
   }
 
   deleteDLQEntry(id: string): boolean {
-    const idx = this.dlq.findIndex((e) => e.id === id);
-    if (idx === -1) return false;
-    this.dlq.splice(idx, 1);
-    return true;
+    return this.store.deleteDLQEntry(id);
   }
 
   getDeliveryLog(): DeliveryAttempt[] {
-    return [...this.deliveryLog];
+    return this.store.listDeliveryAttempts();
   }
 
   getStats(): { registered: number; dlqSize: number; totalAttempts: number } {
     return {
-      registered: this.registrations.size,
-      dlqSize: this.dlq.length,
-      totalAttempts: this.deliveryLog.length,
+      registered: this.store.listRegistrations().length,
+      dlqSize: this.store.listDLQEntries().length,
+      totalAttempts: this.store.listDeliveryAttempts().length,
     };
   }
 }

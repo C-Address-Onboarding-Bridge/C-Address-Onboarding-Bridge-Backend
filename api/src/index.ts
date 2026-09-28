@@ -143,6 +143,9 @@ app.use(loggingMiddleware);
 app.use('/api/webhook', express.text({ type: '*/*' }));
 app.use('/api', express.json({ limit: '32kb' }));
 
+// suspiciousRateLimiting is mounted exactly once here. It only counts requests
+// that actually tripped a detector (see middleware/security.ts), so normal
+// traffic is never throttled.
 app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
