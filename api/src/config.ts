@@ -16,6 +16,16 @@ function requireEnv(key: string): string {
   return val;
 }
 
+function requireEnvInProduction(key: string): string {
+  const val = process.env[key];
+  if (!val && process.env.NODE_ENV === 'production') throw new ConfigError(key);
+  return val || '';
+}
+
+function isValidContractId(id: string): boolean {
+  return /^C[A-Z2-7]{55}$/.test(id);
+}
+
 /** Centralised runtime configuration derived from environment variables. */
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
@@ -26,7 +36,12 @@ export const config = {
       .map((u) => u.trim())
       .filter(Boolean),
     networkPassphrase: process.env.SOROBAN_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
-    bridgeContractId: process.env.BRIDGE_CONTRACT_ID || '',
+    bridgeContractId: (() => {
+      const id = requireEnvInProduction('BRIDGE_CONTRACT_ID');
+      if (!id && process.env.NODE_ENV !== 'test') return id;
+      if (id && !isValidContractId(id)) throw new ConfigError(`BRIDGE_CONTRACT_ID must be a valid Stellar contract address (C + 55 base32 chars)`);
+      return id;
+    })(),
     feeBps: parseInt(process.env.BRIDGE_FEE_BPS || '30', 10),
     rpc: {
       healthCheckIntervalMs: parseInt(process.env.RPC_HEALTH_CHECK_INTERVAL_MS || '30000', 10),

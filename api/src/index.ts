@@ -37,6 +37,7 @@ import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
 import { createWebSocketServer, handleUpgrade } from './services/websocket';
+import { integrityAuditLog } from './services/auditLog';
 import { cacheMetricsRouter } from './routes/cacheMetrics';
 
 export { logger } from './logger';
