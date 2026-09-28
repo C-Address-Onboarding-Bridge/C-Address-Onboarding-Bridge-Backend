@@ -95,9 +95,25 @@ export class RateLimitError extends BridgeError {
 export class ServerError extends BridgeError {
   override readonly type = 'ServerError' as const;
 
+<<<<<<< Updated upstream
   constructor(message?: string, options?: { statusCode?: number; code?: string; cause?: unknown; locale?: SupportedLocale }) {
     const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
     super(resolvedMessage, { statusCode: options?.statusCode ?? 500, code: options?.code, retryable: true, cause: options?.cause });
+=======
+  /**
+   * @param options.retryable Override the default retryability. Defaults to
+   *   `true` for ordinary 5xx responses. Set to `false` when the server fault
+   *   is non-transient — e.g. a malformed success body that would fail on every
+   *   retry — so the client does not re-send the request.
+   */
+  constructor(message: string, options?: { statusCode?: number; code?: string; retryable?: boolean; cause?: unknown }) {
+    super(message, {
+      statusCode: options?.statusCode ?? 500,
+      code: options?.code,
+      retryable: options?.retryable ?? true,
+      cause: options?.cause,
+    });
+>>>>>>> Stashed changes
     this.name = 'ServerError';
   }
 }

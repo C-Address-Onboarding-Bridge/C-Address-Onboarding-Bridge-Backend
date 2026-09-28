@@ -10,13 +10,18 @@ import {
 type StatusFetcher = (txHash: string) => Promise<TransactionStatus>;
 type HealthChecker = () => Promise<boolean>;
 
+interface WatchState {
+  timer?: ReturnType<typeof setTimeout>;
+  cancelled: boolean;
+}
+
 export class BridgeEventEmitter {
   private readonly handlers = new Map<BridgeEventType, Set<EventHandler<BridgeEventType>>>();
   private readonly history: BridgeEvent[] = [];
   private readonly historySize: number;
   private readonly pollIntervalMs: number;
   private readonly healthCheckIntervalMs: number;
-  private readonly watchTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly watchTimers = new Map<string, WatchState>();
   private readonly statusCache = new Map<string, string>();
   private healthTimer?: ReturnType<typeof setInterval>;
   private reconnectAttempt = 0;
@@ -64,41 +69,76 @@ export class BridgeEventEmitter {
   watch(txHash: string): this {
     if (this.destroyed || this.watchTimers.has(txHash)) return this;
 
-    const timer = setInterval(async () => {
+    const state: WatchState = { cancelled: false };
+    this.watchTimers.set(txHash, state);
+
+    const scheduleNext = (): void => {
+      if (state.cancelled || this.destroyed) return;
+      state.timer = setTimeout(() => {
+        void tick();
+      }, this.pollIntervalMs);
+    };
+
+    const tick = async (): Promise<void> => {
+      // Bail before doing any work if the watch was cancelled while we were
+      // scheduled but not yet running.
+      if (state.cancelled || this.destroyed) return;
+
+      let status: TransactionStatus;
       try {
-        const status = await this.statusFetcher(txHash);
-        const previous = this.statusCache.get(txHash);
-
-        if (previous !== status.status) {
-          if (previous !== undefined) {
-            this.emit('transaction:status:changed', { txHash, status, previousStatus: previous });
-          }
-          this.statusCache.set(txHash, status.status);
-
-          if (status.status === 'pending') {
-            this.emit('transaction:pending', { txHash, status });
-          } else if (status.status === 'success') {
-            this.emit('transaction:success', { txHash, status });
-            this.unwatch(txHash);
-          } else if (status.status === 'failed') {
-            this.emit('transaction:failed', { txHash, status, error: status.error });
-            this.unwatch(txHash);
-          }
-        }
+        status = await this.statusFetcher(txHash);
       } catch (err) {
+        // The watch may have been cancelled or the emitter destroyed while the
+        // fetch was in flight. In that case, swallow the error and stop.
+        if (state.cancelled || this.destroyed) return;
         this.emit('error', { message: 'Failed to poll transaction status', error: err });
+        scheduleNext();
+        return;
       }
-    }, this.pollIntervalMs);
 
-    this.watchTimers.set(txHash, timer);
+      // Re-check cancellation after the await. This is what prevents
+      // `transaction:success` from firing after `unwatch`/`destroy`.
+      if (state.cancelled || this.destroyed) return;
+
+      const previous = this.statusCache.get(txHash);
+
+      if (previous !== status.status) {
+        if (previous !== undefined) {
+          this.emit('transaction:status:changed', {
+            txHash,
+            status,
+            previousStatus: previous,
+          });
+        }
+        this.statusCache.set(txHash, status.status);
+
+        if (status.status === 'pending') {
+          this.emit('transaction:pending', { txHash, status });
+        } else if (status.status === 'success') {
+          this.emit('transaction:success', { txHash, status });
+          this.unwatch(txHash);
+          return;
+        } else if (status.status === 'failed') {
+          this.emit('transaction:failed', { txHash, status, error: status.error });
+          this.unwatch(txHash);
+          return;
+        }
+      }
+
+      // Only schedule the next poll after the current one has fully settled.
+      scheduleNext();
+    };
+
+    scheduleNext();
     return this;
   }
 
   /** Stop polling a specific transaction hash. */
   unwatch(txHash: string): this {
-    const timer = this.watchTimers.get(txHash);
-    if (timer !== undefined) {
-      clearInterval(timer);
+    const state = this.watchTimers.get(txHash);
+    if (state !== undefined) {
+      state.cancelled = true;
+      if (state.timer !== undefined) clearTimeout(state.timer);
       this.watchTimers.delete(txHash);
       this.statusCache.delete(txHash);
     }
@@ -108,7 +148,10 @@ export class BridgeEventEmitter {
   /** Stop all polling and clear all listeners and history. */
   destroy(): void {
     this.destroyed = true;
-    for (const timer of this.watchTimers.values()) clearInterval(timer);
+    for (const state of this.watchTimers.values()) {
+      state.cancelled = true;
+      if (state.timer !== undefined) clearTimeout(state.timer);
+    }
     this.watchTimers.clear();
     this.statusCache.clear();
     if (this.healthTimer !== undefined) clearInterval(this.healthTimer);
