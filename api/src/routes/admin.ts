@@ -11,6 +11,8 @@ import {
 } from '../services/transactions';
 import { AuditEventType, integrityAuditLog } from '../services/auditLog';
 import { enqueueAudit } from '../services/asyncPipeline';
+import { logger } from '../logger';
+// circuitBreakers is re-exported in index.ts but we import logger directly to avoid circular imports
 import { circuitBreakers } from '../index';
 import { getHealthStatus } from '../services/health';
 import { isRedisEnabled, getCacheMetrics } from '../services/cache';

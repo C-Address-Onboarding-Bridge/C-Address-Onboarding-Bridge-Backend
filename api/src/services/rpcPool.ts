@@ -1,6 +1,6 @@
 import { SorobanRpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
-import { logger } from '../index';
+import { logger } from '../logger';
 import { applyKeepAliveAgents } from './httpAgent';
 
 interface ProviderState {
