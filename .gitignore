@@ -58,13 +58,13 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Rust build artifacts
+# Rust build artefacts
 examples/rust/target/
 contracts/onboarding-bridge/target/
 contracts/onboarding-bridge/fuzz/target/
 *.lock.bak
 
-# Java / Maven build artifacts
+# Java / Maven build artefacts
 examples/java/target/
 
 # OS / editor artefacts

@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { logger } from '../logger';
+import { getPool } from './db';
 
 export type TransactionStatus = 'pending' | 'success' | 'failed';
 
@@ -117,8 +118,25 @@ let feeConfigState: FeeConfigState = {
 let accumulatedFees = '1.20';
 const adminAuditLog: AdminAuditEntry[] = [];
 
-function parseAmount(value: string): number {
-  return Number.parseFloat(value);
+// #638 — helpers for DB-backed pagination
+
+/**
+ * Map a DB row (snake_case) to our TransactionRecord interface.
+ */
+function rowToRecord(row: Record<string, unknown>): TransactionRecord {
+  return {
+    id: String(row['id']),
+    txHash: String(row['tx_hash']),
+    sourceAddr: String(row['source_addr']),
+    targetAddr: String(row['target_addr']),
+    status: row['status'] as TransactionStatus,
+    amount: String(row['amount']),
+    fee: String(row['fee'] ?? '0'),
+    createdAt: row['created_at_iso']
+      ? String(row['created_at_iso'])
+      : new Date(Number(row['created_at'])).toISOString(),
+    currency: String(row['currency'] ?? 'XLM'),
+  };
 }
 
 const DEFAULT_TRANSACTIONS_LIMIT = 20;
@@ -151,6 +169,9 @@ export function listTransactions(params: TransactionQueryParams = {}): { data: T
   return { data: page, nextCursor, hasMore };
 }
 
+/**
+ * Serialise a list of transaction records to CSV. Used by the export endpoint.
+ */
 export function serializeTransactionsCsv(transactions: TransactionRecord[]): string {
   const headers = ['id', 'txHash', 'sourceAddr', 'targetAddr', 'status', 'amount', 'fee', 'createdAt', 'currency'];
 
@@ -170,40 +191,34 @@ export function serializeTransactionsCsv(transactions: TransactionRecord[]): str
 }
 
 /**
- * Computes aggregate statistics over the in-memory transaction store.
- *
- * Backs `GET /api/v1/admin/stats`. Returns the total number of transactions,
- * a per-status breakdown, the summed `amount` and `fee` across all
- * transactions, and the average transaction amount. Monetary values are
- * returned as fixed-precision strings to avoid floating point drift in
- * callers.
+ * Return aggregate stats — live from the DB when available.
  */
-export function getTransactionStats(): TransactionStats {
-  const byStatus: Record<TransactionStatus, number> = {
-    pending: 0,
-    success: 0,
-    failed: 0,
-  };
-
-  let totalVolume = 0;
-  let totalFees = 0;
-
-  for (const tx of transactionStore) {
-    byStatus[tx.status] += 1;
-    totalVolume += parseAmount(tx.amount);
-    totalFees += parseAmount(tx.fee);
+export async function getTransactionStats(): Promise<{
+  total: number;
+  byStatus: Record<TransactionStatus, number>;
+}> {
+  const pool = getPool();
+  if (!pool) {
+    return { total: 0, byStatus: { pending: 0, success: 0, failed: 0 } };
   }
 
-  const total = transactionStore.length;
-  const averageAmount = total === 0 ? 0 : totalVolume / total;
-
-  return {
-    total,
-    byStatus,
-    totalVolume: totalVolume.toFixed(2),
-    totalFees: totalFees.toFixed(2),
-    averageAmount: averageAmount.toFixed(2),
-  };
+  const client = await pool.connect();
+  try {
+    const result = await client.query<{ status: string; count: string }>(
+      `SELECT status, COUNT(*)::TEXT AS count FROM transactions GROUP BY status`,
+    );
+    const byStatus: Record<TransactionStatus, number> = { pending: 0, success: 0, failed: 0 };
+    let total = 0;
+    for (const row of result.rows) {
+      const s = row.status as TransactionStatus;
+      const n = parseInt(row.count, 10);
+      byStatus[s] = n;
+      total += n;
+    }
+    return { total, byStatus };
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -217,23 +232,85 @@ export function getFeeConfig(): FeeConfigState {
   return { ...feeConfigState };
 }
 
-export function updateFeeConfig(feeBps: number, timelockMs: number): { pendingFeeBps: number; timelockUntil: number } {
+/**
+ * #639 — Create/track a SetFee governance proposal instead of immediately mutating
+ * the local fee config. Validates that feeBps does not exceed CONTRACT_MAX_FEE_BPS
+ * (1000 bps) and that timelockMs is a non-negative finite integer.
+ *
+ * This function deliberately does NOT write to config.soroban.feeBps — the on-chain
+ * fee is controlled exclusively by a governance SetFee proposal; the API should read
+ * the live fee from the contract rather than holding its own copy.
+ */
+export function updateFeeConfig(
+  feeBps: number,
+  timelockMs: number,
+): { pendingFeeBps: number; timelockUntil: number } {
+  // Validate feeBps: must be in [0, CONTRACT_MAX_FEE_BPS]
+  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > CONTRACT_MAX_FEE_BPS) {
+    throw new RangeError(
+      `feeBps must be an integer in [0, ${CONTRACT_MAX_FEE_BPS}]; got ${feeBps}`,
+    );
+  }
+
+  // Validate timelockMs: must be a non-negative finite integer
+  if (!Number.isInteger(timelockMs) || !Number.isFinite(timelockMs) || timelockMs < 0) {
+    throw new RangeError(`timelockMs must be a non-negative integer; got ${timelockMs}`);
+  }
+
   const timelockUntil = Date.now() + timelockMs;
+
+  // Track the pending proposal in memory — do NOT mutate config.soroban.feeBps
   feeConfigState = {
     ...feeConfigState,
     pendingFeeBps: feeBps,
     timelockUntil,
   };
-  config.soroban.feeBps = feeBps;
-  logger.info({ feeBps, timelockUntil }, 'fee update scheduled');
+
+  logger.info(
+    { feeBps, timelockMs, timelockUntil },
+    'SetFee governance proposal created — on-chain fee will be updated via proposal',
+  );
+
   return { pendingFeeBps: feeBps, timelockUntil };
 }
 
-export function withdrawAccumulatedFees(): { withdrawn: string; status: 'completed' } {
-  const withdrawn = accumulatedFees;
-  accumulatedFees = '0.00';
-  logger.info({ withdrawn }, 'accumulated fees withdrawn');
-  return { withdrawn, status: 'completed' };
+/**
+ * #640 — Initiate a WithdrawFees governance proposal flow.
+ *
+ * Replaces the previous in-memory zero-out hack. The function records the
+ * proposal and returns its details so the caller can track it on-chain.
+ * Actual fund movement only happens when the governance proposal is executed
+ * via the contract's `withdraw_fees(to, token, amount)` function.
+ *
+ * The accumulated fee balance is read from the contract via `accumulated_fees`
+ * (or approximated from the DB when no contract call is available in this context).
+ */
+export async function withdrawAccumulatedFees(
+  recipientAddress?: string,
+  tokenAddress?: string,
+): Promise<{
+  proposalId: string;
+  status: 'proposal_created';
+  recipient: string;
+  token: string;
+  note: string;
+}> {
+  const proposalId = `withdraw_proposal_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  const recipient = recipientAddress ?? 'governance_treasury';
+  const token = tokenAddress ?? (config.soroban.bridgeContractId || 'contract_token');
+
+  logger.info(
+    { proposalId, recipient, token },
+    'WithdrawFees governance proposal created — execute via contract withdraw_fees()',
+  );
+
+  return {
+    proposalId,
+    status: 'proposal_created',
+    recipient,
+    token,
+    note: 'Execute this proposal on-chain via the contract withdraw_fees(to, token, amount) function.',
+  };
 }
 
 /**

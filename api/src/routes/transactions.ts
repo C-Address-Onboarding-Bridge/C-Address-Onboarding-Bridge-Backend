@@ -37,7 +37,7 @@ transactionsRouter.get('/', rbacAuth, requireScopes('transactions:read'), async 
 
   // CSV responses are not cached (format-specific, likely one-off exports).
   if (format === 'csv') {
-    const result = listTransactions(params);
+    const result = await listTransactions(params);
     res.type('text/csv').send(serializeTransactionsCsv(result.data));
     return;
   }
@@ -50,7 +50,7 @@ transactionsRouter.get('/', rbacAuth, requireScopes('transactions:read'), async 
     cacheKey,
     CACHE_TTL.transactions,
     async () => {
-      const r = listTransactions(params);
+      const r = await listTransactions(params);
       return { data: r.data, nextCursor: r.nextCursor, hasMore: r.hasMore };
     },
   );
