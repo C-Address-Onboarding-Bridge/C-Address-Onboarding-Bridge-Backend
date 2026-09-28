@@ -79,6 +79,20 @@ export function formatStellarAmount(amount: string): string {
   throw new Error('Not implemented: formatStellarAmount');
 }
 
+/**
+ * Generates a stable UUIDv4-like idempotency key using crypto.getRandomValues().
+ * Used to prevent duplicate side-effects when retrying non-idempotent requests.
+ *
+ * @returns A 32-character hex string suitable for the Idempotency-Key header.
+ */
+export function generateIdempotencyKey(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 // Re-export token formatting utilities for convenience
 export {
   formatTokenAmount,
