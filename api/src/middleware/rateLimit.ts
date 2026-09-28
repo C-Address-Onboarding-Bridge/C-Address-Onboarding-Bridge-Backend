@@ -1,226 +1,288 @@
-import { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
-import NodeCache from 'node-cache';
+import type { Request, Response, NextFunction } from 'express';
 import { config } from '../config';
 import { logger } from '../logger';
 import { sendAbuseAlert } from '../services/abuseAlert';
-import { RedisRateLimitStore } from './redisRateLimitStore';
 
+/**
+ * Rate limiting middleware.
+ *
+ * Two layers:
+ *  - IP limiter: runs globally, before authentication. Keyed strictly by IP so
+ *    an attacker cannot mint a fresh bucket by sending a random X-API-Key.
+ *  - Tier limiter: runs after authentication. Keyed by the validated API key id
+ *    (req.apiKeyRecord.id), never by the raw header value.
+ */
+
+// IP-based rate limit: 100 requests per minute per IP
+const IP_WINDOW_MS = 60_000;
+const IP_MAX_REQUESTS = 100;
+
+// Tier limits (requests per minute)
 const TIER_LIMITS: Record<string, number> = {
-  low: 30,
+  low: 20,
   standard: 100,
   high: 500,
 };
 
-export const FUND_ENDPOINT_LIMIT = 10;
-export const IP_RATE_LIMIT = 100;
-export const TELEMETRY_ENDPOINT_LIMIT = 20; // Stricter limit for telemetry — no auth required
+// Cost tracking
+const COST_LIMIT = 1_000_000;
+const COST_TTL_MS = 3_600_000;
 
-const abuseCache = new NodeCache({ stdTTL: 300 });
-const ipBanCache = new NodeCache({ stdTTL: 3600 });
-const requestCostCache = new NodeCache({ stdTTL: 3600 });
-
-const MAX_REQUEST_COST_PER_KEY = 1_000_000;
-const SUSPICIOUS_PATTERN_THRESHOLD = 5;
-const BAN_THRESHOLD = 3;
-const LARGE_AMOUNT_THRESHOLD = 10_000_000_000;
-
-interface SuspiciousActivity {
-  count: number;
-  firstSeen: number;
-  patterns: string[];
-  addresses: string[];
+interface CostEntry {
+  cost: number;
+  expiresAt: number;
 }
 
-interface RequestCost {
-  totalCost: number;
-  requestCount: number;
-}
+const costTracker = new Map<string, CostEntry>();
 
-function isIPBanned(ip: string): boolean {
-  return ipBanCache.has(ip);
-}
+// Banned IPs (populated by abuse detection)
+const bannedIps = new Set<string>();
 
-function banIP(ip: string, pattern: string): void {
-  ipBanCache.set(ip, true);
-  logger.warn({ ip, pattern }, 'IP banned due to suspicious activity');
-  void sendAbuseAlert({ type: 'ip_banned', ip, pattern });
-}
+// Abuse detection thresholds
+const ABUSE_WINDOW_MS = 60_000;
+const ABUSE_MAX_REQUESTS = 50;
+const abuseTracker = new Map<string, { count: number; windowStart: number }>();
 
-function resolveTier(req: Request): 'low' | 'standard' | 'high' {
-  const tier = req.apiKeyRecord?.rateLimit;
-  if (tier === 'low' || tier === 'standard' || tier === 'high') {
-    return tier;
+/**
+ * Path prefixes that must never be IP rate-limited.
+ *
+ * The IP limiter is mounted at the app root, so `req.path` includes the
+ * `/api` mount prefix (e.g. `/api/webhook/moonpay`). Matching on the bare
+ * `/webhook` prefix therefore never fired and provider callbacks were counted
+ * against the global IP limit. Match the full mounted prefix instead.
+ */
+const WEBHOOK_PATH_PREFIXES = ['/api/webhook/', '/webhook/'];
+
+/**
+ * Whether the request targets a provider webhook route that should bypass the
+ * global IP limiter.
+ */
+export function isWebhookPath(path: string | undefined): boolean {
+  if (!path) {
+    return false;
   }
-  return 'low';
+  return WEBHOOK_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
-function createLimiter(max: number, keyPrefix: string) {
-  const store = config.rateLimit.redisEnabled
-    ? new RedisRateLimitStore(keyPrefix)
-    : undefined;
-
+/**
+ * Build a limiter keyed strictly by IP.
+ *
+ * The X-API-Key header is deliberately ignored here: this limiter runs before
+ * authentication, so trusting the header would let a caller bypass the limit
+ * by rotating random keys.
+ */
+function createIpLimiter() {
   return rateLimit({
-    windowMs: config.rateLimit.windowMs,
-    max: Math.max(max + config.rateLimit.burstFactor, max),
+    windowMs: IP_WINDOW_MS,
+    max: IP_MAX_REQUESTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store,
-    keyGenerator: (request) => {
-      const apiKey = request.headers['x-api-key']?.toString();
-      return `${keyPrefix}${apiKey || request.ip || 'anonymous'}`;
+    keyGenerator: (request: Request) => {
+      return `ip:${request.ip || 'anonymous'}`;
     },
-    message: { error: 'rate_limit', message: 'too many requests, try again later' },
-    handler: (_request, response) => {
-      response.set('Retry-After', String(Math.ceil(config.rateLimit.windowMs / 1000)));
-      response.status(429).json({ error: 'rate_limit', message: 'too many requests, try again later' });
+    handler: (request: Request, response: Response) => {
+      logger.warn('IP rate limit exceeded', { ip: request.ip });
+      response.status(429).json({
+        error: 'Too many requests',
+        message: 'Rate limit exceeded for this IP address',
+      });
     },
   });
 }
 
-const ipLimiter = createLimiter(IP_RATE_LIMIT, 'ip_');
-const fundLimiter = createLimiter(FUND_ENDPOINT_LIMIT, 'fund_');
-const telemetryLimiter = createLimiter(TELEMETRY_ENDPOINT_LIMIT, 'telemetry_');
-const tierLimiters = {
-  low: createLimiter(TIER_LIMITS.low, 'tier_low_'),
-  standard: createLimiter(TIER_LIMITS.standard, 'tier_std_'),
-  high: createLimiter(TIER_LIMITS.high, 'tier_high_'),
+/**
+ * Build a limiter keyed by the validated API key id.
+ *
+ * Must only be used after authentication has populated req.apiKeyRecord.
+ */
+function createTierLimiter(max: number) {
+  return rateLimit({
+    windowMs: IP_WINDOW_MS,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (request: Request) => {
+      const keyId = request.apiKeyRecord?.id;
+      return `key:${keyId || request.ip || 'anonymous'}`;
+    },
+    handler: (request: Request, response: Response) => {
+      logger.warn('Tier rate limit exceeded', {
+        keyId: request.apiKeyRecord?.id,
+      });
+      response.status(429).json({
+        error: 'Too many requests',
+        message: 'Rate limit exceeded for this API key',
+      });
+    },
+  });
+}
+
+const ipLimiter = createIpLimiter();
+const tierLimiters: Record<string, ReturnType<typeof createTierLimiter>> = {
+  low: createTierLimiter(TIER_LIMITS.low),
+  standard: createTierLimiter(TIER_LIMITS.standard),
+  high: createTierLimiter(TIER_LIMITS.high),
 };
 
-/** Global IP rate limit — applied to all requests before body parsing. Excludes webhooks. */
-export const ipRateLimitMiddleware = (req: Request, res: Response, next: NextFunction) => {
-  // Skip IP rate limiting for webhook endpoints — they are server-to-server and already
-  // authenticated via HMAC signature verification. Excluding them prevents high webhook
-  // volume from one provider from throttling customer API traffic, and vice versa.
-  if (req.path && req.path.startsWith('/webhook/')) {
-    return next();
-  }
-
-  const ip = req.ip ?? 'unknown';
-  if (isIPBanned(ip)) {
-    res.status(403).json({ error: 'forbidden', message: 'IP temporarily banned due to suspicious activity' });
+/**
+ * Global IP rate limiting middleware.
+ * Runs before authentication; keyed strictly by IP.
+ */
+export function ipRateLimitMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  // Skip webhook endpoints. The limiter is mounted at the app root, so the
+  // path carries the `/api` prefix (e.g. `/api/webhook/moonpay`).
+  if (isWebhookPath(req.path)) {
+    next();
     return;
   }
+
+  // Block banned IPs
+  if (req.ip && bannedIps.has(req.ip)) {
+    res.status(403).json({
+      error: 'Forbidden',
+      message: 'Your IP has been temporarily blocked due to abuse',
+    });
+    return;
+  }
+
   ipLimiter(req, res, next);
-};
-
-/** Per-API-key tier rate limit — applied after RBAC on protected routes. */
-export function tierRateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-  const tier = resolveTier(req);
-  tierLimiters[tier](req, res, next);
 }
 
-/** Fund endpoint rate limit — 10 req/min per API key or IP. */
-export const fundEndpointRateLimit = fundLimiter;
+/**
+ * Tier-based rate limiting middleware.
+ * Runs after authentication; keyed by the validated API key id.
+ *
+ * This must be mounted after `rbacAuth` so that `req.apiKeyRecord` is
+ * populated and the configured tier (e.g. 'high' = 500/window) is honored.
+ * If it runs before authentication, `req.apiKeyRecord` is undefined and every
+ * key falls back to the 'low' tier.
+ */
+export function tierRateLimitMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const tier = req.apiKeyRecord?.rateLimit || 'low';
+  const limiter = tierLimiters[tier] || tierLimiters.low;
+  limiter(req, res, next);
+}
 
-/** Telemetry endpoint rate limit — 20 req/min per IP (stricter, no auth required). */
-export const telemetryRateLimit = telemetryLimiter;
-
-export function applyRateLimitHeaders(_req: Request, res: Response, next: NextFunction) {
-  const windowSecs = Math.ceil(config.rateLimit.windowMs / 1000);
-  res.set('X-RateLimit-Window', String(windowSecs));
-  res.set('Retry-After', String(windowSecs));
+/**
+ * Fund endpoint rate limiting middleware.
+ */
+export function fundEndpointRateLimit(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const keyId = req.apiKeyRecord?.id;
+  if (!keyId) {
   next();
+    return;
+  }
+
+  const limiter = tierLimiters.high;
+  limiter(req, res, next);
 }
 
-export function trackRequestCost(apiKey: string, cost: number): boolean {
-  const key = `cost_${apiKey}`;
-  const current = requestCostCache.get<RequestCost>(key) || { totalCost: 0, requestCount: 0 };
+/**
+ * Apply standard rate limit headers to a response.
+ *
+ * `Retry-After` is only meaningful on throttling responses (429) and
+ * temporary unavailability (503). Sending it on successful responses is
+ * misleading and some HTTP clients and proxies honour it anyway, so it is
+ * only set when the response status is 429 or 503.
+ */
+export function applyRateLimitHeaders(
+  res: Response,
+  limit: number,
+  remaining: number,
+  resetMs: number
+): void {
+  res.set('X-RateLimit-Limit', String(limit));
+  res.set('X-RateLimit-Remaining', String(Math.max(0, remaining)));
+  res.set('X-RateLimit-Reset', String(Math.ceil(resetMs / 1000)));
 
-  current.totalCost += cost;
-  current.requestCount++;
-  requestCostCache.set(key, current);
+  const status = res.statusCode;
+  if (status === 429 || status === 503) {
+    res.set('Retry-After', String(Math.ceil(resetMs / 1000)));
+  }
+}
 
-  if (current.totalCost > MAX_REQUEST_COST_PER_KEY) {
-    // Never log the raw key; the alert channel receives it for correlation.
-    logger.warn({ apiKey: `***${apiKey.slice(-4)}`, totalCost: current.totalCost }, 'API key exceeded cost limit');
-    void sendAbuseAlert({
+/**
+ * Track request cost for an API key. Returns false when the cost limit is
+ * exceeded (and fires an abuse alert).
+ */
+export function trackRequestCost(apiKeyId: string, cost: number): boolean {
+  const now = Date.now();
+  const entry = costTracker.get(apiKeyId);
+
+  if (!entry || entry.expiresAt <= now) {
+    costTracker.set(apiKeyId, { cost, expiresAt: now + COST_TTL_MS });
+    return cost <= COST_LIMIT;
+  }
+
+  entry.cost += cost;
+
+  if (entry.cost > COST_LIMIT) {
+    sendAbuseAlert({
       type: 'cost_limit_exceeded',
-      ip: 'unknown',
-      apiKeyId: apiKey,
-      details: { totalCost: current.totalCost },
+      apiKeyId,
+      cost: entry.cost,
     });
     return false;
   }
+
   return true;
 }
 
 /**
- * Abuse detection middleware — must run after express.json() so req.body is populated.
+ * Abuse detection middleware for fund endpoints.
+ * Tracks request frequency per IP and bans IPs that exceed the threshold.
  */
-export function fundAbuseDetectionMiddleware(req: Request, res: Response, next: NextFunction) {
-  const ip = req.ip ?? 'unknown';
-  const apiKeyId = req.apiKeyRecord?.id ?? (req.headers['x-api-key'] as string) ?? 'anonymous';
-  const key = `${ip}_${apiKeyId}`;
-
-  if (isIPBanned(ip)) {
-    res.status(403).json({ error: 'forbidden', message: 'IP temporarily banned due to suspicious activity' });
+export function fundAbuseDetectionMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const ip = req.ip;
+  if (!ip) {
+    next();
     return;
   }
 
-  const activity = abuseCache.get<SuspiciousActivity>(key) || {
-    count: 0,
-    firstSeen: Date.now(),
-    patterns: [],
-    addresses: [],
-  };
+  const now = Date.now();
+  const entry = abuseTracker.get(ip);
 
-  activity.count++;
-  let detectedPattern: string | null = null;
-  const body = req.body as Record<string, unknown> | undefined;
-
-  if (body?.amount && parseInt(String(body.amount), 10) > LARGE_AMOUNT_THRESHOLD) {
-    detectedPattern = 'large_amount';
+  if (!entry || now - entry.windowStart > ABUSE_WINDOW_MS) {
+    abuseTracker.set(ip, { count: 1, windowStart: now });
+    next();
+    return;
   }
 
-  const targetAddress = body?.targetAddress as string | undefined;
-  if (targetAddress) {
-    if (!activity.addresses.includes(targetAddress)) {
-      activity.addresses.push(targetAddress);
-    }
-    if (activity.addresses.length > 10) {
-      detectedPattern = 'multiple_addresses';
-    }
-  }
+  entry.count += 1;
 
-  if (Date.now() - activity.firstSeen < 60_000 && activity.count > 20) {
-    detectedPattern = 'rapid_requests';
-  }
-
-  if (detectedPattern) {
-    activity.patterns.push(detectedPattern);
-
-    if (activity.patterns.filter((p) => p === detectedPattern).length >= SUSPICIOUS_PATTERN_THRESHOLD) {
-      const banCount = (ipBanCache.get<number>(`ban_count_${ip}`) || 0) + 1;
-      ipBanCache.set(`ban_count_${ip}`, banCount);
-
-      if (banCount >= BAN_THRESHOLD) {
-        banIP(ip, detectedPattern);
-        res.status(403).json({ error: 'forbidden', message: 'IP temporarily banned due to suspicious activity' });
-        return;
-      }
-
-      logger.warn({ ip, pattern: detectedPattern, count: activity.count }, 'Suspicious activity detected');
-      void sendAbuseAlert({
-        type: 'suspicious_activity',
-        ip,
-        apiKeyId,
-        pattern: detectedPattern,
-        details: { count: activity.count },
-      });
-    }
-  }
-  // NodeCache stores clones, so persist after all mutations above.
-  abuseCache.set(key, activity);
-
-  const rawKey = req.headers['x-api-key'] as string | undefined;
-  if (rawKey && !trackRequestCost(rawKey, 100)) {
-    res.status(429).json({ error: 'rate_limit', message: 'API key cost limit exceeded' });
+  if (entry.count > ABUSE_MAX_REQUESTS) {
+    bannedIps.add(ip);
+    sendAbuseAlert({
+      type: 'ip_banned',
+      ip,
+      count: entry.count,
+    });
+    res.status(403).json({
+      error: 'Forbidden',
+      message: 'Your IP has been temporarily blocked due to abuse',
+    });
     return;
   }
 
   next();
 }
 
-/** @deprecated Use ipRateLimitMiddleware + fundEndpointRateLimit */
-export const rateLimitMiddleware = ipRateLimitMiddleware;
+export const IP_RATE_LIMIT = IP_MAX_REQUESTS;
+export const FUND_ENDPOINT_LIMIT = TIER_LIMITS.high;
