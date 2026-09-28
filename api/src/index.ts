@@ -27,7 +27,7 @@ import { CircuitBreaker } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
 import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
-// import { setFeeRateBps } from './services/metrics'; // see TODO below
+import { setFeeRateBps, updateCircuitBreakerMetrics } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
@@ -37,6 +37,7 @@ import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
 import { createWebSocketServer, handleUpgrade } from './services/websocket';
+import { integrityAuditLog } from './services/auditLog';
 import { cacheMetricsRouter } from './routes/cacheMetrics';
 
 export { logger } from './logger';
@@ -55,15 +56,16 @@ if (config.apiKeys.length > 0) {
   seedLegacyKeys(config.apiKeys);
 }
 
-// TODO(next-bounty): setFeeRateBps() in services/metrics.ts is a
-// `throw new Error('Not implemented')` stub, and this call runs at import time --
-// so requiring this module threw, the server could not boot, and every test that
-// imports the app failed to load. Restore once the metric is implemented.
-// setFeeRateBps(config.soroban.feeBps);
+setFeeRateBps(config.soroban.feeBps);
 
 const app = express();
 
 app.set('logger', logger);
+
+// Trust the configured reverse proxy so req.ip reflects the real client
+// (X-Forwarded-For) instead of the load balancer. Without this, IP allowlists,
+// IP rate limits, IP bans and webhook failure tracking all key off the proxy.
+app.set('trust proxy', config.trustProxy);
 
 app.use(helmet());
 app.use(
@@ -89,9 +91,7 @@ app.use((req, res, next) => {
     const labels = { method: req.method, path: route, status: String(res.statusCode) };
     httpRequestCounter.inc(labels);
     httpRequestDuration.observe(labels, (Date.now() - start) / 1000);
-    // TODO(next-bounty): updateCircuitBreakerMetrics() is still a stub that throws.
-    // It runs in every response's 'finish' handler, so it failed every request.
-    // updateCircuitBreakerMetrics(circuitBreakers);
+    updateCircuitBreakerMetrics(circuitBreakers);
   });
   next();
 });
@@ -189,23 +189,21 @@ app.use('/api/v1/admin', rbacAuth, adminRouter);
 app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/metrics', rbacAuth, metricsRouter);
+app.use('/api/v1/metrics', rbacAuth, metricsRouter);
 
-// Bull Board queue dashboard — admin-only, must be mounted before the error handler
-app.use('/admin/queues', rbacAuth, requireScopes('admin:write'), adminRouter);
-
+app.use(xssErrorSanitizer);
 app.use(errorHandler);
 
 const server = app.listen(config.port, () => {
-  logger.info({ port: config.port }, 'API server listening');
+  logger.info({ port: config.port, env: config.env }, 'Server started');
 });
 
 const wss = createWebSocketServer(server);
 server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
 
 registerSignalHandlers(async () => {
-  await closePool();
   await shutdownTracing();
+  await closePool();
 });
 
-export default app;
+export { app, server, wss };

@@ -10,7 +10,7 @@ export interface WebhookRegistration {
   id: string;
   url: string;
   secret: string;
-  apiKey: string;
+  apiKeyId: string;
   events: string[];
   createdAt: number;
 }
@@ -145,12 +145,12 @@ export class WebhookDeliveryService {
   private dlq: DLQEntry[] = [];
   private deliveryLog: DeliveryAttempt[] = [];
 
-  register(params: { url: string; secret: string; apiKey: string; events: string[] }): WebhookRegistration {
+  register(params: { url: string; secret: string; apiKeyId: string; events: string[] }): WebhookRegistration {
     const registration: WebhookRegistration = {
       id: crypto.randomUUID(),
       url: params.url,
       secret: params.secret,
-      apiKey: params.apiKey,
+      apiKeyId: params.apiKeyId,
       events: params.events,
       createdAt: Date.now(),
     };
@@ -167,8 +167,8 @@ export class WebhookDeliveryService {
     return this.registrations.get(id);
   }
 
-  getRegistrationsByApiKey(apiKey: string): WebhookRegistration[] {
-    return [...this.registrations.values()].filter((r) => r.apiKey === apiKey);
+  getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[] {
+    return [...this.registrations.values()].filter((r) => r.apiKeyId === apiKeyId);
   }
 
   /**
@@ -188,8 +188,8 @@ export class WebhookDeliveryService {
     await this.attemptDelivery(registration, event, data, payload, signature, timestamp, 0);
   }
 
-  async deliverToAll(apiKey: string, event: string, data: unknown): Promise<void> {
-    const targets = this.getRegistrationsByApiKey(apiKey).filter(
+  async deliverToAll(apiKeyId: string, event: string, data: unknown): Promise<void> {
+    const targets = this.getRegistrationsByApiKeyId(apiKeyId).filter(
       (r) => r.events.includes(event) || r.events.includes('*'),
     );
     await Promise.all(targets.map((r) => this.deliver(r, event, data)));
@@ -256,5 +256,128 @@ export class WebhookDeliveryService {
         payloadHash: hashPayload(payload),
         destination: registration.url,
         registration
+        registrationId: registration.id,
+        event,
+        attemptNumber: attemptNumber + 1,
+        statusCode: response.status,
+        result: response.ok ? 'success' : 'failed',
+      };
+      enqueueAudit(
+        'webhook_delivery',
+        deliveryAuditPayload,
+        registration.apiKeyId,
+        () => integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKeyId),
+      );
+
+      if (response.ok) {
+        logger.info(
+          { registrationId: registration.id, url: registration.url, event, attempt: attemptNumber + 1 },
+          'webhook delivered',
+        );
+        this.deliveryLog.push(attempt);
+        return;
+      }
+
+      attempt.error = `HTTP ${response.status}`;
+      logger.warn(
+        { registrationId: registration.id, url: registration.url, event, status: response.status, attempt: attemptNumber + 1 },
+        'webhook delivery failed with non-2xx status',
+      );
+    } catch (err) {
+      attempt.error = err instanceof Error ? err.message : 'unknown error';
+      const errorAuditPayload = {
+        payloadHash: hashPayload(payload),
+        destination: registration.url,
+        registrationId: registration.id,
+        event,
+        attemptNumber: attemptNumber + 1,
+        result: 'error',
+        error: attempt.error,
+      };
+      enqueueAudit(
+        'webhook_delivery',
+        errorAuditPayload,
+        registration.apiKeyId,
+        () => integrityAuditLog.append('webhook_delivery', errorAuditPayload, registration.apiKeyId),
+      );
+      logger.warn(
+        { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
+        'webhook delivery error',
+      );
+    }
+
+    this.deliveryLog.push(attempt);
+
+    if (attemptNumber < RETRY_DELAYS_MS.length) {
+      const delay = RETRY_DELAYS_MS[attemptNumber];
+      logger.info(
+        { registrationId: registration.id, event, nextAttemptIn: delay, attempt: attemptNumber + 1 },
+        'scheduling webhook retry',
+      );
+      try {
+        await enqueueWebhookRetry({
+          registrationId: registration.id,
+          event,
+          payload,
+          signature,
+          data,
+          attemptNumber: attemptNumber + 1,
+        });
+      } catch (err) {
+        logger.error(
+          { registrationId: registration.id, event, error: err instanceof Error ? err.message : String(err) },
+          'failed to enqueue webhook retry',
+        );
+        this.moveToDLQ(registration, event, data);
+      }
+    } else {
+      this.moveToDLQ(registration, event, data);
+    }
+  }
+
+  private moveToDLQ(registration: WebhookRegistration, event: string, data: unknown): void {
+    const attempts = this.deliveryLog.filter((a) => a.registrationId === registration.id && a.event === event);
+    const entry: DLQEntry = {
+      id: crypto.randomUUID(),
+      registration,
+      payload: data,
+      event,
+      attempts,
+      failedAt: Date.now(),
+    };
+    this.dlq.push(entry);
+    logger.error(
+      { registrationId: registration.id, url: registration.url, event, dlqId: entry.id },
+      'webhook moved to dead letter queue after max retries',
+    );
+  }
+
+  getDLQ(): DLQEntry[] {
+    return [...this.dlq];
+  }
+
+  getDLQEntry(id: string): DLQEntry | undefined {
+    return this.dlq.find((e) => e.id === id);
+  }
+
+  deleteDLQEntry(id: string): boolean {
+    const idx = this.dlq.findIndex((e) => e.id === id);
+    if (idx === -1) return false;
+    this.dlq.splice(idx, 1);
+    return true;
+  }
+
+  getDeliveryLog(): DeliveryAttempt[] {
+    return [...this.deliveryLog];
+  }
+
+  getStats(): { registered: number; dlqSize: number; totalAttempts: number } {
+    return {
+      registered: this.registrations.size,
+      dlqSize: this.dlq.length,
+      totalAttempts: this.deliveryLog.length,
+    };
+  }
+}
 
 /* … truncated 2102 chars — edit only what you need near the top … */

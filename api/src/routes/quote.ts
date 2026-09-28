@@ -5,8 +5,9 @@ import { sorobanService } from '../services/soroban';
 import { buildCacheKey, cacheDelPattern } from '../services/cache';
 import { requireScopes } from '../middleware/rbac';
 import { PermissionScope } from '../types/auth';
-// import { cacheMiddleware } from '../middleware/cache'; // see TODO on the GET / route
-// import { setFeeRateBps } from '../services/metrics'; // see TODO in GET /
+import { cacheMiddleware } from '../middleware/cache';
+import { CACHE_TTL } from '../utils/constants';
+import { setFeeRateBps } from '../services/metrics';
 
 /** Express router for quote endpoints. Mounted at `/api/v1/quote`. */
 export const quoteRouter = Router();
@@ -20,19 +21,13 @@ const getQuoteSchema = z.object({
 quoteRouter.get(
   '/',
   requireScopes(PermissionScope.QUOTE_READ),
-  // TODO(next-bounty): cacheMiddleware() in src/middleware/cache.ts is still a
-  // `throw new Error('Not implemented')` stub. Because it is *called* here while
-  // the router is built, importing this module threw -- which meant src/index.ts
-  // could not load, the API server could not start, and every test that imports
-  // the app failed before running. Commented out so quotes are served uncached;
-  // restore once the middleware is implemented.
-  // cacheMiddleware({
-  //   ttl: CACHE_TTL.quote,
-  //   keyFn: (req) => {
-  //     const params = getQuoteSchema.parse(req.query);
-  //     return buildCacheKey('quote', `${params.sourceAsset}:${params.amount}:${params.targetAddress}`);
-  //   },
-  // }),
+  cacheMiddleware({
+    ttl: CACHE_TTL.quote,
+    keyFn: (req) => {
+      const params = getQuoteSchema.parse(req.query);
+      return buildCacheKey('quote', `${params.sourceAsset}:${params.amount}:${params.targetAddress}`);
+    },
+  }),
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const params = getQuoteSchema.parse(_req.query);
@@ -42,9 +37,7 @@ quoteRouter.get(
         params.targetAddress,
       );
 
-      // TODO(next-bounty): setFeeRateBps() is a stub that throws; calling it here
-      // turned every successful quote into an error.
-      // setFeeRateBps(quote.feeBps);
+      setFeeRateBps(quote.feeBps);
       res.json(quote);
     } catch (err) {
       next(err);
