@@ -1,3 +1,7 @@
+import { SDK_VERSION } from './version';
+
+export { SDK_VERSION };
+
 export interface TelemetryEvent {
   sdkVersion: string;
   nodeVersion: string;
@@ -8,11 +12,11 @@ export interface TelemetryEvent {
 }
 
 export interface TelemetryTransport {
-  send(event: TelemetryEvent): void;
+  send(_event: TelemetryEvent | TelemetryEvent[]): void;
 }
 
 export class NoopTelemetryTransport implements TelemetryTransport {
-  send(_event: TelemetryEvent): void {
+  send(_event: TelemetryEvent | TelemetryEvent[]): void {
     // no-op by default
   }
 }
@@ -20,7 +24,7 @@ export class NoopTelemetryTransport implements TelemetryTransport {
 export class FetchTelemetryTransport implements TelemetryTransport {
   constructor(private readonly endpoint: string) {}
 
-  send(event: TelemetryEvent): void {
+  send(event: TelemetryEvent | TelemetryEvent[]): void {
     void fetch(this.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -56,7 +60,7 @@ export class TelemetryClient {
 
     const runtimeProcess = typeof process !== 'undefined' ? process : undefined;
     this.queue.push({
-      sdkVersion: runtimeProcess?.env?.npm_package_version || '0.1.0',
+      sdkVersion: SDK_VERSION,
       nodeVersion: runtimeProcess?.version || 'unknown',
       platform: runtimeProcess?.platform || 'unknown',
       ...event,
@@ -87,6 +91,6 @@ export class TelemetryClient {
     }
 
     const batch = this.queue.splice(0, this.queue.length);
-    batch.forEach((event) => this.transport.send(event));
+    this.transport.send(batch);
   }
 }
