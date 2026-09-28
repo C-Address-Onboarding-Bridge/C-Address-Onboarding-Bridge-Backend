@@ -30,6 +30,12 @@ function isValidContractId(id: string): boolean {
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   host: process.env.HOST || '0.0.0.0',
+  /**
+   * Express `trust proxy` setting. Controls how `req.ip` is derived when the
+   * API sits behind a load balancer / reverse proxy. Without this, IP
+   * allowlists, IP rate limits and IP bans all key off the proxy address.
+   */
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   soroban: {
     rpcUrls: (process.env.SOROBAN_RPC_URLS || process.env.SOROBAN_RPC_URL || 'https://soroban-rpc.testnet.stellar.org')
       .split(',')
@@ -180,9 +186,6 @@ export const config = {
      */
     backpressureThreshold: parseInt(process.env.ASYNC_BACKPRESSURE_THRESHOLD || '1000', 10),
     /**
-     * How long (ms) the in-process analytics buffer accumulates events before
-     * flushing them as a single batched BullMQ job.
-     */
-    bufferFlushMs: parseInt(process.env.ASYNC_BUFFER_FLUSH_MS || '100', 10),
-  },
-};
+     * How long (ms) the in-process analytics buffer accumulate
+
+/* … truncated 162 chars — edit only what you need near the top … */

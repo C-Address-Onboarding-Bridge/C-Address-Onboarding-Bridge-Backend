@@ -62,6 +62,11 @@ const app = express();
 
 app.set('logger', logger);
 
+// Trust the configured reverse proxy so req.ip reflects the real client
+// (X-Forwarded-For) instead of the load balancer. Without this, IP allowlists,
+// IP rate limits, IP bans and webhook failure tracking all key off the proxy.
+app.set('trust proxy', config.trustProxy);
+
 app.use(helmet());
 app.use(
   cors({
