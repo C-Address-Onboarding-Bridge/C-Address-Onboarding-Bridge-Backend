@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import net from 'net';
 import { Response, NextFunction, Request as ExpressRequest } from 'express';
 import { logger } from '../logger';
 import { getPool } from '../services/db';
@@ -61,6 +62,8 @@ function matchesCidr(ip: string, cidr: string): boolean {
   const bits = parseInt(bitsStr, 10);
 
   if (ip.includes(':') || network.includes(':')) {
+    // #644: validate IPv6 prefix length is in [0, 128]
+    if (!Number.isFinite(bits) || bits < 0 || bits > 128) return false;
     const ipNum = ipv6ToBigInt(ip);
     const netNum = ipv6ToBigInt(network);
     if (ipNum === null || netNum === null) return false;
@@ -68,6 +71,8 @@ function matchesCidr(ip: string, cidr: string): boolean {
     return (ipNum & mask) === (netNum & mask);
   }
 
+  // #644: validate IPv4 prefix length is in [0, 32]
+  if (!Number.isFinite(bits) || bits < 0 || bits > 32) return false;
   const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
   const ipNum = ipToNum(ip);
   const netNum = ipToNum(network);
@@ -75,7 +80,11 @@ function matchesCidr(ip: string, cidr: string): boolean {
   return (ipNum & mask) === (netNum & mask);
 }
 
+// #644: Validate the full IP string with net.isIP before doing bit math, so
+// malformed octets like 999.1.1.1 or a.b.c.d are rejected instead of
+// silently producing wrong numbers via parseInt / NaN-becomes-0.
 function ipToNum(ip: string): number | null {
+  if (net.isIP(ip) !== 4) return null;
   const parts = ip.split('.');
   if (parts.length !== 4) return null;
   return parts.reduce((acc, p) => (acc << 8) + parseInt(p, 10), 0) >>> 0;
@@ -117,6 +126,40 @@ function ipv6ToBigInt(ip: string): bigint | null {
 function isIpAllowed(ip: string, whitelist: string[]): boolean {
   if (whitelist.length === 0) return true;
   return whitelist.some((cidr) => matchesCidr(ip, cidr));
+}
+
+/**
+ * #644: Validate that a string is a valid IP address or CIDR notation entry.
+ * Accepts:
+ *   - IPv4 address (e.g. "1.2.3.4")
+ *   - IPv6 address (e.g. "::1")
+ *   - IPv4 CIDR with prefix 0–32 (e.g. "10.0.0.0/8")
+ *   - IPv6 CIDR with prefix 0–128 (e.g. "2001:db8::/32")
+ * Returns false for any malformed input.
+ */
+export function validateIpOrCidr(entry: string): boolean {
+  if (typeof entry !== 'string' || entry.length === 0) return false;
+
+  if (!entry.includes('/')) {
+    // Plain IP address — must be valid IPv4 or IPv6.
+    return net.isIP(entry) !== 0;
+  }
+
+  const slashIndex = entry.lastIndexOf('/');
+  const host = entry.slice(0, slashIndex);
+  const prefixStr = entry.slice(slashIndex + 1);
+
+  const prefix = parseInt(prefixStr, 10);
+  // Prefix must be a finite integer with no extra characters (e.g. "32x" rejected).
+  if (!Number.isFinite(prefix) || String(prefix) !== prefixStr) return false;
+
+  const ipVersion = net.isIP(host);
+  if (ipVersion === 4) {
+    return prefix >= 0 && prefix <= 32;
+  } else if (ipVersion === 6) {
+    return prefix >= 0 && prefix <= 128;
+  }
+  return false;
 }
 
 // ─── DB helpers ────────────────────────────────────────────────────────────────
@@ -370,12 +413,29 @@ export function rbacAuth(req: Request, res: Response, next: NextFunction): void 
 }
 
 /**
- * Return a snapshot of the in-memory audit log.
+ * Return a paginated snapshot of the in-memory audit log.
+ *
+ * #642: Accepts offset and limit parameters so callers do not have to fetch
+ * the entire log. Returns { entries, total, offset, limit } so the caller
+ * knows how many total entries exist and what window was returned.
+ *
+ * @param offset - Zero-based index of the first entry to return (default 0).
+ * @param limit  - Maximum number of entries to return (default 100).
  */
-export function getAuditLog(): typeof auditLog {
-  // Copy each entry too: returning the stored objects would let callers
-  // rewrite recorded audit history.
-  return auditLog.map((entry) => ({ ...entry }));
+export function getAuditLog(
+  offset: number = 0,
+  limit: number = 100,
+): {
+  entries: Array<{ ts: number; keyId: string; ip: string; path: string; method: string }>;
+  total: number;
+  offset: number;
+  limit: number;
+} {
+  const total = auditLog.length;
+  // Copy each entry: returning the stored objects would let callers rewrite
+  // recorded audit history.
+  const entries = auditLog.slice(offset, offset + limit).map((entry) => ({ ...entry }));
+  return { entries, total, offset, limit };
 }
 
 /**
