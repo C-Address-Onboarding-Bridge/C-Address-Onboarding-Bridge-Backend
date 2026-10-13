@@ -163,7 +163,7 @@ describe('OpenAPI Documentation', () => {
       console.warn(
         '\n⚠️  OpenAPI Documentation Gap Detected:\n' +
           gap.map((r) => `   - ${r}`).join('\n') +
-          '\n   See OPENAPI_DOCUMENTATION_GAP.md for details.\n',
+          '\n   See docs/OPENAPI_DOCUMENTATION_GAP.md for details.\n',
       );
     }
 
