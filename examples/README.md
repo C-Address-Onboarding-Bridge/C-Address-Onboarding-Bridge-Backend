@@ -75,6 +75,28 @@ Point `BRIDGE_BASE_URL` at a running local API (`http://localhost:3001`) or prod
 
 ---
 
+## Idempotency (safe retries)
+
+The fund submission (`POST /api/v1/fund`) and CEX withdrawal routing
+(`POST /api/v1/cex/route`) endpoints are **non-idempotent**: a retried
+request can otherwise be submitted twice. Every example in this folder sends
+a UUIDv4 `X-Idempotency-Key` header on those calls (the server's idempotency
+middleware de-duplicates by that key), so a retry does not cause a double
+submission. A fresh key is generated per logical operation:
+
+- **Python** — `generate_idempotency_key()`; pass the same key back on a
+  retry via `submit_signed_xdr(..., idempotency_key=KEY)` or
+  `route_cex_withdrawal(idempotency_key=KEY, ...)`.
+- **Go** — `caddressbridge.GenerateIdempotencyKey()`.
+- **Rust** — `c_address_bridge::BridgeClient::generate_idempotency_key()`.
+- **Java** — `BridgeClient.generateIdempotencyKey()`.
+
+Reuse the **same** key when retrying the same operation; generate a new one
+for a new logical operation. The mock server ignores the header, so all
+examples still run end-to-end locally.
+
+---
+
 ## CI
 
 The `examples` workflow in `.github/workflows/examples.yml` compiles and runs every example against the mock server on each PR.

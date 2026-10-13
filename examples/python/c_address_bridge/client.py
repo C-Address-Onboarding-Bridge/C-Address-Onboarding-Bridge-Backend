@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -12,6 +13,17 @@ from urllib.request import Request, urlopen
 from .errors import BridgeError, NetworkError, parse_http_error
 
 DEFAULT_TIMEOUT = 30
+
+
+def generate_idempotency_key() -> str:
+    """Return a fresh UUIDv4 for the ``X-Idempotency-Key`` header.
+
+    Non-idempotent POST endpoints (fund submission, CEX withdrawal routing)
+    de-duplicate retries server-side using this key. Generate one key per
+    logical operation and pass the same key back on a retry so the server
+    does not submit the operation twice.
+    """
+    return str(uuid.uuid4())
 
 
 class BridgeClient:
@@ -39,12 +51,15 @@ class BridgeClient:
         *,
         params: dict[str, str] | None = None,
         body: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> Any:
         url = f"{self.base_url}{path}"
         if params:
             url = f"{url}?{urlencode(params)}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = Request(url, data=data, headers=self._headers(), method=method)
+        if idempotency_key:
+            req.add_header("X-Idempotency-Key", idempotency_key)
         try:
             with urlopen(req, timeout=self.timeout) as resp:
                 payload = resp.read().decode("utf-8")
@@ -85,8 +100,16 @@ class BridgeClient:
             },
         )
 
-    def submit_signed_xdr(self, signed_xdr: str) -> dict[str, Any]:
-        return self._request("POST", "/api/v1/fund", body={"signedXdr": signed_xdr})
+    def submit_signed_xdr(self, signed_xdr: str, *, idempotency_key: str | None = None) -> dict[str, Any]:
+        # #697: fund submission is non-idempotent; send a key so retries
+        # are de-duplicated. A fresh key is generated per call unless the
+        # caller supplies one to reuse on retry.
+        return self._request(
+            "POST",
+            "/api/v1/fund",
+            body={"signedXdr": signed_xdr},
+            idempotency_key=idempotency_key or generate_idempotency_key(),
+        )
 
     def get_status(self, tx_hash: str) -> dict[str, Any]:
         return self._request("GET", f"/api/v1/status/{tx_hash}")
@@ -97,8 +120,15 @@ class BridgeClient:
     def create_transak_url(self, **params: Any) -> dict[str, str]:
         return self._request("POST", "/api/v1/offramp/transak", body=params)
 
-    def route_cex_withdrawal(self, **params: Any) -> dict[str, Any]:
-        return self._request("POST", "/api/v1/cex/route", body=params)
+    def route_cex_withdrawal(self, idempotency_key: str | None = None, **params: Any) -> dict[str, Any]:
+        # #697: withdrawal routing is non-idempotent; send a key so a retry
+        # cannot trigger a second withdrawal.
+        return self._request(
+            "POST",
+            "/api/v1/cex/route",
+            body=params,
+            idempotency_key=idempotency_key or generate_idempotency_key(),
+        )
 
     def health(self) -> dict[str, str]:
         return self._request("GET", "/health")

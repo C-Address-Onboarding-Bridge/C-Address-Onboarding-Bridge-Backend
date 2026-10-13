@@ -32,7 +32,7 @@ async fn main() -> Result<(), BridgeError> {
     println!("Funding prepared: {}...", &prepared.instruction[..prepared.instruction.len().min(40)]);
 
     let funded = client
-        .submit_signed_xdr("AAAAAgAAAABexampleSignedTransactionXdr")
+        .submit_signed_xdr("AAAAAgAAAABexampleSignedTransactionXdr", None)
         .await?;
     println!(
         "Fund submitted: {} hash={}...",
@@ -72,7 +72,8 @@ async fn main() -> Result<(), BridgeError> {
             "amount": "10000000",
             "targetCAddress": MOCK_C_ADDRESS,
             "targetNetwork": "stellar"
-        }))
+        }),
+        None)
         .await?;
     println!("CEX withdrawal: status={} id={}", cex.status, cex.withdrawal_id);
 

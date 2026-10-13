@@ -13,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 public final class BridgeClient {
@@ -33,7 +34,8 @@ public final class BridgeClient {
         return new BridgeClient(baseUrl, apiKey);
     }
 
-    public JsonNode request(String method, String path, Map<String, String> query, Object jsonBody)
+    public JsonNode request(String method, String path, Map<String, String> query, Object jsonBody,
+                            String idempotencyKey)
             throws IOException, InterruptedException, BridgeException {
         String url = baseUrl + path;
         if (query != null && !query.isEmpty()) {
@@ -51,6 +53,11 @@ public final class BridgeClient {
         if (apiKey != null && !apiKey.isBlank()) {
             builder.header("X-API-Key", apiKey);
         }
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            // #697: de-duplicate non-idempotent POSTs (fund submission, CEX
+            // withdrawal routing) so a retry does not submit the operation twice.
+            builder.header("X-Idempotency-Key", idempotencyKey);
+        }
         if (jsonBody != null) {
             builder.method(method, HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(jsonBody)));
         } else {
@@ -65,6 +72,17 @@ public final class BridgeClient {
             return mapper.createObjectNode();
         }
         return mapper.readTree(body);
+    }
+
+    /** Backwards-compatible entry point with no idempotency key (used by the read-only flows). */
+    public JsonNode request(String method, String path, Map<String, String> query, Object jsonBody)
+            throws IOException, InterruptedException, BridgeException {
+        return request(method, path, query, jsonBody, null);
+    }
+
+    /** Generate a fresh UUIDv4 for the {@code X-Idempotency-Key} header. */
+    public static String generateIdempotencyKey() {
+        return UUID.randomUUID().toString();
     }
 
     public JsonNode health() throws IOException, InterruptedException, BridgeException {
@@ -91,11 +109,20 @@ public final class BridgeClient {
         return request("POST", "/api/v1/fund/prepare", null, body);
     }
 
+    /**
+     * #697: fund submission is non-idempotent, so a fresh {@code X-Idempotency-Key} is
+     * generated per call unless the caller supplies one to reuse on a retry.
+     */
     public JsonNode submitSignedXdr(String signedXdr)
+            throws IOException, InterruptedException, BridgeException {
+        return submitSignedXdr(signedXdr, generateIdempotencyKey());
+    }
+
+    public JsonNode submitSignedXdr(String signedXdr, String idempotencyKey)
             throws IOException, InterruptedException, BridgeException {
         ObjectNode body = mapper.createObjectNode();
         body.put("signedXdr", signedXdr);
-        return request("POST", "/api/v1/fund", null, body);
+        return request("POST", "/api/v1/fund", null, body, idempotencyKey);
     }
 
     public JsonNode getStatus(String txHash) throws IOException, InterruptedException, BridgeException {
@@ -110,7 +137,16 @@ public final class BridgeClient {
         return request("POST", "/api/v1/offramp/transak", null, jsonBody);
     }
 
+    /**
+     * #697: CEX withdrawal routing is non-idempotent; a fresh key is generated per call
+     * unless the caller supplies one to reuse on a retry.
+     */
     public String routeCexWithdrawal(String jsonBody) throws IOException, InterruptedException, BridgeException {
-        return request("POST", "/api/v1/cex/route", null, jsonBody);
+        return routeCexWithdrawal(jsonBody, generateIdempotencyKey());
+    }
+
+    public String routeCexWithdrawal(String jsonBody, String idempotencyKey)
+            throws IOException, InterruptedException, BridgeException {
+        return request("POST", "/api/v1/cex/route", null, jsonBody, idempotencyKey);
     }
 }
