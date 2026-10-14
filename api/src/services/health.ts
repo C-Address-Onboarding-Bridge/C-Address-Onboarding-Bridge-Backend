@@ -1,6 +1,7 @@
 import { dbHealthCheck } from './db';
+import { getCacheClient } from './cache';
+import { rpcPool } from './rpcPool';
 import { config } from '../config';
-import { logger } from '../logger';
 
 interface DependencyCheck {
   ok: boolean;
@@ -21,36 +22,33 @@ const CACHE_TTL_MS = 5000;
 
 async function checkSoroban(): Promise<DependencyCheck> {
   const start = Date.now();
-  try {
-    const url = config.soroban.rpcUrls[0];
-    if (!url) return { ok: false, error: 'no rpc url configured' };
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getNetwork', params: [] }),
-      signal: AbortSignal.timeout(3000),
-    });
-    return { ok: res.ok || res.status < 500, latencyMs: Date.now() - start };
-  } catch (err) {
-    return { ok: false, latencyMs: Date.now() - start, error: String(err) };
+  const metrics = rpcPool.getMetrics();
+  if (metrics.length === 0) {
+    return { ok: false, latencyMs: Date.now() - start, error: 'no rpc url configured' };
   }
+  // #702: report the pool's own view of provider health instead of probing a
+  // single URL. The pool tracks per-provider success/failure and recovery, so a
+  // 4xx from one provider is not a "healthy" RPC; the node is healthy when at
+  // least one provider is healthy.
+  const healthy = metrics.filter((m) => m.healthy);
+  return {
+    ok: healthy.length > 0,
+    latencyMs: Date.now() - start,
+    error: healthy.length > 0 ? undefined : 'all rpc providers unhealthy',
+  };
 }
 
 async function checkRedis(): Promise<DependencyCheck> {
   if (!config.redis.enabled) return { ok: true, error: undefined };
   const start = Date.now();
   try {
-    const { default: Redis } = await import('ioredis');
-    const client = new Redis(config.redis.url, {
-      lazyConnect: true,
-      maxRetriesPerRequest: 0,
-      connectTimeout: 2000,
-      enableOfflineQueue: false,
-    });
-    await client.connect();
+    // #702: ping the client the app already uses instead of opening a fresh
+    // connection (connect/ping/quit) on every uncached health probe.
+    const client = getCacheClient();
+    if (!client) {
+      return { ok: false, latencyMs: Date.now() - start, error: 'redis client unavailable' };
+    }
     await client.ping();
-    await client.quit();
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err) {
     return { ok: false, latencyMs: Date.now() - start, error: String(err) };

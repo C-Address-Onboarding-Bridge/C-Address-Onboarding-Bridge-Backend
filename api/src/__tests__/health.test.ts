@@ -14,6 +14,12 @@ vi.mock('../config', () => ({
 vi.mock('../services/db', () => ({
   dbHealthCheck: vi.fn().mockResolvedValue({ ok: true }),
 }));
+vi.mock('../services/cache', () => ({
+  getCacheClient: vi.fn().mockReturnValue(null),
+}));
+vi.mock('../services/rpcPool', () => ({
+  rpcPool: { getMetrics: vi.fn().mockReturnValue([]) },
+}));
 
 import { getHealthStatus, invalidateHealthCache } from '../services/health';
 
@@ -58,5 +64,58 @@ describe('getHealthStatus', () => {
   it('marks soroban as critical', async () => {
     const result = await getHealthStatus(true);
     expect(result.dependencies.soroban.critical).toBe(true);
+  });
+
+  it('marks soroban healthy when at least one rpc provider is healthy', async () => {
+    const { rpcPool } = await import('../services/rpcPool');
+    rpcPool.getMetrics.mockReturnValue([
+      { url: 'http://a', healthy: false, consecutiveFailures: 5, lastFailureAt: 1, lastLatencyMs: 1, totalRequests: 10, totalFailures: 5 },
+      { url: 'http://b', healthy: true, consecutiveFailures: 0, lastFailureAt: null, lastLatencyMs: 12, totalRequests: 20, totalFailures: 0 },
+    ]);
+    const result = await getHealthStatus(true);
+    expect(result.dependencies.soroban.ok).toBe(true);
+  });
+
+  it('marks soroban unhealthy when all rpc providers are unhealthy', async () => {
+    const { rpcPool } = await import('../services/rpcPool');
+    // A 4xx provider is tracked as unhealthy by the pool; reporting comes from
+    // getMetrics(), so every provider being unhealthy => the node is unhealthy.
+    rpcPool.getMetrics.mockReturnValue([
+      { url: 'http://a', healthy: false, consecutiveFailures: 9, lastFailureAt: 1, lastLatencyMs: 1, totalRequests: 30, totalFailures: 30 },
+      { url: 'http://b', healthy: false, consecutiveFailures: 4, lastFailureAt: 2, lastLatencyMs: 2, totalRequests: 25, totalFailures: 25 },
+    ]);
+    const result = await getHealthStatus(true);
+    expect(result.dependencies.soroban.ok).toBe(false);
+  });
+
+  it('reports redis as ok by pinging the shared client, not a throwaway connection', async () => {
+    const { config } = await import('../config');
+    const { getCacheClient } = await import('../services/cache');
+    const ping = vi.fn().mockResolvedValue('PONG');
+    getCacheClient.mockReturnValue({ ping });
+    const original = config.redis.enabled;
+    config.redis.enabled = true;
+    try {
+      const result = await getHealthStatus(true);
+      expect(result.dependencies.redis.ok).toBe(true);
+      expect(ping).toHaveBeenCalledTimes(1);
+      expect(getCacheClient).toHaveBeenCalled();
+    } finally {
+      config.redis.enabled = original;
+    }
+  });
+
+  it('reports redis as unhealthy when no shared client is available', async () => {
+    const { config } = await import('../config');
+    const { getCacheClient } = await import('../services/cache');
+    getCacheClient.mockReturnValue(null);
+    const original = config.redis.enabled;
+    config.redis.enabled = true;
+    try {
+      const result = await getHealthStatus(true);
+      expect(result.dependencies.redis.ok).toBe(false);
+    } finally {
+      config.redis.enabled = original;
+    }
   });
 });
