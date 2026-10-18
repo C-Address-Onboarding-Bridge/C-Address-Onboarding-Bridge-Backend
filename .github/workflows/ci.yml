@@ -144,6 +144,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check package exports and types
+        run: npm run check:exports
+
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest

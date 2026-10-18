@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BridgeClientConfig, Quote, QuoteParams } from '@c-address-bridge/sdk';
-import { useCAddressBridge } from './useCAddressBridge';
+import { useCAddressBridge } from './useCAddressBridge.js';
 
 export interface UseQuoteOptions {
   /** When false, the quote is not fetched. Defaults to true. */

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { BridgeClientConfig, TransactionStatus } from '@c-address-bridge/sdk';
-import { useCAddressBridge } from './useCAddressBridge';
+import { useCAddressBridge } from './useCAddressBridge.js';
 
 export interface UseTransactionStatusOptions {
   /** When false, the status is not fetched. Defaults to true. */
