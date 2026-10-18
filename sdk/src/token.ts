@@ -14,6 +14,26 @@ export function isSacToken(token: Token): token is { type: 'sac'; contractId: st
   return token.type === 'sac';
 }
 
+// ─── Native XLM SAC Contract IDs ──────────────────────────────────────────────
+
+/**
+ * Network-specific Stellar Asset Contract (SAC) contract IDs for native XLM.
+ * These are the canonical C-addresses the bridge API expects when funding with
+ * native XLM on Soroban.
+ */
+export const NATIVE_XLM_CONTRACT_IDS: Record<'testnet' | 'mainnet', string> = {
+  testnet: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+  mainnet: 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+};
+
+/**
+ * Resolves the native XLM SAC contract ID for the given network.
+ * Defaults to testnet when no network is provided.
+ */
+export function getNativeAssetContractId(network: 'testnet' | 'mainnet' = 'testnet'): string {
+  return NATIVE_XLM_CONTRACT_IDS[network];
+}
+
 // ─── Address Validation ───────────────────────────────────────────────────────
 
 /** Returns `true` if the string is a valid SAC token contract address (C-address). */
