@@ -854,3 +854,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-826 -->
 - #826: docs(contract): crate-level docs describe fee recipients, auto-withdraw and a single Admin key that don't exist (#233 closed)
+
+<!-- handsoff-issue-829 -->
+- #829: ci: Deploy Contract and deploy-contract.sh look for the WASM in a root target/ directory that the build never creates
