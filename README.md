@@ -854,3 +854,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-802 -->
 - #802: bug(contract): route_from_exchange checks the reentrancy guard but never sets it
+
+<!-- handsoff-issue-805 -->
+- #805: bug(contract): approvals from removed admins still count after RotateAdmins (#580 closed)
