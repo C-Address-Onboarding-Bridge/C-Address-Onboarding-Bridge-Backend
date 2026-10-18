@@ -162,7 +162,7 @@ function isValidStellarAddress(addr: string): boolean {
 
 // ── Rule implementations ──────────────────────────────────────────────────────
 
-function checkSize(xdrString: string, maxByteLength: number): void {
+export function checkSize(xdrString: string, maxByteLength: number = MAX_XDR_BYTE_LENGTH): void {
   // Buffer.byteLength on a base64 string gives the decoded size ×0.75, but we
   // want to bound the raw string length too — a 64 KB base64 string decodes to
   // ~48 KB of binary, which is already far beyond any legitimate transaction.

@@ -32,6 +32,7 @@ import { setFeeRateBps, updateCircuitBreakerMetrics } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
+import { DEFAULT_JSON_LIMIT, FUNDING_PATHS, fundingJsonParser } from './middleware/bodyParser';
 import { requestSigningMiddleware } from './middleware/requestSigning';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
 import { closePool } from './services/db';
@@ -154,7 +155,8 @@ app.use(requestTracker);
 app.use(loggingMiddleware);
 
 app.use('/api/webhook', express.text({ type: '*/*' }));
-app.use('/api', express.json({ limit: '32kb' }));
+app.use(FUNDING_PATHS, fundingJsonParser);
+app.use('/api', express.json({ limit: DEFAULT_JSON_LIMIT }));
 
 // suspiciousRateLimiting is mounted exactly once here. It only counts requests
 // that actually tripped a detector (see middleware/security.ts), so normal
