@@ -186,6 +186,23 @@ jobs:
           MOONPAY_SECRET_KEY: sim-moonpay-secret
           TRANSAK_WEBHOOK_SECRET: sim-transak-secret
 
+  monitoring-config:
+    name: Monitoring Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Alertmanager does not expand ${VAR} placeholders, so the committed
+      # config must be valid on its own. amtool check-config catches literal
+      # ${...} URLs and other schema errors before they reach production.
+      - name: Validate alertmanager.yaml
+        run: |
+          docker run --rm \
+            --entrypoint amtool \
+            -v "$PWD/monitoring/alertmanager:/a" \
+            prom/alertmanager:v0.27.0 \
+            check-config /a/alertmanager.yaml
+
   deploy-testnet:
     name: Deploy to Testnet
     runs-on: ubuntu-latest
