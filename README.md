@@ -851,3 +851,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-596 -->
 - #596: test(contract): fix and un-ignore test_full_scenario
+
+<!-- handsoff-issue-692 -->
+- #692: bug(contract): funding fails for returning users once their UniqueFunder entry is archived
