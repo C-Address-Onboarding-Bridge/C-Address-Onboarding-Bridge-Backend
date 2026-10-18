@@ -194,10 +194,25 @@ export interface PaginatedResponse<T> {
   hasMore: boolean;
 }
 
+/**
+ * Response returned by `POST /api/v1/fund/prepare`.
+ *
+ * Contains the unsigned transaction envelope (`unsignedXdr`) that the caller
+ * must sign with their wallet before submitting via `fundWithXdr`.
+ */
 export interface FundingPrepareResult {
-  instruction: string;
-  simulation: Record<string, string>;
-  params: FundParams;
+  /** Base64-encoded unsigned transaction envelope to be signed by the wallet. */
+  unsignedXdr: string;
+  /** Soroban transaction footprint (read-only / read-write ledger keys). */
+  footprint: Record<string, string>;
+  /** Estimated fee in stroops. */
+  fee: string;
+  sourceAddress: string;
+  targetAddress: string;
+  tokenAddress: string;
+  /** Amount in stroops as an integer string. */
+  amount: string;
+  memo?: string;
 }
 
 // Pagination helpers
@@ -277,9 +292,3 @@ export interface BridgeEvent<K extends BridgeEventType = BridgeEventType> {
 }
 
 export type EventHandler<K extends BridgeEventType = BridgeEventType> = (event: BridgeEvent<K>) => void;
-
-export interface EventEmitterOptions {
-  pollIntervalMs?: number;
-  historySize?: number;
-  healthCheckIntervalMs?: number;
-}

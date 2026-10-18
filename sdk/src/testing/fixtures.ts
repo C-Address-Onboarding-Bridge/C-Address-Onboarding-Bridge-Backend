@@ -90,9 +90,14 @@ export const fixtures = {
 
   fundingPrepareResult(overrides?: Partial<FundingPrepareResult>): FundingPrepareResult {
     return {
-      instruction: 'sign-and-submit',
-      simulation: { status: 'success', fee: '100' },
-      params: { ...MOCK_FUND_PARAMS },
+      unsignedXdr: 'AAAAAgAAAAB...mock-unsigned-xdr...',
+      footprint: 'AAAAAgAAAAB...mock-footprint...',
+      fee: '100',
+      sourceAddress: MOCK_FUND_PARAMS.sourceAddress,
+      targetAddress: MOCK_FUND_PARAMS.targetAddress,
+      tokenAddress: MOCK_FUND_PARAMS.tokenAddress,
+      amount: MOCK_FUND_PARAMS.amount,
+      memo: MOCK_FUND_PARAMS.memo,
       ...overrides,
     };
   },
