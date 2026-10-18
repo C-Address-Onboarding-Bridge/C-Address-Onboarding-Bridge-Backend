@@ -138,3 +138,18 @@ describe('xssErrorSanitizer', () => {
     expect(next.mock.calls[0][0]).toBe(err);
   });
 });
+
+describe('app smoke test', () => {
+  it('GET /health/live returns 200 and unknown route returns JSON error from errorHandler', async () => {
+    const { default: app } = await import('../index');
+    const request = (await import('supertest')).default;
+
+    const live = await request(app).get('/health/live');
+    expect(live.status).toBe(200);
+
+    const unknown = await request(app).get('/__definitely_not_a_route__');
+    expect([404, 500]).toContain(unknown.status);
+    expect(unknown.headers['content-type']).toMatch(/application\/json/);
+    expect(unknown.body).toHaveProperty('error');
+  });
+});
