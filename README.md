@@ -851,3 +851,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-596 -->
 - #596: test(contract): fix and un-ignore test_full_scenario
+
+<!-- handsoff-issue-799 -->
+- #799: bug(contract): batch_fund_c_address still ignores the paused flag (#579 closed)
