@@ -25,7 +25,9 @@ export function isSacTokenAddress(address: string): boolean {
 export function validateSacTokenAddress(address: string): void {
   if (!isSacTokenAddress(address)) {
     throw new ValidationError('Invalid SAC token address', {
-      contractId: `Must be a valid contract address (C-address), got: ${address}`,
+      fields: {
+        contractId: `Must be a valid contract address (C-address), got: ${address}`,
+      },
     });
   }
 }
