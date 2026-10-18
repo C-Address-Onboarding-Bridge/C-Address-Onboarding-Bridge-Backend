@@ -2,6 +2,7 @@ import { SorobanRpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
 import { logger } from '../logger';
 import { applyKeepAliveAgents } from './httpAgent';
+import { getCircuitBreaker } from '../circuit-breaker';
 
 interface ProviderState {
   url: string;
@@ -120,7 +121,12 @@ export class RpcPool {
     }
   }
 
+  /** Runs `fn` against a healthy provider (failing over between them) behind the soroban circuit breaker. */
   async execute<T>(fn: (_server: SorobanRpc.Server) => Promise<T>): Promise<T> {
+    return getCircuitBreaker('soroban').execute(() => this.executeWithFailover(fn));
+  }
+
+  private async executeWithFailover<T>(fn: (_server: SorobanRpc.Server) => Promise<T>): Promise<T> {
     const tried = new Set<string>();
     const allProviders = [...this.providers];
 

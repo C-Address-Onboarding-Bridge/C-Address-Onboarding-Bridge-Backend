@@ -24,7 +24,7 @@ import { rbacAuth, requireScopes, seedLegacyKeys } from './middleware/rbacAuth';
 import { registerWebhookVerifier, moonpayVerifier, transakVerifier } from './middleware/webhookVerification';
 import { compressionMiddleware } from './middleware/compression';
 import { errorHandler } from './middleware/error';
-import { CircuitBreaker } from './circuit-breaker';
+import { circuitBreakers } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
 import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
@@ -44,12 +44,7 @@ import { cacheMetricsRouter } from './routes/cacheMetrics';
 
 export { logger } from './logger';
 
-export const circuitBreakers = new Map<string, CircuitBreaker>([
-  ['soroban', new CircuitBreaker('soroban')],
-  ['moonpay', new CircuitBreaker('moonpay')],
-  ['transak', new CircuitBreaker('transak')],
-  ['cex', new CircuitBreaker('cex')],
-]);
+export { circuitBreakers };
 
 registerWebhookVerifier('moonpay', moonpayVerifier, config.moonpay.secretKey);
 registerWebhookVerifier('transak', transakVerifier, config.transak.webhookSecret);
