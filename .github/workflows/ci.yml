@@ -192,33 +192,41 @@ jobs:
     needs: [soroban-contract, api-server, sdk, e2e, webhook-sim]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     env:
+      # Secret key used only to sign transactions; never passed as an address.
       SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
+      # Comma-separated public keys (G...) for the contract's admin set.
+      ADMIN_ADDRESSES: ${{ vars.ADMIN_ADDRESSES }}
     steps:
       - name: Skip when deploy credentials are not configured
-        if: env.SOURCE_ACCOUNT == ''
-        run: echo "SOROBAN_SOURCE_ACCOUNT secret not set; skipping testnet deploy."
+        if: env.SOURCE_ACCOUNT == '' || env.ADMIN_ADDRESSES == ''
+        run: echo "SOROBAN_SOURCE_ACCOUNT secret or ADMIN_ADDRESSES variable not set; skipping testnet deploy."
 
       - uses: actions/checkout@v4
-        if: env.SOURCE_ACCOUNT != ''
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        if: env.SOURCE_ACCOUNT != ''
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
         with:
           toolchain: stable
           target: wasm32v1-none
 
       - name: Install Stellar CLI
-        if: env.SOURCE_ACCOUNT != ''
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
         run: cargo install stellar-cli --locked
 
+      - name: Build WASM (release)
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
+        working-directory: contracts/onboarding-bridge
+        run: cargo build --target wasm32v1-none --release
+
       - name: Deploy contract to testnet
-        if: env.SOURCE_ACCOUNT != ''
-        run: bash scripts/deploy.sh --network testnet
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
+        run: bash scripts/deploy-contract.sh --network testnet
         env:
           BRIDGE_FEE_BPS: '30'
 
       - name: Upload deployment artifacts
-        if: env.SOURCE_ACCOUNT != ''
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
         uses: actions/upload-artifact@v4
         with:
           name: deployment-testnet
