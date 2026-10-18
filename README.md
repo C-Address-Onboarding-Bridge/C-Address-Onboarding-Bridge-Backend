@@ -857,3 +857,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-792 -->
 - #792: bug(sdk): request() throws ServerError without importing it, so a non-JSON 2xx body becomes a ReferenceError and gets retried
+
+<!-- handsoff-issue-793 -->
+- #793: security(contract): fund_c_address still never calls source.require_auth() (#577 closed)
