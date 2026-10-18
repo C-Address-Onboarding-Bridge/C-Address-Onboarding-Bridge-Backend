@@ -851,3 +851,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-596 -->
 - #596: test(contract): fix and un-ignore test_full_scenario
+
+<!-- handsoff-issue-811 -->
+- #811: bug(contract): rebate tier and fee-token config entries are never TTL-extended after they are set
