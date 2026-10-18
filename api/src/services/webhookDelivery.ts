@@ -4,7 +4,7 @@ import net from 'net';
 import { logger } from '../index';
 import { hashPayload, integrityAuditLog } from './auditLog';
 import { enqueueAudit } from './asyncPipeline';
-import { enqueueWebhookRetry } from '../jobs/queue';
+import { enqueueWebhookRetry, WEBHOOK_RETRY_DELAYS_MS } from '../jobs/queue';
 
 export interface WebhookRegistration {
   id: string;
@@ -49,7 +49,6 @@ export const WEBHOOK_EVENTS = {
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[keyof typeof WEBHOOK_EVENTS];
 
-const RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
 const DELIVERY_TIMEOUT_MS = 10_000;
 const DEFAULT_DELIVERY_LOG_LIMIT = 10_000;
 
@@ -394,21 +393,26 @@ export class WebhookDeliveryService {
 
     this.recordAttempt(attempt);
 
-    if (attemptNumber < RETRY_DELAYS_MS.length) {
-      const delay = RETRY_DELAYS_MS[attemptNumber];
+    if (attemptNumber < WEBHOOK_RETRY_DELAYS_MS.length) {
+      const delay = WEBHOOK_RETRY_DELAYS_MS[attemptNumber];
       logger.info(
         { registrationId: registration.id, event, nextAttemptIn: delay, attempt: attemptNumber + 1 },
         'scheduling webhook retry',
       );
       try {
-        await enqueueWebhookRetry({
-          registrationId: registration.id,
-          event,
-          payload,
-          signature,
-          data,
-          attemptNumber: attemptNumber + 1,
-        });
+        await enqueueWebhookRetry(
+          {
+            registrationId: registration.id,
+            url: registration.url,
+            event,
+            timestamp,
+            payload,
+            signature,
+            data,
+            attemptNumber: attemptNumber + 1,
+          },
+          delay,
+        );
       } catch (err) {
         logger.error(
           { registrationId: registration.id, event, error: err instanceof Error ? err.message : String(err) },

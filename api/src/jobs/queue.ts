@@ -50,9 +50,22 @@ export interface PipelineMetricsJobData {
   data: Record<string, unknown>;
 }
 
+/**
+ * Delay before each webhook retry, indexed by the attempt that just failed.
+ * Once every delay has been used the delivery is written to the DLQ.
+ */
+export const WEBHOOK_RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
+
+/**
+ * Everything the worker needs to redeliver a webhook. The registration lives
+ * in the API process, so the job must be self-contained.
+ */
 export interface WebhookRetryData {
   registrationId: string;
+  url: string;
   event: string;
+  /** Timestamp bound into the signature; resent as X-Webhook-Timestamp. */
+  timestamp: number;
   payload: string;
   signature: string;
   data: unknown;
@@ -176,9 +189,9 @@ export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Prom
   await queues.asyncPipeline.add('pipeline-metrics', data);
 }
 
-export async function enqueueWebhookRetry(data: WebhookRetryData): Promise<void> {
+export async function enqueueWebhookRetry(data: WebhookRetryData, delayMs: number): Promise<void> {
   const queues = getQueues();
-  await queues.webhookRetry.add('webhook-retry', data);
+  await queues.webhookRetry.add('webhook-retry', data, { delay: delayMs });
 }
 
 /** Returns the number of waiting (not yet picked up) jobs in a queue. */
