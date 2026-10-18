@@ -1,288 +1,171 @@
-import rateLimit from 'express-rate-limit';
-import type { Request, Response, NextFunction } from 'express';
-import { config } from '../config';
+import { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger';
-import { sendAbuseAlert } from '../services/abuseAlert';
+import { config } from '../config';
 
-/**
- * Rate limiting middleware.
- *
- * Two layers:
- *  - IP limiter: runs globally, before authentication. Keyed strictly by IP so
- *    an attacker cannot mint a fresh bucket by sending a random X-API-Key.
- *  - Tier limiter: runs after authentication. Keyed by the validated API key id
- *    (req.apiKeyRecord.id), never by the raw header value.
- */
+// ---------------------------------------------------------------------------
+// IP-based sliding-window rate limiter
+// ---------------------------------------------------------------------------
 
-// IP-based rate limit: 100 requests per minute per IP
-const IP_WINDOW_MS = 60_000;
-const IP_MAX_REQUESTS = 100;
-
-// Tier limits (requests per minute)
-const TIER_LIMITS: Record<string, number> = {
-  low: 20,
-  standard: 100,
-  high: 500,
-};
-
-// Cost tracking
-const COST_LIMIT = 1_000_000;
-const COST_TTL_MS = 3_600_000;
-
-interface CostEntry {
-  cost: number;
-  expiresAt: number;
+interface WindowEntry {
+  count: number;
+  resetAt: number;
 }
 
-const costTracker = new Map<string, CostEntry>();
+const ipWindows = new Map<string, WindowEntry>();
 
-// Banned IPs (populated by abuse detection)
-const bannedIps = new Set<string>();
-
-// Abuse detection thresholds
-const ABUSE_WINDOW_MS = 60_000;
-const ABUSE_MAX_REQUESTS = 50;
-const abuseTracker = new Map<string, { count: number; windowStart: number }>();
-
-/**
- * Path prefixes that must never be IP rate-limited.
- *
- * The IP limiter is mounted at the app root, so `req.path` includes the
- * `/api` mount prefix (e.g. `/api/webhook/moonpay`). Matching on the bare
- * `/webhook` prefix therefore never fired and provider callbacks were counted
- * against the global IP limit. Match the full mounted prefix instead.
- */
-const WEBHOOK_PATH_PREFIXES = ['/api/webhook/', '/webhook/'];
-
-/**
- * Whether the request targets a provider webhook route that should bypass the
- * global IP limiter.
- */
-export function isWebhookPath(path: string | undefined): boolean {
-  if (!path) {
-    return false;
-  }
-  return WEBHOOK_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+function getClientIp(req: Request): string {
+  return req.ip ?? req.socket.remoteAddress ?? 'unknown';
 }
 
-/**
- * Build a limiter keyed strictly by IP.
- *
- * The X-API-Key header is deliberately ignored here: this limiter runs before
- * authentication, so trusting the header would let a caller bypass the limit
- * by rotating random keys.
- */
-function createIpLimiter() {
-  return rateLimit({
-    windowMs: IP_WINDOW_MS,
-    max: IP_MAX_REQUESTS,
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (request: Request) => {
-      return `ip:${request.ip || 'anonymous'}`;
-    },
-    handler: (request: Request, response: Response) => {
-      logger.warn('IP rate limit exceeded', { ip: request.ip });
-      response.status(429).json({
-        error: 'Too many requests',
-        message: 'Rate limit exceeded for this IP address',
-      });
-    },
-  });
-}
-
-/**
- * Build a limiter keyed by the validated API key id.
- *
- * Must only be used after authentication has populated req.apiKeyRecord.
- */
-function createTierLimiter(max: number) {
-  return rateLimit({
-    windowMs: IP_WINDOW_MS,
-    max,
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (request: Request) => {
-      const keyId = request.apiKeyRecord?.id;
-      return `key:${keyId || request.ip || 'anonymous'}`;
-    },
-    handler: (request: Request, response: Response) => {
-      logger.warn('Tier rate limit exceeded', {
-        keyId: request.apiKeyRecord?.id,
-      });
-      response.status(429).json({
-        error: 'Too many requests',
-        message: 'Rate limit exceeded for this API key',
-      });
-    },
-  });
-}
-
-const ipLimiter = createIpLimiter();
-const tierLimiters: Record<string, ReturnType<typeof createTierLimiter>> = {
-  low: createTierLimiter(TIER_LIMITS.low),
-  standard: createTierLimiter(TIER_LIMITS.standard),
-  high: createTierLimiter(TIER_LIMITS.high),
-};
-
-/**
- * Global IP rate limiting middleware.
- * Runs before authentication; keyed strictly by IP.
- */
-export function ipRateLimitMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
-  // Skip webhook endpoints. The limiter is mounted at the app root, so the
-  // path carries the `/api` prefix (e.g. `/api/webhook/moonpay`).
-  if (isWebhookPath(req.path)) {
-    next();
-    return;
-  }
-
-  // Block banned IPs
-  if (req.ip && bannedIps.has(req.ip)) {
-    res.status(403).json({
-      error: 'Forbidden',
-      message: 'Your IP has been temporarily blocked due to abuse',
-    });
-    return;
-  }
-
-  ipLimiter(req, res, next);
-}
-
-/**
- * Tier-based rate limiting middleware.
- * Runs after authentication; keyed by the validated API key id.
- *
- * This must be mounted after `rbacAuth` so that `req.apiKeyRecord` is
- * populated and the configured tier (e.g. 'high' = 500/window) is honored.
- * If it runs before authentication, `req.apiKeyRecord` is undefined and every
- * key falls back to the 'low' tier.
- */
-export function tierRateLimitMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
-  const tier = req.apiKeyRecord?.rateLimit || 'low';
-  const limiter = tierLimiters[tier] || tierLimiters.low;
-  limiter(req, res, next);
-}
-
-/**
- * Fund endpoint rate limiting middleware.
- */
-export function fundEndpointRateLimit(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
-  const keyId = req.apiKeyRecord?.id;
-  if (!keyId) {
-  next();
-    return;
-  }
-
-  const limiter = tierLimiters.high;
-  limiter(req, res, next);
-}
-
-/**
- * Apply standard rate limit headers to a response.
- *
- * `Retry-After` is only meaningful on throttling responses (429) and
- * temporary unavailability (503). Sending it on successful responses is
- * misleading and some HTTP clients and proxies honour it anyway, so it is
- * only set when the response status is 429 or 503.
- */
-export function applyRateLimitHeaders(
-  res: Response,
+function checkWindow(
+  store: Map<string, WindowEntry>,
+  key: string,
   limit: number,
-  remaining: number,
-  resetMs: number
-): void {
-  res.set('X-RateLimit-Limit', String(limit));
-  res.set('X-RateLimit-Remaining', String(Math.max(0, remaining)));
-  res.set('X-RateLimit-Reset', String(Math.ceil(resetMs / 1000)));
-
-  const status = res.statusCode;
-  if (status === 429 || status === 503) {
-    res.set('Retry-After', String(Math.ceil(resetMs / 1000)));
-  }
-}
-
-/**
- * Track request cost for an API key. Returns false when the cost limit is
- * exceeded (and fires an abuse alert).
- */
-export function trackRequestCost(apiKeyId: string, cost: number): boolean {
+  windowMs: number
+): { allowed: boolean; remaining: number; resetAt: number } {
   const now = Date.now();
-  const entry = costTracker.get(apiKeyId);
+  let entry = store.get(key);
 
-  if (!entry || entry.expiresAt <= now) {
-    costTracker.set(apiKeyId, { cost, expiresAt: now + COST_TTL_MS });
-    return cost <= COST_LIMIT;
-  }
-
-  entry.cost += cost;
-
-  if (entry.cost > COST_LIMIT) {
-    sendAbuseAlert({
-      type: 'cost_limit_exceeded',
-      apiKeyId,
-      cost: entry.cost,
-    });
-    return false;
-  }
-
-  return true;
-}
-
-/**
- * Abuse detection middleware for fund endpoints.
- * Tracks request frequency per IP and bans IPs that exceed the threshold.
- */
-export function fundAbuseDetectionMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
-  const ip = req.ip;
-  if (!ip) {
-    next();
-    return;
-  }
-
-  const now = Date.now();
-  const entry = abuseTracker.get(ip);
-
-  if (!entry || now - entry.windowStart > ABUSE_WINDOW_MS) {
-    abuseTracker.set(ip, { count: 1, windowStart: now });
-    next();
-    return;
+  if (!entry || entry.resetAt <= now) {
+    entry = { count: 0, resetAt: now + windowMs };
+    store.set(key, entry);
   }
 
   entry.count += 1;
+  const allowed = entry.count <= limit;
+  const remaining = Math.max(0, limit - entry.count);
 
-  if (entry.count > ABUSE_MAX_REQUESTS) {
-    bannedIps.add(ip);
-    sendAbuseAlert({
-      type: 'ip_banned',
-      ip,
-      count: entry.count,
-    });
-    res.status(403).json({
-      error: 'Forbidden',
-      message: 'Your IP has been temporarily blocked due to abuse',
-    });
+  return { allowed, remaining, resetAt: entry.resetAt };
+}
+
+// Periodically evict expired windows to avoid unbounded memory growth.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of ipWindows) {
+    if (entry.resetAt <= now) ipWindows.delete(key);
+  }
+}, 60_000).unref?.();
+
+// ---------------------------------------------------------------------------
+// IP rate limit middleware
+// ---------------------------------------------------------------------------
+
+export const IP_RATE_LIMIT = {
+  windowMs: 60_000,
+  max: 100,
+};
+
+export function ipRateLimitMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const ip = getClientIp(req);
+  const { allowed, remaining, resetAt } = checkWindow(
+    ipWindows,
+    ip,
+    IP_RATE_LIMIT.max,
+    IP_RATE_LIMIT.windowMs
+  );
+
+  res.setHeader('X-RateLimit-Limit', String(IP_RATE_LIMIT.max));
+  res.setHeader('X-RateLimit-Remaining', String(remaining));
+  res.setHeader('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
+
+  if (!allowed) {
+    const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    logger.warn({ ip }, 'IP rate limit exceeded');
+    res.status(429).json({ error: 'Too Many Requests', retryAfter });
     return;
   }
 
   next();
 }
 
-export const IP_RATE_LIMIT = IP_MAX_REQUESTS;
-export const FUND_ENDPOINT_LIMIT = TIER_LIMITS.high;
+// ---------------------------------------------------------------------------
+// Rate limit response headers
+// ---------------------------------------------------------------------------
+
+export function applyRateLimitHeaders(_req: Request, res: Response, next: NextFunction): void {
+  res.setHeader('X-RateLimit-Policy', 'sliding-window');
+  next();
+}
+
+// ---------------------------------------------------------------------------
+// Tier-based rate limiting (per API key)
+// ---------------------------------------------------------------------------
+
+export const FUND_ENDPOINT_LIMIT = {
+  windowMs: 60_000,
+  max: 30,
+};
+
+const TIER_LIMITS: Record<string, number> = {
+  free: 60,
+  standard: 120,
+  high: 500,
+};
+
+const tierWindows = new Map<string, WindowEntry>();
+
+function resolveTier(req: Request): string {
+  const record = (req as Request & { apiKeyRecord?: { tier?: string } }).apiKeyRecord;
+  return record?.tier ?? 'free';
+}
+
+export function tierRateLimitMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const tier = resolveTier(req);
+  const limit = TIER_LIMITS[tier] ?? TIER_LIMITS.free;
+  const key = `${tier}:${getClientIp(req)}`;
+
+  const { allowed, remaining, resetAt } = checkWindow(
+    tierWindows,
+    key,
+    limit,
+    FUND_ENDPOINT_LIMIT.windowMs
+  );
+
+  res.setHeader('X-RateLimit-Limit', String(limit));
+  res.setHeader('X-RateLimit-Remaining', String(remaining));
+  res.setHeader('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
+
+  if (!allowed) {
+    const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    logger.warn({ tier, ip: getClientIp(req) }, 'Tier rate limit exceeded');
+    res.status(429).json({ error: 'Too Many Requests', retryAfter });
+    return;
+  }
+
+  next();
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry endpoint rate limiting (IP-keyed)
+// ---------------------------------------------------------------------------
+
+export const TELEMETRY_ENDPOINT_LIMIT = 20;
+
+const TELEMETRY_WINDOW_MS = 60_000;
+const telemetryWindows = new Map<string, WindowEntry>();
+
+export function telemetryRateLimit(req: Request, res: Response, next: NextFunction): void {
+  const ip = getClientIp(req);
+  const { allowed, remaining, resetAt } = checkWindow(
+    telemetryWindows,
+    ip,
+    TELEMETRY_ENDPOINT_LIMIT,
+    TELEMETRY_WINDOW_MS
+  );
+
+  res.setHeader('X-RateLimit-Limit', String(TELEMETRY_ENDPOINT_LIMIT));
+  res.setHeader('X-RateLimit-Remaining', String(remaining));
+  res.setHeader('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
+
+  if (!allowed) {
+    const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    logger.warn({ ip }, 'Telemetry rate limit exceeded');
+    res.status(429).json({ error: 'Too Many Requests', retryAfter });
+    return;
+  }
+
+  next();
+}
