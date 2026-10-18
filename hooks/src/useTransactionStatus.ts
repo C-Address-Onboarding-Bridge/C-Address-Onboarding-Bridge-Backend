@@ -5,7 +5,11 @@ import { useCAddressBridge } from './useCAddressBridge';
 export interface UseTransactionStatusOptions {
   /** When false, the status is not fetched. Defaults to true. */
   enabled?: boolean;
-  /** When set, polls at this interval (ms) until the status is `success` or `failed`. */
+  /**
+   * When set, polls at this interval (ms) until the status is `success` or
+   * `failed`. Failed requests are retried with exponential backoff (capped at
+   * 30s) rather than ending the polling.
+   */
   pollIntervalMs?: number;
 }
 
@@ -16,6 +20,7 @@ export interface UseTransactionStatusResult {
 }
 
 const TERMINAL_STATUSES = new Set(['success', 'failed']);
+const MAX_ERROR_BACKOFF_MS = 30_000;
 
 /**
  * Fetches (and optionally polls) the status of a submitted transaction by hash.
@@ -31,6 +36,14 @@ export function useTransactionStatus(
   const [error, setError] = useState<Error | undefined>(undefined);
   const [loading, setLoading] = useState(false);
 
+  // Drop the previous transaction's status/error as soon as txHash changes.
+  const [dataTxHash, setDataTxHash] = useState(txHash);
+  if (dataTxHash !== txHash) {
+    setDataTxHash(txHash);
+    setData(undefined);
+    setError(undefined);
+  }
+
   useEffect(() => {
     if (!enabled || !txHash) {
       return;
@@ -38,6 +51,7 @@ export function useTransactionStatus(
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let consecutiveErrors = 0;
 
     const fetchStatus = () => {
       setLoading(true);
@@ -45,6 +59,7 @@ export function useTransactionStatus(
         .getStatus(txHash)
         .then((result) => {
           if (cancelled) return;
+          consecutiveErrors = 0;
           setData(result);
           setError(undefined);
           if (pollIntervalMs && !TERMINAL_STATUSES.has(result.status)) {
@@ -54,6 +69,11 @@ export function useTransactionStatus(
         .catch((err: unknown) => {
           if (cancelled) return;
           setError(err instanceof Error ? err : new Error(String(err)));
+          if (pollIntervalMs) {
+            consecutiveErrors += 1;
+            const backoff = Math.max(pollIntervalMs, Math.min(pollIntervalMs * 2 ** consecutiveErrors, MAX_ERROR_BACKOFF_MS));
+            timer = setTimeout(fetchStatus, backoff);
+          }
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
