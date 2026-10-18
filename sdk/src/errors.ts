@@ -95,11 +95,6 @@ export class RateLimitError extends BridgeError {
 export class ServerError extends BridgeError {
   override readonly type = 'ServerError' as const;
 
-<<<<<<< Updated upstream
-  constructor(message?: string, options?: { statusCode?: number; code?: string; cause?: unknown; locale?: SupportedLocale }) {
-    const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
-    super(resolvedMessage, { statusCode: options?.statusCode ?? 500, code: options?.code, retryable: true, cause: options?.cause });
-=======
   /**
    * @param options.retryable Override the default retryability. Defaults to
    *   `true` for ordinary 5xx responses. Set to `false` when the server fault
@@ -113,7 +108,6 @@ export class ServerError extends BridgeError {
       retryable: options?.retryable ?? true,
       cause: options?.cause,
     });
->>>>>>> Stashed changes
     this.name = 'ServerError';
   }
 }
@@ -213,47 +207,44 @@ export function parseHttpError(status: number, body: ErrorBody, cause?: unknown,
       });
     default:
       if (status >= 500) {
-        return new ServerError(body.message, { statusCode: status, code: body.code, cause, locale });
+        return new ServerError(body.message ?? `Server error (${status}).`, {
+          statusCode: status,
+          code: body.code,
+          cause,
+        });
       }
       return new BridgeError(body.message ?? `Request failed with status ${status}.`, {
         statusCode: status,
         code: body.code,
-        retryable: false,
         cause,
       });
   }
 }
 
-// ─── Type guard helpers ────────────────────────────────────────────────────────
+// ─── Network error detection ──────────────────────────────────────────────────
 
-export function isAuthError(err: unknown): err is AuthError {
-  return err instanceof AuthError;
-}
-
-export function isValidationError(err: unknown): err is ValidationError {
-  return err instanceof ValidationError;
-}
-
-export function isRateLimitError(err: unknown): err is RateLimitError {
-  return err instanceof RateLimitError;
-}
-
-export function isServerError(err: unknown): err is ServerError {
-  return err instanceof ServerError;
-}
-
-export function isNetworkError(err: unknown): err is NetworkError {
-  return err instanceof NetworkError;
-}
-
-export function isTimeoutError(err: unknown): err is TimeoutError {
-  return err instanceof TimeoutError;
-}
-
-export function isNotFoundError(err: unknown): err is NotFoundError {
-  return err instanceof NotFoundError;
-}
-
-export function isBridgeError(err: unknown): err is BridgeError {
-  return err instanceof BridgeError;
+/**
+ * Determine whether an error represents a network/transport failure.
+ *
+ * Recognises the SDK's own {@link NetworkError} (which is what `fetch`
+ * `TypeError`s are converted into by the bridge), raw `TypeError`s thrown by
+ * `fetch`, and plain errors whose message indicates a connectivity problem.
+ * `TimeoutError` is explicitly *not* treated as a network error.
+ */
+export function isNetworkError(err: unknown): boolean {
+  if (err instanceof TimeoutError) return false;
+  if (err instanceof NetworkError) return true;
+  if (err instanceof TypeError) return true;
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes('failed to fetch') ||
+      msg.includes('fetch failed') ||
+      msg.includes('load failed') ||
+      msg.includes('network') ||
+      msg.includes('econnrefused') ||
+      msg.includes('enotfound')
+    );
+  }
+  return false;
 }

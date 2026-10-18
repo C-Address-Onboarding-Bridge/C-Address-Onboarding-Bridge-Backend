@@ -1,6 +1,6 @@
 import { QueueEntry, OfflineQueueOptions, StorageAdapter, RequestOptions, HttpMethod } from './types';
 import { BridgeClient, BridgeClientConfig } from './bridge';
-import { OfflineError, QueueFullError, TimeoutError } from './errors';
+import { OfflineError, QueueFullError, TimeoutError, NetworkError } from './errors';
 import type { SupportedLocale } from './i18n/types';
 
 const QUEUE_STORAGE_KEY = 'bridge_sdk_offline_queue';
@@ -242,50 +242,53 @@ export class OfflineBridgeClient extends BridgeClient {
       return await super.request<T>(method, path, body, params, options, idempotencyKey);
     } catch (err) {
       if (this.autoQueue && this.isNetworkError(err)) {
-        await this.offlineQueue.enqueue({ method, path, body, params });
-        throw new OfflineError(true, { locale: this.locale });
+        const id = await this.offlineQueue.enqueue({
+          method,
+          path,
+          body,
+          params,
+          idempotencyKey,
+        });
+        throw new OfflineError(id, { locale: this.locale });
       }
       throw err;
     }
   }
 
-  /** Inspect all pending queued requests. */
-  getQueuedRequests(): QueueEntry[] {
-    return this.offlineQueue.getQueue();
+  private async executeQueueEntry(entry: QueueEntry): Promise<unknown> {
+    return super.request(
+      entry.method,
+      entry.path,
+      entry.body,
+      entry.params,
+      undefined,
+      entry.idempotencyKey,
+    );
   }
 
-  /** Discard all pending queued requests. */
-  async clearQueue(): Promise<void> {
-    return this.offlineQueue.clearQueue();
-  }
-
-  /** Register a callback that fires when the queue is fully drained after reconnection. */
-  onQueueDrained(handler: (count: number, at: string) => void): void {
-    this.offlineQueue.onDrained(handler);
-  }
-
-  destroy(): void {
-    this.offlineQueue.destroy();
+  private shouldRetry(err: unknown): boolean {
+    return this.isNetworkError(err);
   }
 
   private isNetworkError(err: unknown): boolean {
     if (err instanceof TimeoutError) return false;
+    // #843 fix: by the time super.request() rejects, a fetch TypeError has
+    // already been wrapped into a NetworkError (a BridgeError). Check the
+    // type directly so Node/undici ("fetch failed") and Safari ("Load failed")
+    // are recognised, not just Chrome/Firefox message text.
+    if (err instanceof NetworkError) return true;
     if (err instanceof TypeError) return true;
     if (err instanceof Error) {
       const msg = err.message.toLowerCase();
       return (
         msg.includes('failed to fetch') ||
+        msg.includes('fetch failed') ||
+        msg.includes('load failed') ||
         msg.includes('network') ||
         msg.includes('econnrefused') ||
         msg.includes('enotfound')
       );
     }
     return false;
-  }
-
-  private async executeQueueEntry(entry: QueueEntry): Promise<unknown> {
-    // #262 fix: forward the stored idempotency key so the replayed request
-    // carries the same key as the original submission attempt.
-    return super.request(entry.method, entry.path, entry.body, entry.params, undefined, entry.idempotencyKey);
   }
 }
