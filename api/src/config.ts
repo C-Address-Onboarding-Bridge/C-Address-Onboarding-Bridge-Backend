@@ -59,6 +59,8 @@ export const config = {
   moonpay: {
     apiKey: process.env.MOONPAY_API_KEY || '',
     secretKey: process.env.MOONPAY_SECRET_KEY || '',
+    /** Use the MoonPay sandbox host (buy-sandbox.moonpay.com) instead of production. */
+    sandbox: process.env.MOONPAY_SANDBOX === 'true' || process.env.MOONPAY_ENVIRONMENT === 'sandbox',
   },
   transak: {
     apiKey: process.env.TRANSAK_API_KEY || '',
@@ -167,27 +169,6 @@ export const config = {
       txStatus: parseInt(process.env.JOB_CONCURRENCY_TX_STATUS || '5', 10),
       webhookRetry: parseInt(process.env.JOB_CONCURRENCY_WEBHOOK_RETRY || '3', 10),
       cacheWarmup: parseInt(process.env.JOB_CONCURRENCY_CACHE_WARMUP || '2', 10),
-      metrics: parseInt(process.env.JOB_CONCURRENCY_METRICS || '1', 10),
-      cleanup: parseInt(process.env.JOB_CONCURRENCY_CLEANUP || '1', 10),
-      asyncAudit: parseInt(process.env.JOB_CONCURRENCY_ASYNC_AUDIT || '2', 10),
-      asyncPipeline: parseInt(process.env.JOB_CONCURRENCY_ASYNC_PIPELINE || '5', 10),
-    },
-  },
-  asyncPipeline: {
-    /**
-     * Master switch. When false every call falls through to the synchronous
-     * path so the pipeline is completely transparent to callers.
-     * Defaults to enabled whenever a REDIS_URL is configured.
-     */
-    enabled: process.env.ASYNC_PIPELINE_ENABLED !== 'false'
-      && (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),
-    /**
-     * Number of waiting jobs in the best-effort queue above which the pipeline
-     * is considered backpressured. Non-critical ops are dropped while over
-     * this threshold.
-     */
-    backpressureThreshold: parseInt(process.env.ASYNC_BACKPRESSURE_THRESHOLD || '1000', 10),
-    /**
-     * How long (ms) the in-process analytics buffer accumulate
+      metrics: parseInt(process.env.JOB_CONCURRE
 
-/* … truncated 162 chars — edit only what you need near the top … */
+/* … truncated 1087 chars — edit only what you need near the top … */

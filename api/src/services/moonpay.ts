@@ -1,3 +1,4 @@
+import { createHmac } from 'crypto';
 import { config } from '../config';
 
 interface MoonpayWidgetParams {
@@ -14,10 +15,24 @@ interface MoonpayWidgetParams {
 export class MoonpayService {
   private apiKey: string;
   private secretKey: string;
+  private sandbox: boolean;
 
   constructor() {
     this.apiKey = config.moonpay.apiKey;
     this.secretKey = config.moonpay.secretKey;
+    this.sandbox = Boolean(config.moonpay.sandbox);
+  }
+
+  /**
+   * Signs a MoonPay query string as documented: base64(HMAC_SHA256(secretKey, '?' + query)).
+   *
+   * @param query - The URL-encoded query string (without the leading `?`).
+   * @returns Base64-encoded signature.
+   */
+  private signQuery(query: string): string {
+    return createHmac('sha256', this.secretKey)
+      .update(`?${query}`)
+      .digest('base64');
   }
 
   /**
@@ -44,8 +59,12 @@ export class MoonpayService {
       queryParams.set('email', params.email);
     }
 
-    const baseUrl = 'https://buy.moonpay.com';
-    return `${baseUrl}?${queryParams.toString()}`;
+    const query = queryParams.toString();
+    const signature = this.signQuery(query);
+    const baseUrl = this.sandbox
+      ? 'https://buy-sandbox.moonpay.com'
+      : 'https://buy.moonpay.com';
+    return `${baseUrl}?${query}&signature=${encodeURIComponent(signature)}`;
   }
 
   /**
