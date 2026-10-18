@@ -95,25 +95,20 @@ export class RateLimitError extends BridgeError {
 export class ServerError extends BridgeError {
   override readonly type = 'ServerError' as const;
 
-<<<<<<< Updated upstream
-  constructor(message?: string, options?: { statusCode?: number; code?: string; cause?: unknown; locale?: SupportedLocale }) {
-    const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
-    super(resolvedMessage, { statusCode: options?.statusCode ?? 500, code: options?.code, retryable: true, cause: options?.cause });
-=======
   /**
    * @param options.retryable Override the default retryability. Defaults to
    *   `true` for ordinary 5xx responses. Set to `false` when the server fault
    *   is non-transient — e.g. a malformed success body that would fail on every
    *   retry — so the client does not re-send the request.
    */
-  constructor(message: string, options?: { statusCode?: number; code?: string; retryable?: boolean; cause?: unknown }) {
-    super(message, {
+  constructor(message?: string, options?: { statusCode?: number; code?: string; retryable?: boolean; cause?: unknown; locale?: SupportedLocale }) {
+    const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
+    super(resolvedMessage, {
       statusCode: options?.statusCode ?? 500,
       code: options?.code,
       retryable: options?.retryable ?? true,
       cause: options?.cause,
     });
->>>>>>> Stashed changes
     this.name = 'ServerError';
   }
 }
@@ -205,12 +200,7 @@ export function parseHttpError(status: number, body: ErrorBody, cause?: unknown,
     case 404:
       return new NotFoundError(body.message, { code: body.code, cause, locale });
     case 429:
-      return new RateLimitError(body.message, {
-        retryAfterMs: body.retryAfter !== undefined ? body.retryAfter * 1000 : undefined,
-        code: body.code,
-        cause,
-        locale,
-      });
+      return new RateLimitError(body.message, { retryAfterMs: body.retryAfter, code: body.code, cause, locale });
     default:
       if (status >= 500) {
         return new ServerError(body.message, { statusCode: status, code: body.code, cause, locale });
@@ -218,42 +208,7 @@ export function parseHttpError(status: number, body: ErrorBody, cause?: unknown,
       return new BridgeError(body.message ?? `Request failed with status ${status}.`, {
         statusCode: status,
         code: body.code,
-        retryable: false,
         cause,
       });
   }
-}
-
-// ─── Type guard helpers ────────────────────────────────────────────────────────
-
-export function isAuthError(err: unknown): err is AuthError {
-  return err instanceof AuthError;
-}
-
-export function isValidationError(err: unknown): err is ValidationError {
-  return err instanceof ValidationError;
-}
-
-export function isRateLimitError(err: unknown): err is RateLimitError {
-  return err instanceof RateLimitError;
-}
-
-export function isServerError(err: unknown): err is ServerError {
-  return err instanceof ServerError;
-}
-
-export function isNetworkError(err: unknown): err is NetworkError {
-  return err instanceof NetworkError;
-}
-
-export function isTimeoutError(err: unknown): err is TimeoutError {
-  return err instanceof TimeoutError;
-}
-
-export function isNotFoundError(err: unknown): err is NotFoundError {
-  return err instanceof NotFoundError;
-}
-
-export function isBridgeError(err: unknown): err is BridgeError {
-  return err instanceof BridgeError;
 }
