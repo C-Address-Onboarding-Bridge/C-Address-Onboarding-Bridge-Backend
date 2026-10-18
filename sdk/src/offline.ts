@@ -141,30 +141,42 @@ export class OfflineQueue {
     if (this.replaying || this.queue.length === 0) return;
     this.replaying = true;
 
-    const remaining: QueueEntry[] = [];
     let processedCount = 0;
 
-    for (const entry of this.queue) {
-      try {
-        await this.executeEntry(entry);
-        processedCount++;
-      } catch (err) {
-        if (!this.shouldRetry(err)) {
-          this.deadLetters.push(entry);
-          continue;
-        }
-        entry.retryCount++;
-        if (entry.retryCount >= this.maxRetries) {
-          this.deadLetters.push(entry);
-          continue;
-        }
-        remaining.push(entry);
-      }
-    }
+    try {
+      // #849 fix: iterate a snapshot and remove each processed entry by id
+      // instead of reassigning this.queue. Entries enqueued (or cleared) while
+      // the replay is awaiting executeEntry() are preserved.
+      const snapshot = [...this.queue];
 
-    this.queue = remaining;
-    await this.persistToStorage();
-    this.replaying = false;
+      for (const entry of snapshot) {
+        try {
+          await this.executeEntry(entry);
+          processedCount++;
+          this.removeById(entry.id);
+        } catch (err) {
+          if (!this.shouldRetry(err)) {
+            this.deadLetters.push(entry);
+            this.removeById(entry.id);
+            continue;
+          }
+          entry.retryCount++;
+          if (entry.retryCount >= this.maxRetries) {
+            this.deadLetters.push(entry);
+            this.removeById(entry.id);
+            continue;
+          }
+          // Keep the entry queued for a later replay; retryCount is persisted
+          // below via persistToStorage().
+        }
+      }
+
+      await this.persistToStorage();
+    } finally {
+      // #849 fix: always reset the replaying flag, even if executeEntry()
+      // throws something shouldRetry() does not handle.
+      this.replaying = false;
+    }
 
     if (processedCount > 0) {
       const at = new Date().toISOString();
@@ -174,6 +186,12 @@ export class OfflineQueue {
         } catch {}
       }
     }
+  }
+
+  /** Removes a single entry from the queue by id, preserving all others. */
+  private removeById(id: string): void {
+    const idx = this.queue.findIndex((e) => e.id === id);
+    if (idx !== -1) this.queue.splice(idx, 1);
   }
 
   private async loadFromStorage(): Promise<void> {
@@ -234,65 +252,6 @@ export class OfflineBridgeClient extends BridgeClient {
   }
 
   protected override async request<T>(
-    method: HttpMethod,
-    path: string,
-    body?: Record<string, unknown>,
-    params?: Record<string, string | undefined>,
-    options?: RequestOptions,
-    idempotencyKey?: string,
-  ): Promise<T> {
-    // #846 fix: generate the idempotency key here (for non-idempotent POSTs)
-    // so the exact same key is used on the failed attempt and on the queued
-    // replay. Otherwise a connection that drops after the server accepted the
-    // request would be replayed under a fresh key and executed twice.
-    const effectiveKey =
-      idempotencyKey ??
-      (method === 'POST' && NON_IDEMPOTENT_POST_PATHS.has(path)
-        ? generateIdempotencyKey()
-        : undefined);
+    method
 
-    try {
-      return await super.request<T>(method, path, body, params, options, effectiveKey);
-    } catch (err) {
-      if (this.autoQueue && this.isNetworkError(err)) {
-        await this.offlineQueue.enqueue({ method, path, body, params, idempotencyKey: effectiveKey });
-        throw new OfflineError('Request queued for offline replay', {
-          cause: err,
-          locale: this.locale,
-        });
-      }
-      throw err;
-    }
-  }
-
-  private async executeQueueEntry(entry: QueueEntry): Promise<unknown> {
-    return super.request(
-      entry.method,
-      entry.path,
-      entry.body,
-      entry.params,
-      undefined,
-      entry.idempotencyKey,
-    );
-  }
-
-  private isNetworkError(err: unknown): boolean {
-    if (err instanceof TimeoutError) return true;
-    if (err instanceof TypeError) return true;
-    if (err instanceof Error) {
-      const msg = err.message.toLowerCase();
-      return (
-        msg.includes('network') ||
-        msg.includes('fetch') ||
-        msg.includes('failed to fetch') ||
-        msg.includes('econnrefused') ||
-        msg.includes('enotfound')
-      );
-    }
-    return false;
-  }
-
-  private shouldRetry(err: unknown): boolean {
-    return this.isNetworkError(err);
-  }
-}
+/* … truncated 1902 chars — edit only what you need near the top … */
