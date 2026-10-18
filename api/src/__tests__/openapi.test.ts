@@ -86,6 +86,24 @@ describe('OpenAPI Documentation', () => {
     expect(paths['/api/v2/status/{txHash}']).toBeDefined();
   });
 
+  it('openapi.json documents the fund endpoint failure responses', async () => {
+    const res = await request(app).get('/api/openapi.json');
+    const paths = res.body.paths as Record<string, any>;
+    const fundResponses = paths['/api/v2/fund']?.post?.responses ?? {};
+    expect(fundResponses['201']).toBeDefined();
+    expect(fundResponses['410']).toBeDefined();
+    expect(fundResponses['422'] ?? fundResponses['502']).toBeDefined();
+  });
+
+  it('openapi.json documents the fund batch endpoint failure responses', async () => {
+    const res = await request(app).get('/api/openapi.json');
+    const paths = res.body.paths as Record<string, any>;
+    const batchResponses = paths['/api/v2/fund/batch']?.post?.responses ?? {};
+    expect(batchResponses['201']).toBeDefined();
+    expect(batchResponses['410']).toBeDefined();
+    expect(batchResponses['422'] ?? batchResponses['502']).toBeDefined();
+  });
+
   it.skip('openapi.json documents the offramp endpoints', async () => {
     const res = await request(app).get('/api/openapi.json');
     const paths = res.body.paths as Record<string, unknown>;

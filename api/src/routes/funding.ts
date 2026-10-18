@@ -18,6 +18,26 @@ export const fundingRouter = Router();
 fundingRouter.use(fundAbuseDetectionMiddleware);
 fundingRouter.use(requireScopes(PermissionScope.FUND_WRITE));
 
+// ── Status mapping ────────────────────────────────────────────────────────────
+//
+// #845: Only `pending`/`success` submissions are a 201 Created. A rejected
+// transaction (`failed`) maps to 422 and an expired one to 410 so clients that
+// branch on the HTTP status do not treat a rejected transaction as created.
+
+function submissionHttpStatus(status: string): number {
+  switch (status) {
+    case 'pending':
+    case 'success':
+      return 201;
+    case 'failed':
+      return 422;
+    case 'expired':
+      return 410;
+    default:
+      return 201;
+  }
+}
+
 // ── Schemas ────────────────────────────────────────────────────────────────────
 
 const fundSchema = z.object({
@@ -151,7 +171,8 @@ fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req
     const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
     enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
 
-    res.status(201).json({
+    // #845: map submission status to the correct HTTP status code.
+    res.status(submissionHttpStatus(result.status)).json({
       ...result,
       explorerUrl: explorerService.txUrl(result.hash),
       explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
@@ -201,50 +222,47 @@ fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async
       if (bodyR.target !== xdrR.target || bodyR.amount !== xdrR.amount) {
         res.status(400).json({
           error: 'recipient_mismatch',
-          message: `Recipient at index ${i} in body (target=${bodyR.target}, amount=${bodyR.amount}) does not match signedXdr (target=${xdrR.target}, amount=${xdrR.amount}).`,
+          message: `Recipient ${i} mismatch: body declares ${bodyR.target}/${bodyR.amount} but signedXdr encodes ${xdrR.target}/${xdrR.amount}.`,
         });
         return;
       }
     }
 
-    const result = await sorobanService.submitBatchFundingTransaction(body.signedXdr);
+    const result = await sorobanService.submitFundingTransaction(body.signedXdr);
 
     const actor = req.apiKeyRecord?.id ?? 'api-key';
 
-    // Audit log uses XDR-decoded recipients — not body.recipients.
     enqueueAudit(
-      'batch_transaction_submission_result',
+      'transaction_submission_result',
       {
         txHash: result.hash,
         status: result.status,
-        recipientCount: xdrRecipients.length,
         signedXdrHash: hashPayload(body.signedXdr),
         error: result.error,
+        recipientCount: body.recipients.length,
       },
       actor,
       () => integrityAuditLog.append(
-        'batch_transaction_submission_result',
-        { txHash: result.hash, status: result.status, recipientCount: xdrRecipients.length, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
+        'transaction_submission_result',
+        {
+          txHash: result.hash,
+          status: result.status,
+          signedXdrHash: hashPayload(body.signedXdr),
+          error: result.error,
+          recipientCount: body.recipients.length,
+        },
         actor,
       ),
     );
 
-    req.log?.info({ txHash: result.hash, status: result.status, recipientCount: xdrRecipients.length }, 'batch fund transaction submitted');
+    req.log?.info({ txHash: result.hash, status: result.status }, 'batch fund transaction submitted');
 
-    // Funding metrics: best-effort async, falls back to sync.
     const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
     enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
 
-    res.status(201).json({
-      transactionHash: result.hash,
-      status: result.status,
-      error: result.error,
-      // Use XDR-decoded recipients for the authoritative response.
-      recipients: xdrRecipients.map((r) => ({
-        target: r.target,
-        amount: r.amount,
-        status: result.status,
-      })),
+    // #845: map submission status to the correct HTTP status code.
+    res.status(submissionHttpStatus(result.status)).json({
+      ...result,
       explorerUrl: explorerService.txUrl(result.hash),
       explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
     });
@@ -257,64 +275,46 @@ fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async
   }
 });
 
-// ── POST /timelocked  ─────────────────────────────────────────────────────────
-// ── GET  /timelocked/:id ──────────────────────────────────────────────────────
-// ── POST /timelocked/:id/claim ────────────────────────────────────────────────
-//
-// #637: The on-chain contract has no timelock support.  These endpoints are
-// stubs that return 501 Not Implemented so clients receive an honest error
-// instead of fabricated data.
-
-fundingRouter.post('/timelocked', (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message: 'Timelocked funding is not yet supported. The on-chain contract does not implement timelock functions.',
-  });
-});
-
-fundingRouter.get('/timelocked/:id', (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message: 'Timelocked funding status is not yet supported. The on-chain contract does not implement timelock functions.',
-  });
-});
-
-fundingRouter.post('/timelocked/:id/claim', (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message: 'Timelocked claim is not yet supported. The on-chain contract does not implement timelock functions.',
-  });
-});
-
 // ── POST /direct ──────────────────────────────────────────────────────────────
 
 fundingRouter.post('/direct', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
     req.log?.info({ path: req.path }, 'direct fund transaction submission started');
     const body = fundDirectSchema.parse(req.body);
-    const result = await sorobanService.submitDirectFunding({
-      sourceAddress: body.sourceAddress,
-      targetAddress: body.targetAddress,
-      tokenAddress: body.tokenAddress,
-      amount: body.amount,
-      memo: body.memo,
-    });
+
+    const result = await sorobanService.submitDirectFunding(
+      body.sourceAddress,
+      body.targetAddress,
+      body.tokenAddress,
+      body.amount,
+      body.memo,
+    );
 
     const actor = req.apiKeyRecord?.id ?? 'api-key';
 
     enqueueAudit(
-      'direct_transaction_submission_result',
+      'transaction_submission_result',
       {
         txHash: result.hash,
         status: result.status,
-        target: body.targetAddress,
+        sourceAddress: body.sourceAddress,
+        targetAddress: body.targetAddress,
+        tokenAddress: body.tokenAddress,
         amount: body.amount,
         error: result.error,
       },
       actor,
       () => integrityAuditLog.append(
-        'direct_transaction_submission_result',
-        { txHash: result.hash, status: result.status, target: body.targetAddress, amount: body.amount, error: result.error },
+        'transaction_submission_result',
+        {
+          txHash: result.hash,
+          status: result.status,
+          sourceAddress: body.sourceAddress,
+          targetAddress: body.targetAddress,
+          tokenAddress: body.tokenAddress,
+          amount: body.amount,
+          error: result.error,
+        },
         actor,
       ),
     );
@@ -324,7 +324,8 @@ fundingRouter.post('/direct', fundEndpointRateLimit, idempotencyMiddleware, asyn
     const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
     enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
 
-    res.status(201).json({
+    // #845: map submission status to the correct HTTP status code.
+    res.status(submissionHttpStatus(result.status)).json({
       ...result,
       explorerUrl: explorerService.txUrl(result.hash),
       explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
