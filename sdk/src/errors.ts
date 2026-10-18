@@ -95,11 +95,6 @@ export class RateLimitError extends BridgeError {
 export class ServerError extends BridgeError {
   override readonly type = 'ServerError' as const;
 
-<<<<<<< Updated upstream
-  constructor(message?: string, options?: { statusCode?: number; code?: string; cause?: unknown; locale?: SupportedLocale }) {
-    const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
-    super(resolvedMessage, { statusCode: options?.statusCode ?? 500, code: options?.code, retryable: true, cause: options?.cause });
-=======
   /**
    * @param options.retryable Override the default retryability. Defaults to
    *   `true` for ordinary 5xx responses. Set to `false` when the server fault
@@ -113,7 +108,6 @@ export class ServerError extends BridgeError {
       retryable: options?.retryable ?? true,
       cause: options?.cause,
     });
->>>>>>> Stashed changes
     this.name = 'ServerError';
   }
 }
@@ -184,76 +178,72 @@ export class QueueFullError extends BridgeError {
 
 // ─── Factory: parse HTTP response into typed error ────────────────────────────
 
+/** A single zod issue as serialized by the API's error handler. */
+interface ErrorDetail {
+  path?: Array<string | number> | string;
+  message?: string;
+}
+
 interface ErrorBody {
+  /** API error code, e.g. `validation_error`, `expired_api_key`. */
+  error?: string;
+  /** zod issues for validation failures. */
+  details?: ErrorDetail[];
+  /** Legacy / alternate fields. */
   message?: string;
   code?: string;
   fields?: Record<string, string>;
   retryAfter?: number;
 }
 
+/** Convert zod `details[]` into a `{ path: message }` field map. */
+function detailsToFields(details: ErrorDetail[] | undefined): Record<string, string> | undefined {
+  if (!Array.isArray(details) || details.length === 0) return undefined;
+  const fields: Record<string, string> = {};
+  for (const detail of details) {
+    if (!detail || typeof detail !== 'object') continue;
+    const path = Array.isArray(detail.path)
+      ? detail.path.join('.')
+      : typeof detail.path === 'string'
+        ? detail.path
+        : '';
+    if (!path) continue;
+    fields[path] = detail.message ?? 'Invalid value';
+  }
+  return Object.keys(fields).length > 0 ? fields : undefined;
+}
+
 export function parseHttpError(status: number, body: ErrorBody, cause?: unknown, locale?: SupportedLocale): BridgeError {
+  const code = body.code ?? body.error;
+  const message = body.message ?? body.error;
+  const fields = body.fields ?? detailsToFields(body.details);
+
   switch (status) {
     case 401:
     case 403:
-      return new AuthError(body.message, { statusCode: status, code: body.code, cause, locale });
+      return new AuthError(message, { statusCode: status, code, cause, locale });
     case 400:
     case 422:
       return new ValidationError(
-        body.message ?? `Validation error: ${body.code ?? 'invalid request'}.`,
-        { statusCode: status, code: body.code, fields: body.fields, cause, locale },
+        message ?? `Validation error: ${code ?? 'invalid request'}.`,
+        { statusCode: status, code, fields, cause, locale },
       );
     case 404:
-      return new NotFoundError(body.message, { code: body.code, cause, locale });
+      return new NotFoundError(message, { code, cause, locale });
     case 429:
-      return new RateLimitError(body.message, {
-        retryAfterMs: body.retryAfter !== undefined ? body.retryAfter * 1000 : undefined,
-        code: body.code,
-        cause,
-        locale,
-      });
+      return new RateLimitError(message, { retryAfterMs: body.retryAfter, code, cause, locale });
     default:
       if (status >= 500) {
-        return new ServerError(body.message, { statusCode: status, code: body.code, cause, locale });
+        return new ServerError(message ?? 'A server error occurred. Please try again later.', {
+          statusCode: status,
+          code,
+          cause,
+        });
       }
-      return new BridgeError(body.message ?? `Request failed with status ${status}.`, {
+      return new BridgeError(message ?? `Request failed with status ${status}.`, {
         statusCode: status,
-        code: body.code,
-        retryable: false,
+        code,
         cause,
       });
   }
-}
-
-// ─── Type guard helpers ────────────────────────────────────────────────────────
-
-export function isAuthError(err: unknown): err is AuthError {
-  return err instanceof AuthError;
-}
-
-export function isValidationError(err: unknown): err is ValidationError {
-  return err instanceof ValidationError;
-}
-
-export function isRateLimitError(err: unknown): err is RateLimitError {
-  return err instanceof RateLimitError;
-}
-
-export function isServerError(err: unknown): err is ServerError {
-  return err instanceof ServerError;
-}
-
-export function isNetworkError(err: unknown): err is NetworkError {
-  return err instanceof NetworkError;
-}
-
-export function isTimeoutError(err: unknown): err is TimeoutError {
-  return err instanceof TimeoutError;
-}
-
-export function isNotFoundError(err: unknown): err is NotFoundError {
-  return err instanceof NotFoundError;
-}
-
-export function isBridgeError(err: unknown): err is BridgeError {
-  return err instanceof BridgeError;
 }
