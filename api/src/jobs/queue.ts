@@ -4,7 +4,6 @@ import { config } from '../config';
 export type JobName =
   | 'cache-warmup'
   | 'metrics-compute'
-  | 'cleanup'
   | 'async-audit-log'
   | 'async-analytics'
   | 'async-metrics'
@@ -16,10 +15,6 @@ export interface CacheWarmupData {
 
 export interface MetricsData {
   period: 'hourly' | 'daily';
-}
-
-export interface CleanupData {
-  olderThanMs: number;
 }
 
 // ─── Async pipeline job payloads ─────────────────────────────────────────────
@@ -75,7 +70,6 @@ export interface WebhookRetryData {
 export type JobData =
   | CacheWarmupData
   | MetricsData
-  | CleanupData
   | AuditLogJobData
   | AnalyticsJobData
   | PipelineMetricsJobData
@@ -119,7 +113,6 @@ function makeCriticalOptions(): QueueOptions {
 let _queues: {
   cacheWarmup: Queue<CacheWarmupData>;
   metrics: Queue<MetricsData>;
-  cleanup: Queue<CleanupData>;
   asyncCritical: Queue<AuditLogJobData>;
   asyncPipeline: Queue<AnalyticsJobData | PipelineMetricsJobData>;
   webhookRetry: Queue<WebhookRetryData>;
@@ -132,7 +125,6 @@ function getQueues() {
     const criticalOpts = makeCriticalOptions();
     const cacheWarmup = new Queue<CacheWarmupData>('cache-warmup', opts);
     const metrics = new Queue<MetricsData>('metrics-compute', opts);
-    const cleanup = new Queue<CleanupData>('cleanup', opts);
     const asyncCritical = new Queue<AuditLogJobData>('async-critical', criticalOpts);
     const asyncPipeline = new Queue<AnalyticsJobData | PipelineMetricsJobData>('async-pipeline', opts);
     const webhookRetry = new Queue<WebhookRetryData>('webhook-retry', {
@@ -147,11 +139,10 @@ function getQueues() {
     _queues = {
       cacheWarmup,
       metrics,
-      cleanup,
       asyncCritical,
       asyncPipeline,
       webhookRetry,
-      all: [cacheWarmup, metrics, cleanup, asyncCritical, asyncPipeline, webhookRetry],
+      all: [cacheWarmup, metrics, asyncCritical, asyncPipeline, webhookRetry],
     };
   }
   return _queues;
@@ -171,7 +162,6 @@ export async function scheduleRecurringJobs(): Promise<void> {
   const queues = getQueues();
   await queues.cacheWarmup.add('cache-warmup', { assets: [] }, { repeat: { pattern: '*/30 * * * * *' } });
   await queues.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { pattern: '0 * * * * *' } });
-  await queues.cleanup.add('cleanup', { olderThanMs: 7 * 24 * 60 * 60 * 1000 }, { repeat: { pattern: '0 0 * * * *' } });
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
