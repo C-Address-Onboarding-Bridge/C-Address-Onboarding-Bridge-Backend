@@ -31,6 +31,12 @@ export interface TokenMetadataParams {
 
 export interface RequestOptions {
   timeout?: number;
+  /**
+   * Idempotency key for non-idempotent POSTs (e.g. fund submission). Reuse the
+   * same key when re-submitting the same transaction so the server can
+   * deduplicate it; a key is generated per call when omitted.
+   */
+  idempotencyKey?: string;
 }
 
 /** Parameters for requesting a funding quote. */

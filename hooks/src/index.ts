@@ -5,3 +5,4 @@ export {
   type UseTransactionStatusOptions,
   type UseTransactionStatusResult,
 } from './useTransactionStatus';
+export { useFund, type FundStep, type UseFundOptions, type UseFundResult } from './useFund';
