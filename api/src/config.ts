@@ -26,6 +26,31 @@ function isValidContractId(id: string): boolean {
   return /^C[A-Z2-7]{55}$/.test(id);
 }
 
+/**
+ * Parse the TRUST_PROXY environment variable into a value suitable for
+ * `app.set('trust proxy', ...)`.
+ *
+ * Accepts:
+ *  - a hop count, e.g. `1` or `2`
+ *  - a comma-separated list of IPs/CIDRs, e.g. `10.0.0.0/8,192.168.1.1`
+ *  - a boolean-ish string (`true`/`false`)
+ *
+ * Defaults to `false` (trust proxy disabled) so that deployments without a
+ * load balancer keep using the socket address as `req.ip`.
+ */
+export function parseTrustProxy(raw: string | undefined): boolean | number | string[] {
+  const value = (raw || '').trim();
+  if (!value) return false;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (/^\d+$/.test(value)) return parseInt(value, 10);
+  const list = value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list : false;
+}
+
 /** Centralised runtime configuration derived from environment variables. */
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
@@ -188,6 +213,9 @@ export const config = {
      */
     backpressureThreshold: parseInt(process.env.ASYNC_BACKPRESSURE_THRESHOLD || '1000', 10),
     /**
-     * How long (ms) the in-process analytics buffer accumulate
-
-/* … truncated 162 chars — edit only what you need near the top … */
+     * How long (ms) the in-process analytics buffer accumulates events before
+     * flushing them as a single batched BullMQ job.
+     */
+    bufferFlushMs: parseInt(process.env.ASYNC_BUFFER_FLUSH_MS || '100', 10),
+  },
+};

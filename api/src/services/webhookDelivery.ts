@@ -51,6 +51,7 @@ export type WebhookEvent = (typeof WEBHOOK_EVENTS)[keyof typeof WEBHOOK_EVENTS];
 
 const RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
 const DELIVERY_TIMEOUT_MS = 10_000;
+const DEFAULT_DELIVERY_LOG_LIMIT = 10_000;
 
 /**
  * Recommended freshness window (in milliseconds) for receivers verifying the
@@ -140,10 +141,91 @@ export async function assertSafeWebhookUrl(rawUrl: string): Promise<void> {
   }
 }
 
-export class WebhookDeliveryService {
+/**
+ * Minimal persistence contract for webhook state. Implementations may back this
+ * with Postgres (production) or an in-memory store (tests / single-process).
+ */
+export interface WebhookStore {
+  saveRegistration(registration: WebhookRegistration): void;
+  deleteRegistration(id: string): boolean;
+  getRegistration(id: string): WebhookRegistration | undefined;
+  listRegistrations(): WebhookRegistration[];
+  appendDeliveryAttempt(attempt: DeliveryAttempt): void;
+  listDeliveryAttempts(): DeliveryAttempt[];
+  pruneDeliveryLog(maxEntries: number): void;
+  saveDLQEntry(entry: DLQEntry): void;
+  listDLQEntries(): DLQEntry[];
+  getDLQEntry(id: string): DLQEntry | undefined;
+  deleteDLQEntry(id: string): boolean;
+}
+
+/**
+ * In-memory fallback store. Used when no Postgres-backed store is injected so
+ * the service keeps working in tests and single-process deployments.
+ */
+export class InMemoryWebhookStore implements WebhookStore {
   private registrations = new Map<string, WebhookRegistration>();
   private dlq: DLQEntry[] = [];
   private deliveryLog: DeliveryAttempt[] = [];
+
+  saveRegistration(registration: WebhookRegistration): void {
+    this.registrations.set(registration.id, registration);
+  }
+
+  deleteRegistration(id: string): boolean {
+    return this.registrations.delete(id);
+  }
+
+  getRegistration(id: string): WebhookRegistration | undefined {
+    return this.registrations.get(id);
+  }
+
+  listRegistrations(): WebhookRegistration[] {
+    return [...this.registrations.values()];
+  }
+
+  appendDeliveryAttempt(attempt: DeliveryAttempt): void {
+    this.deliveryLog.push(attempt);
+  }
+
+  listDeliveryAttempts(): DeliveryAttempt[] {
+    return [...this.deliveryLog];
+  }
+
+  pruneDeliveryLog(maxEntries: number): void {
+    if (this.deliveryLog.length > maxEntries) {
+      this.deliveryLog.splice(0, this.deliveryLog.length - maxEntries);
+    }
+  }
+
+  saveDLQEntry(entry: DLQEntry): void {
+    this.dlq.push(entry);
+  }
+
+  listDLQEntries(): DLQEntry[] {
+    return [...this.dlq];
+  }
+
+  getDLQEntry(id: string): DLQEntry | undefined {
+    return this.dlq.find((e) => e.id === id);
+  }
+
+  deleteDLQEntry(id: string): boolean {
+    const idx = this.dlq.findIndex((e) => e.id === id);
+    if (idx === -1) return false;
+    this.dlq.splice(idx, 1);
+    return true;
+  }
+}
+
+export class WebhookDeliveryService {
+  private store: WebhookStore;
+  private deliveryLogLimit: number;
+
+  constructor(store: WebhookStore = new InMemoryWebhookStore(), deliveryLogLimit = DEFAULT_DELIVERY_LOG_LIMIT) {
+    this.store = store;
+    this.deliveryLogLimit = deliveryLogLimit;
+  }
 
   register(params: { url: string; secret: string; apiKeyId: string; events: string[] }): WebhookRegistration {
     const registration: WebhookRegistration = {
@@ -168,7 +250,7 @@ export class WebhookDeliveryService {
   }
 
   getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[] {
-    return [...this.registrations.values()].filter((r) => r.apiKeyId === apiKeyId);
+    return this.store.listRegistrations().filter((r) => r.apiKeyId === apiKeyId);
   }
 
   /**
@@ -207,6 +289,11 @@ export class WebhookDeliveryService {
         'webhook emit failed',
       );
     });
+  }
+
+  private recordAttempt(attempt: DeliveryAttempt): void {
+    this.store.appendDeliveryAttempt(attempt);
+    this.store.pruneDeliveryLog(this.deliveryLogLimit);
   }
 
   private async attemptDelivery(
@@ -255,7 +342,6 @@ export class WebhookDeliveryService {
       const deliveryAuditPayload = {
         payloadHash: hashPayload(payload),
         destination: registration.url,
-        registration
         registrationId: registration.id,
         event,
         attemptNumber: attemptNumber + 1,
@@ -379,4 +465,4 @@ export class WebhookDeliveryService {
   }
 }
 
-/* … truncated 2102 chars — edit only what you need near the top … */
+export const webhookDeliveryService = new WebhookDeliveryService();
