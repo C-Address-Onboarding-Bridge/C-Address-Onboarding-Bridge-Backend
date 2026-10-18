@@ -851,3 +851,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-596 -->
 - #596: test(contract): fix and un-ignore test_full_scenario
+
+<!-- handsoff-issue-787 -->
+- #787: bug(contract): get_proposal reads proposals from instance storage, but they are written to persistent storage
