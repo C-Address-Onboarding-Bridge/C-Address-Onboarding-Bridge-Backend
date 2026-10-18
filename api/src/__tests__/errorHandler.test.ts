@@ -16,6 +16,7 @@ vi.mock('../logger', () => {
 
 import { errorHandler, AppError } from '../middleware/error';
 import { xssErrorSanitizer } from '../middleware/security';
+import { applyRateLimitHeaders } from '../middleware/rateLimit';
 
 function makeReq(): Request {
   return {} as Request;
@@ -136,5 +137,39 @@ describe('xssErrorSanitizer', () => {
     expect(jsonMock).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledTimes(1);
     expect(next.mock.calls[0][0]).toBe(err);
+  });
+});
+
+describe('applyRateLimitHeaders', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('is a plain helper, not Express error-handling middleware', () => {
+    // Express treats any 4-arity function as error-handling middleware
+    // (err, req, res, next). applyRateLimitHeaders must NOT have that shape,
+    // otherwise mounting it with app.use() would run it as an error handler
+    // and throw `res.set is not a function` when an error propagates.
+    expect(applyRateLimitHeaders.length).not.toBe(4);
+  });
+
+  it('sets X-RateLimit-* headers on the response when called directly', () => {
+    const setMock = vi.fn();
+    const res = { set: setMock } as unknown as Response;
+
+    applyRateLimitHeaders(res, 100, 42, 60000);
+
+    expect(setMock).toHaveBeenCalledWith('X-RateLimit-Limit', '100');
+    expect(setMock).toHaveBeenCalledWith('X-RateLimit-Remaining', '42');
+    expect(setMock).toHaveBeenCalledWith('X-RateLimit-Reset', '60');
+  });
+
+  it('does not throw when an Error is passed as the first argument (regression for #809)', () => {
+    // Simulates the old buggy mount: Express would call this with the error
+    // object as the first argument. It must not throw a TypeError.
+    const err = new Error('boom');
+    expect(() =>
+      applyRateLimitHeaders(err as unknown as Response, 100, 42, 60000)
+    ).not.toThrow();
   });
 });

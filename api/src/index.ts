@@ -26,7 +26,7 @@ import { compressionMiddleware } from './middleware/compression';
 import { errorHandler } from './middleware/error';
 import { CircuitBreaker } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
-import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
+import { ipRateLimitMiddleware, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
 import { setFeeRateBps, updateCircuitBreakerMetrics } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
@@ -90,7 +90,10 @@ app.use(compressionMiddleware);
 app.use(versionCompatibility);
 app.use(correlationMiddleware);
 app.use(ipRateLimitMiddleware);
-app.use(applyRateLimitHeaders);
+// #809: X-RateLimit-* headers are already emitted by express-rate-limit
+// (standardHeaders: true). applyRateLimitHeaders is a helper, not middleware,
+// so it must not be mounted with app.use (Express would treat its 4-arg
+// signature as an error handler).
 
 // Prometheus instrumentation middleware
 app.use((req, res, next) => {
@@ -181,26 +184,6 @@ app.use('/api/v1/status', rbacAuth, requireScopes('status:read'), tierRateLimitM
 app.use('/api/v2/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
 app.use('/api/v1/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
 app.use('/api/v2/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
-app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
-app.use('/api/v2/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
-app.use('/api/quote', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, quoteRouter);
-app.use('/api/fund', rbacAuth, requireScopes('fund:write'), tierRateLimitMiddleware, fundingRouter);
-app.use('/api/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
-app.use('/api/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
-app.use('/api/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
+app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexR
 
-app.use('/api/webhook/moonpay', moonpayWebhookRouter);
-app.use('/api/webhook/transak', transakWebhookRouter);
-
-app.use('/api/v1/webhooks', rbacAuth, tierRateLimitMiddleware, webhookAdminRouter);
-app.use('/api/v1/keys', rbacAuth, tierRateLimitMiddleware, apiKeysRouter);
-app.use('/api/v1/transactions', rbacAuth, tierRateLimitMiddleware, transactionsRouter);
-app.use('/api/v1/admin', rbacAuth, tierRateLimitMiddleware, adminRouter);
-
-// Cache metrics endpoint – dedicated JSON view of cache health
-app.use('/api/v1/cache/metrics', rbacAuth, tierRateLimitMiddleware, cacheMetricsRouter);
-
-// Prometheus metrics — internal only, protected by RBAC
-app.use('
-
-/* … truncated 579 chars — edit only what you need near the top … */
+/* … truncated 1335 chars — edit only what you need near the top … */
