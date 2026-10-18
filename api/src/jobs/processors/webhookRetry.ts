@@ -1,7 +1,7 @@
 import { Job } from 'bullmq';
 import type { WebhookRetryData } from '../queue';
 import { webhookDeliveryService } from '../../services/webhookDelivery';
-import { logger } from '../../index';
+import { logger } from '../../logger';
 
 const DELIVERY_TIMEOUT_MS = 10_000;
 
@@ -51,7 +51,7 @@ export async function processWebhookRetry(job: Job<WebhookRetryData>): Promise<v
     );
   } catch (err) {
     logger.warn(
-      { registrationId, url: registration.url, event, error: err instanceof Error ? err.message : String(err), attempt: attemptNumber + 1 },
+      { registrationId, url: registration.url, error: err instanceof Error ? err.message : String(err), attempt: attemptNumber + 1 },
       'webhook retry delivery error',
     );
   }
