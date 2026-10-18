@@ -854,3 +854,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-790 -->
 - #790: bug(contract): WithdrawFees with amount = 0 transfers the cross-token AccumulatedFees total in a single token
+
+<!-- handsoff-issue-792 -->
+- #792: bug(sdk): request() throws ServerError without importing it, so a non-JSON 2xx body becomes a ReferenceError and gets retried
