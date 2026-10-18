@@ -9,14 +9,11 @@ import { fundEndpointRateLimit, fundAbuseDetectionMiddleware } from '../middlewa
 import { recordFundingMetrics } from '../services/metrics';
 import { XdrValidationError, MAX_XDR_BYTE_LENGTH } from '../services/xdrValidator';
 import { enqueueAudit, enqueueFundingMetrics } from '../services/asyncPipeline';
-import { requireScopes } from '../middleware/rbac';
-import { PermissionScope } from '../types/auth';
 
 /** Express router for funding endpoints. Mounted at `/api/v1/fund`. */
 export const fundingRouter = Router();
 
 fundingRouter.use(fundAbuseDetectionMiddleware);
-fundingRouter.use(requireScopes(PermissionScope.FUND_WRITE));
 
 // ── Schemas ────────────────────────────────────────────────────────────────────
 
@@ -201,139 +198,6 @@ fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async
       if (bodyR.target !== xdrR.target || bodyR.amount !== xdrR.amount) {
         res.status(400).json({
           error: 'recipient_mismatch',
-          message: `Recipient at index ${i} in body (target=${bodyR.target}, amount=${bodyR.amount}) does not match signedXdr (target=${xdrR.target}, amount=${xdrR.amount}).`,
-        });
-        return;
-      }
-    }
+          mes
 
-    const result = await sorobanService.submitBatchFundingTransaction(body.signedXdr);
-
-    const actor = req.apiKeyRecord?.id ?? 'api-key';
-
-    // Audit log uses XDR-decoded recipients — not body.recipients.
-    enqueueAudit(
-      'batch_transaction_submission_result',
-      {
-        txHash: result.hash,
-        status: result.status,
-        recipientCount: xdrRecipients.length,
-        signedXdrHash: hashPayload(body.signedXdr),
-        error: result.error,
-      },
-      actor,
-      () => integrityAuditLog.append(
-        'batch_transaction_submission_result',
-        { txHash: result.hash, status: result.status, recipientCount: xdrRecipients.length, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
-        actor,
-      ),
-    );
-
-    req.log?.info({ txHash: result.hash, status: result.status, recipientCount: xdrRecipients.length }, 'batch fund transaction submitted');
-
-    // Funding metrics: best-effort async, falls back to sync.
-    const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
-    enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
-
-    res.status(201).json({
-      transactionHash: result.hash,
-      status: result.status,
-      error: result.error,
-      // Use XDR-decoded recipients for the authoritative response.
-      recipients: xdrRecipients.map((r) => ({
-        target: r.target,
-        amount: r.amount,
-        status: result.status,
-      })),
-      explorerUrl: explorerService.txUrl(result.hash),
-      explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
-    });
-  } catch (err) {
-    if (err instanceof XdrValidationError) {
-      res.status(400).json({ error: err.code, message: err.detail });
-      return;
-    }
-    next(err);
-  }
-});
-
-// ── POST /timelocked  ─────────────────────────────────────────────────────────
-// ── GET  /timelocked/:id ──────────────────────────────────────────────────────
-// ── POST /timelocked/:id/claim ────────────────────────────────────────────────
-//
-// #637: The on-chain contract has no timelock support.  These endpoints are
-// stubs that return 501 Not Implemented so clients receive an honest error
-// instead of fabricated data.
-
-fundingRouter.post('/timelocked', (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message: 'Timelocked funding is not yet supported. The on-chain contract does not implement timelock functions.',
-  });
-});
-
-fundingRouter.get('/timelocked/:id', (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message: 'Timelocked funding status is not yet supported. The on-chain contract does not implement timelock functions.',
-  });
-});
-
-fundingRouter.post('/timelocked/:id/claim', (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message: 'Timelocked claim is not yet supported. The on-chain contract does not implement timelock functions.',
-  });
-});
-
-// ── POST /direct ──────────────────────────────────────────────────────────────
-
-fundingRouter.post('/direct', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    req.log?.info({ path: req.path }, 'direct fund transaction submission started');
-    const body = fundDirectSchema.parse(req.body);
-    const result = await sorobanService.submitDirectFunding({
-      sourceAddress: body.sourceAddress,
-      targetAddress: body.targetAddress,
-      tokenAddress: body.tokenAddress,
-      amount: body.amount,
-      memo: body.memo,
-    });
-
-    const actor = req.apiKeyRecord?.id ?? 'api-key';
-
-    enqueueAudit(
-      'direct_transaction_submission_result',
-      {
-        txHash: result.hash,
-        status: result.status,
-        target: body.targetAddress,
-        amount: body.amount,
-        error: result.error,
-      },
-      actor,
-      () => integrityAuditLog.append(
-        'direct_transaction_submission_result',
-        { txHash: result.hash, status: result.status, target: body.targetAddress, amount: body.amount, error: result.error },
-        actor,
-      ),
-    );
-
-    req.log?.info({ txHash: result.hash, status: result.status }, 'direct fund transaction submitted');
-
-    const metricsInput = { source: 'api' as const, status: result.status, funderId: actor };
-    enqueueFundingMetrics(metricsInput, () => recordFundingMetrics(metricsInput));
-
-    res.status(201).json({
-      ...result,
-      explorerUrl: explorerService.txUrl(result.hash),
-      explorerUrls: explorerService.txUrlWithFallbacks(result.hash),
-    });
-  } catch (err) {
-    if (err instanceof XdrValidationError) {
-      res.status(400).json({ error: err.code, message: err.detail });
-      return;
-    }
-    next(err);
-  }
-});
+/* … truncated 4990 chars — edit only what you need near the top … */

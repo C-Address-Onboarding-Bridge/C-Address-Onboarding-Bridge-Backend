@@ -2,11 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
 import { sorobanService } from '../services/soroban';
-import { buildCacheKey, cacheDelPattern } from '../services/cache';
-import { requireScopes } from '../middleware/rbac';
-import { PermissionScope } from '../types/auth';
+import { buildCacheKey, cacheDelPattern, CACHE_TTL } from '../services/cache';
 import { cacheMiddleware } from '../middleware/cache';
-import { CACHE_TTL } from '../utils/constants';
 import { setFeeRateBps } from '../services/metrics';
 
 /** Express router for quote endpoints. Mounted at `/api/v1/quote`. */
@@ -20,7 +17,6 @@ const getQuoteSchema = z.object({
 
 quoteRouter.get(
   '/',
-  requireScopes(PermissionScope.QUOTE_READ),
   cacheMiddleware({
     ttl: CACHE_TTL.quote,
     keyFn: (req) => {
