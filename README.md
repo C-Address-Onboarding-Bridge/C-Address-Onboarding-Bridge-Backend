@@ -854,3 +854,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-693 -->
 - #693: feat(contract): validate proposal parameters at propose() time
+
+<!-- handsoff-issue-694 -->
+- #694: feat(contract): get_stats returns mixed-unit totals — add per-token statistics
