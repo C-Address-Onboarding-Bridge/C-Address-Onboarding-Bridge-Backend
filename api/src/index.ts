@@ -201,6 +201,24 @@ app.use('/api/v1/admin', rbacAuth, tierRateLimitMiddleware, adminRouter);
 app.use('/api/v1/cache/metrics', rbacAuth, tierRateLimitMiddleware, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('
+app.use('/api/v1/metrics', rbacAuth, metricsRouter);
 
-/* … truncated 579 chars — edit only what you need near the top … */
+app.use('/api/v1/token', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, tokenRouter);
+app.use('/api/v2/token', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, tokenRouter);
+
+app.use(xssErrorSanitizer);
+app.use(errorHandler);
+
+const server = app.listen(config.port, () => {
+  logger.info({ port: config.port, env: config.env }, 'Server started');
+});
+
+const wss = createWebSocketServer(server);
+server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
+
+registerSignalHandlers(async () => {
+  await shutdownTracing();
+  await closePool();
+});
+
+export { app, server, wss };
