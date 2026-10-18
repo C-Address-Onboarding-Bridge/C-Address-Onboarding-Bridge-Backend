@@ -85,6 +85,9 @@ export class OfflineQueue {
     // #262 fix: generate a stable idempotency key once at enqueue time for
     // non-idempotent POST operations. The same key is sent on every replay so
     // the server can deduplicate submissions caused by connection failures.
+    // #846 fix: when the caller already supplied the key used on the failed
+    // attempt, reuse it verbatim so a replay cannot duplicate a submission
+    // that may have reached the server.
     const idempotencyKey =
       entry.method === 'POST' && NON_IDEMPOTENT_POST_PATHS.has(entry.path)
         ? entry.idempotencyKey ?? generateIdempotencyKey()
@@ -238,44 +241,50 @@ export class OfflineBridgeClient extends BridgeClient {
     options?: RequestOptions,
     idempotencyKey?: string,
   ): Promise<T> {
+    // #846 fix: generate the idempotency key here (for non-idempotent POSTs)
+    // so the exact same key is used on the failed attempt and on the queued
+    // replay. Otherwise a connection that drops after the server accepted the
+    // request would be replayed under a fresh key and executed twice.
+    const effectiveKey =
+      idempotencyKey ??
+      (method === 'POST' && NON_IDEMPOTENT_POST_PATHS.has(path)
+        ? generateIdempotencyKey()
+        : undefined);
+
     try {
-      return await super.request<T>(method, path, body, params, options, idempotencyKey);
+      return await super.request<T>(method, path, body, params, options, effectiveKey);
     } catch (err) {
       if (this.autoQueue && this.isNetworkError(err)) {
-        await this.offlineQueue.enqueue({ method, path, body, params });
-        throw new OfflineError(true, { locale: this.locale });
+        await this.offlineQueue.enqueue({ method, path, body, params, idempotencyKey: effectiveKey });
+        throw new OfflineError('Request queued for offline replay', {
+          cause: err,
+          locale: this.locale,
+        });
       }
       throw err;
     }
   }
 
-  /** Inspect all pending queued requests. */
-  getQueuedRequests(): QueueEntry[] {
-    return this.offlineQueue.getQueue();
-  }
-
-  /** Discard all pending queued requests. */
-  async clearQueue(): Promise<void> {
-    return this.offlineQueue.clearQueue();
-  }
-
-  /** Register a callback that fires when the queue is fully drained after reconnection. */
-  onQueueDrained(handler: (count: number, at: string) => void): void {
-    this.offlineQueue.onDrained(handler);
-  }
-
-  destroy(): void {
-    this.offlineQueue.destroy();
+  private async executeQueueEntry(entry: QueueEntry): Promise<unknown> {
+    return super.request(
+      entry.method,
+      entry.path,
+      entry.body,
+      entry.params,
+      undefined,
+      entry.idempotencyKey,
+    );
   }
 
   private isNetworkError(err: unknown): boolean {
-    if (err instanceof TimeoutError) return false;
+    if (err instanceof TimeoutError) return true;
     if (err instanceof TypeError) return true;
     if (err instanceof Error) {
       const msg = err.message.toLowerCase();
       return (
-        msg.includes('failed to fetch') ||
         msg.includes('network') ||
+        msg.includes('fetch') ||
+        msg.includes('failed to fetch') ||
         msg.includes('econnrefused') ||
         msg.includes('enotfound')
       );
@@ -283,9 +292,7 @@ export class OfflineBridgeClient extends BridgeClient {
     return false;
   }
 
-  private async executeQueueEntry(entry: QueueEntry): Promise<unknown> {
-    // #262 fix: forward the stored idempotency key so the replayed request
-    // carries the same key as the original submission attempt.
-    return super.request(entry.method, entry.path, entry.body, entry.params, undefined, entry.idempotencyKey);
+  private shouldRetry(err: unknown): boolean {
+    return this.isNetworkError(err);
   }
 }
