@@ -1,5 +1,9 @@
 # Observability stack: Prometheus + Grafana + Loki + Jaeger + OTel Collector
 # Usage: docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+#
+# Sampling: traces are sampled once, at the API (OTEL_TRACE_SAMPLE_RATIO below).
+# The collector does NOT re-sample, so the effective ratio is exactly the API value
+# (0.1 = ~10% of traces reach Jaeger).
 
 services:
   api:
@@ -68,8 +72,6 @@ services:
     image: jaegertracing/all-in-one:1.61
     ports:
       - "16686:16686"
-      - "4317:4317"
-      - "4318:4318"
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     restart: unless-stopped
