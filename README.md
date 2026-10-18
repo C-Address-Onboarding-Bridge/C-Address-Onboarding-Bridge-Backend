@@ -851,3 +851,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-596 -->
 - #596: test(contract): fix and un-ignore test_full_scenario
+
+<!-- handsoff-issue-784 -->
+- #784: bug(contract): onboarding-bridge no longer compiles — 35 errors from a half-finished #[contracterror] migration
