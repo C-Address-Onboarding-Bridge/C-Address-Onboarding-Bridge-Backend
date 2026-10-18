@@ -31,6 +31,11 @@ export interface TokenMetadataParams {
 
 export interface RequestOptions {
   timeout?: number;
+  /**
+   * Optional signal used to cancel the request. When aborted, the in-flight
+   * request rejects with an `AbortError` and no further retries are attempted.
+   */
+  signal?: AbortSignal;
 }
 
 /** Parameters for requesting a funding quote. */
@@ -209,7 +214,7 @@ export interface AutoPaginateOptions {
   signal?: AbortSignal;
 }
 
-export type PageFetcher<T> = (params: PaginatedRequestParams) => Promise<PaginatedResponse<T>>;
+export type PageFetcher<T> = (params: PaginatedRequestParams, signal?: AbortSignal) => Promise<PaginatedResponse<T>>;
 
 // Offline queue
 
@@ -277,9 +282,3 @@ export interface BridgeEvent<K extends BridgeEventType = BridgeEventType> {
 }
 
 export type EventHandler<K extends BridgeEventType = BridgeEventType> = (event: BridgeEvent<K>) => void;
-
-export interface EventEmitterOptions {
-  pollIntervalMs?: number;
-  historySize?: number;
-  healthCheckIntervalMs?: number;
-}

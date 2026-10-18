@@ -1,72 +1,60 @@
-import { useEffect, useState } from 'react';
-import type { BridgeClientConfig, TransactionStatus } from '@c-address-bridge/sdk';
-import { useCAddressBridge } from './useCAddressBridge';
-
-export interface UseTransactionStatusOptions {
-  /** When false, the status is not fetched. Defaults to true. */
-  enabled?: boolean;
-  /** When set, polls at this interval (ms) until the status is `success` or `failed`. */
-  pollIntervalMs?: number;
-}
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { getStatus, type RequestOptions, type TransactionStatus } from '@c-address/sdk';
 
 export interface UseTransactionStatusResult {
-  data: TransactionStatus | undefined;
-  error: Error | undefined;
+  status: TransactionStatus | null;
   loading: boolean;
+  error: Error | null;
+  refetch: () => void;
 }
 
-const TERMINAL_STATUSES = new Set(['success', 'failed']);
-
-/**
- * Fetches (and optionally polls) the status of a submitted transaction by hash.
- */
 export function useTransactionStatus(
-  config: BridgeClientConfig,
-  txHash: string | undefined,
-  options: UseTransactionStatusOptions = {},
+  txHash: string | null | undefined,
+  options?: RequestOptions,
 ): UseTransactionStatusResult {
-  const { enabled = true, pollIntervalMs } = options;
-  const client = useCAddressBridge(config);
-  const [data, setData] = useState<TransactionStatus | undefined>(undefined);
-  const [error, setError] = useState<Error | undefined>(undefined);
+  const [status, setStatus] = useState<TransactionStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  const refetch = useCallback(() => {
+    setNonce((n) => n + 1);
+  }, []);
 
   useEffect(() => {
-    if (!enabled || !txHash) {
+    if (!txHash) {
+      setStatus(null);
+      setLoading(false);
+      setError(null);
       return;
     }
 
+    const controller = new AbortController();
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const fetchStatus = () => {
-      setLoading(true);
-      client
-        .getStatus(txHash)
-        .then((result) => {
-          if (cancelled) return;
-          setData(result);
-          setError(undefined);
-          if (pollIntervalMs && !TERMINAL_STATUSES.has(result.status)) {
-            timer = setTimeout(fetchStatus, pollIntervalMs);
-          }
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
-          setError(err instanceof Error ? err : new Error(String(err)));
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-    };
+    setLoading(true);
+    setError(null);
 
-    fetchStatus();
+    getStatus(txHash, { ...optionsRef.current, signal: controller.signal })
+      .then((result) => {
+        if (cancelled) return;
+        setStatus(result);
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof Error && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err : new Error(String(err)));
+        setLoading(false);
+      });
 
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      controller.abort();
     };
-  }, [client, txHash, enabled, pollIntervalMs]);
+  }, [txHash, nonce]);
 
-  return { data, error, loading };
+  return { status, loading, error, refetch };
 }

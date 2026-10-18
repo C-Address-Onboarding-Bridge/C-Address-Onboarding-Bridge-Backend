@@ -39,11 +39,12 @@ export function useQuote(
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(undefined);
 
     client
-      .getQuote(params)
+      .getQuote(params, { signal: controller.signal })
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -56,6 +57,7 @@ export function useQuote(
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [client, paramsKey, enabled, refetchToken]);
 
