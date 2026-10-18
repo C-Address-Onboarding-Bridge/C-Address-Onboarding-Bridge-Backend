@@ -144,7 +144,12 @@ export interface CexWithdrawalResult {
 export interface RequestSigningConfig {
   /** Enable HMAC-SHA256 request signing. Unsigned requests still work when false. */
   enabled: boolean;
-  /** Clock skew tolerance in milliseconds (default: 30 000). */
+  /**
+   * Clock skew tolerance in milliseconds (default: 300 000, matching the API's
+   * `TIMESTAMP_WINDOW_MS`). When set, the SDK learns the offset between the
+   * local clock and the server's `Date` response header and applies it to the
+   * `X-Timestamp` value so signed requests stay within the server's window.
+   */
   clockSkewToleranceMs?: number;
 }
 
@@ -277,9 +282,3 @@ export interface BridgeEvent<K extends BridgeEventType = BridgeEventType> {
 }
 
 export type EventHandler<K extends BridgeEventType = BridgeEventType> = (event: BridgeEvent<K>) => void;
-
-export interface EventEmitterOptions {
-  pollIntervalMs?: number;
-  historySize?: number;
-  healthCheckIntervalMs?: number;
-}
