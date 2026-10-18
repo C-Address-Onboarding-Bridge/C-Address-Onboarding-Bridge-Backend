@@ -851,3 +851,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-596 -->
 - #596: test(contract): fix and un-ignore test_full_scenario
+
+<!-- handsoff-issue-802 -->
+- #802: bug(contract): route_from_exchange checks the reentrancy guard but never sets it
