@@ -851,3 +851,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-596 -->
 - #596: test(contract): fix and un-ignore test_full_scenario
+
+<!-- handsoff-issue-820 -->
+- #820: test(contract): test_full_scenario is still #[ignore]d (#596 closed)
