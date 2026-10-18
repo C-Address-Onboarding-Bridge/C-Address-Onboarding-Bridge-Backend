@@ -186,6 +186,32 @@ jobs:
           MOONPAY_SECRET_KEY: sim-moonpay-secret
           TRANSAK_WEBHOOK_SECRET: sim-transak-secret
 
+  alertmanager-routing:
+    name: Alertmanager Routing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install amtool
+        run: |
+          curl -fsSL https://github.com/prometheus/alertmanager/releases/download/v0.27.0/alertmanager-0.27.0.linux-amd64.tar.gz \
+            | tar -xz -C /tmp
+          sudo install -m 0755 /tmp/alertmanager-0.27.0.linux-amd64/amtool /usr/local/bin/amtool
+
+      - name: Validate alertmanager config
+        run: amtool check-config monitoring/alertmanager/alertmanager.yaml
+
+      - name: Blockchain critical alerts reach slack-blockchain
+        run: |
+          out=$(amtool config routes test \
+            --config.file=monitoring/alertmanager/alertmanager.yaml \
+            severity=critical team=blockchain)
+          echo "$out"
+          if ! echo "$out" | grep -q 'slack-blockchain'; then
+            echo "::error::critical blockchain alerts do not route to slack-blockchain"
+            exit 1
+          fi
+
   deploy-testnet:
     name: Deploy to Testnet
     runs-on: ubuntu-latest
