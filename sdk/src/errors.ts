@@ -95,11 +95,6 @@ export class RateLimitError extends BridgeError {
 export class ServerError extends BridgeError {
   override readonly type = 'ServerError' as const;
 
-<<<<<<< Updated upstream
-  constructor(message?: string, options?: { statusCode?: number; code?: string; cause?: unknown; locale?: SupportedLocale }) {
-    const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
-    super(resolvedMessage, { statusCode: options?.statusCode ?? 500, code: options?.code, retryable: true, cause: options?.cause });
-=======
   /**
    * @param options.retryable Override the default retryability. Defaults to
    *   `true` for ordinary 5xx responses. Set to `false` when the server fault
@@ -113,7 +108,6 @@ export class ServerError extends BridgeError {
       retryable: options?.retryable ?? true,
       cause: options?.cause,
     });
->>>>>>> Stashed changes
     this.name = 'ServerError';
   }
 }
@@ -191,7 +185,44 @@ interface ErrorBody {
   retryAfter?: number;
 }
 
-export function parseHttpError(status: number, body: ErrorBody, cause?: unknown, locale?: SupportedLocale): BridgeError {
+/**
+ * Parse a `Retry-After` header value into milliseconds.
+ *
+ * The header may be either a number of seconds (`"2"`, `"0.5"`) or an
+ * HTTP-date (`"Wed, 21 Oct 2015 07:28:00 GMT"`). Returns `undefined` when the
+ * value is missing or cannot be interpreted.
+ */
+export function parseRetryAfterHeader(value: string | null | undefined): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+
+  // Numeric seconds (may be fractional).
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return Number.isFinite(seconds) ? Math.max(0, Math.round(seconds * 1000)) : undefined;
+  }
+
+  // HTTP-date.
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+
+  return undefined;
+}
+
+export function parseHttpError(
+  status: number,
+  body: ErrorBody,
+  cause?: unknown,
+  locale?: SupportedLocale,
+  retryAfterHeader?: string | null,
+): BridgeError {
+  const headerRetryAfterMs = parseRetryAfterHeader(retryAfterHeader);
+  const bodyRetryAfterMs = body.retryAfter !== undefined ? body.retryAfter * 1000 : undefined;
+  const retryAfterMs = headerRetryAfterMs ?? bodyRetryAfterMs;
+
   switch (status) {
     case 401:
     case 403:
@@ -206,54 +237,25 @@ export function parseHttpError(status: number, body: ErrorBody, cause?: unknown,
       return new NotFoundError(body.message, { code: body.code, cause, locale });
     case 429:
       return new RateLimitError(body.message, {
-        retryAfterMs: body.retryAfter !== undefined ? body.retryAfter * 1000 : undefined,
+        retryAfterMs,
         code: body.code,
         cause,
         locale,
       });
+    case 503:
+      return new ServerError(body.message ?? 'Service temporarily unavailable. Please try again later.', {
+        statusCode: 503,
+        code: body.code,
+        cause,
+      });
     default:
       if (status >= 500) {
-        return new ServerError(body.message, { statusCode: status, code: body.code, cause, locale });
+        return new ServerError(body.message, { statusCode: status, code: body.code, cause });
       }
       return new BridgeError(body.message ?? `Request failed with status ${status}.`, {
         statusCode: status,
         code: body.code,
-        retryable: false,
         cause,
       });
   }
-}
-
-// ─── Type guard helpers ────────────────────────────────────────────────────────
-
-export function isAuthError(err: unknown): err is AuthError {
-  return err instanceof AuthError;
-}
-
-export function isValidationError(err: unknown): err is ValidationError {
-  return err instanceof ValidationError;
-}
-
-export function isRateLimitError(err: unknown): err is RateLimitError {
-  return err instanceof RateLimitError;
-}
-
-export function isServerError(err: unknown): err is ServerError {
-  return err instanceof ServerError;
-}
-
-export function isNetworkError(err: unknown): err is NetworkError {
-  return err instanceof NetworkError;
-}
-
-export function isTimeoutError(err: unknown): err is TimeoutError {
-  return err instanceof TimeoutError;
-}
-
-export function isNotFoundError(err: unknown): err is NotFoundError {
-  return err instanceof NotFoundError;
-}
-
-export function isBridgeError(err: unknown): err is BridgeError {
-  return err instanceof BridgeError;
 }
