@@ -1,6 +1,53 @@
 import { Token, TokenMetadata } from './types';
 import { ValidationError } from './errors';
-import { StrKey } from 'stellar-sdk';
+
+// ─── StrKey (C-address) validation ────────────────────────────────────────────
+//
+// The SDK is shipped as a browser bundle with a tight size budget, so it cannot
+// depend on `@stellar/stellar-sdk` (or `stellar-base`) just to validate a
+// contract address. StrKey contract addresses are small enough to decode here:
+// `base32(version_byte || 32-byte payload || 2-byte CRC16-XModem checksum)`.
+
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+const CONTRACT_ADDRESS_LENGTH = 56;
+const CONTRACT_VERSION_BYTE = 16; // 2 << 3, the StrKey version byte for contracts
+const CONTRACT_DECODED_LENGTH = 35; // version + 32-byte payload + 2-byte checksum
+
+/** Decodes RFC 4648 base32 (no padding); returns `null` for invalid input. */
+function base32Decode(input: string): Uint8Array | null {
+  let buffer = 0;
+  let bits = 0;
+  const bytes: number[] = [];
+
+  for (const char of input) {
+    const index = BASE32_ALPHABET.indexOf(char);
+    if (index === -1) return null;
+
+    buffer = ((buffer << 5) | index) & 0xffff;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >>> bits) & 0xff);
+    }
+  }
+
+  // Any leftover bits must be zero padding for a canonical encoding.
+  if (bits >= 5 || (buffer & ((1 << bits) - 1)) !== 0) return null;
+
+  return Uint8Array.from(bytes);
+}
+
+/** CRC16-XModem as used by Stellar StrKey checksums. */
+function crc16Xmodem(data: Uint8Array): number {
+  let crc = 0x0000;
+  for (const byte of data) {
+    crc ^= byte << 8;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return crc & 0xffff;
+}
 
 // ─── Token Type Guards ────────────────────────────────────────────────────────
 
@@ -16,16 +63,27 @@ export function isSacToken(token: Token): token is { type: 'sac'; contractId: st
 
 // ─── Address Validation ───────────────────────────────────────────────────────
 
-/** Returns `true` if the string is a valid SAC token contract address (C-address). */
+/**
+ * Returns `true` if the string is a valid SAC token contract address
+ * (C-address), including its StrKey checksum.
+ */
 export function isSacTokenAddress(address: string): boolean {
-  return StrKey.isValidContract(address);
+  if (address.length !== CONTRACT_ADDRESS_LENGTH) return false;
+  if (!/^C[A-Z2-7]{55}$/.test(address)) return false;
+
+  const decoded = base32Decode(address);
+  if (decoded === null || decoded.length !== CONTRACT_DECODED_LENGTH) return false;
+  if (decoded[0] !== CONTRACT_VERSION_BYTE) return false;
+
+  const expectedChecksum = decoded[33] | (decoded[34] << 8);
+  return crc16Xmodem(decoded.subarray(0, 33)) === expectedChecksum;
 }
 
 /** Validates a SAC token address and throws a typed error if invalid. */
 export function validateSacTokenAddress(address: string): void {
   if (!isSacTokenAddress(address)) {
     throw new ValidationError('Invalid SAC token address', {
-      contractId: `Must be a valid contract address (C-address), got: ${address}`,
+      fields: { contractId: `Must be a valid contract address (C-address), got: ${address}` },
     });
   }
 }

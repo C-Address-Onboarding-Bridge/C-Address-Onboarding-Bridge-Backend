@@ -1,5 +1,4 @@
-<<<<<<< Updated upstream
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SimpleCache } from '../src/cache';
 
 describe('SimpleCache', () => {
@@ -133,9 +132,8 @@ describe('SimpleCache', () => {
       expect(cache.get('key-0')).toBeUndefined();
       expect(cache.get('key-100')).toEqual({ value: 100, stale: false });
     });
-=======
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SimpleCache } from '../src/cache';
+  });
+});
 
 const LONG_TTL = 60_000;
 
@@ -221,7 +219,8 @@ describe('SimpleCache LRU eviction', () => {
   });
 
   it('still evicts expired entries without reinserting them', () => {
-    const cache = new SimpleCache({ maxEntries: 2 });
+    // Three live entries are asserted at the end, so the cache must hold three.
+    const cache = new SimpleCache({ maxEntries: 3 });
     cache.set('A', 'a', 100);
     cache.set('B', 'b', LONG_TTL);
 
@@ -235,6 +234,5 @@ describe('SimpleCache LRU eviction', () => {
     expect(cache.get<string>('B')?.value).toBe('b');
     expect(cache.get<string>('C')?.value).toBe('c');
     expect(cache.get<string>('D')?.value).toBe('d');
->>>>>>> Stashed changes
   });
 });

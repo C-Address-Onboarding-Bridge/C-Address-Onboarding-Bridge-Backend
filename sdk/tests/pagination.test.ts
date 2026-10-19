@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-<<<<<<< Updated upstream
+import { getEventListeners } from 'node:events';
 import { PaginationHelper, paginateAll, collectAllPages } from '../src/pagination';
 import type { PaginatedResponse, PageFetcher } from '../src/types';
 
@@ -143,10 +143,8 @@ describe('collectAllPages', () => {
     const promise = collectAllPages(fetcher, { signal: controller.signal });
     controller.abort();
     await expect(promise).rejects.toThrow();
-=======
-import { getEventListeners } from 'node:events';
-import { PaginationHelper } from '../src/pagination';
-import { PaginatedResponse } from '../src/types';
+  });
+});
 
 interface Item {
   id: string;
@@ -272,6 +270,5 @@ describe('PaginationHelper.pages', () => {
     const first = await iterator.next();
     expect(first.done).toBe(true);
     expect(abortListenerCount(controller.signal)).toBe(0);
->>>>>>> Stashed changes
   });
 });

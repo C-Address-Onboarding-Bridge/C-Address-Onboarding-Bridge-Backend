@@ -443,9 +443,9 @@ describe('BridgeClient.runDiagnostics', () => {
   });
 
   it('returns unhealthy when contract status check fails', async () => {
+    // Only the contract-status check is enabled, so the first (and only)
+    // request this test should make is the quote used as its proxy.
     vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health latency
       .mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({ message: 'Contract error' }) }) // quote
     );
 

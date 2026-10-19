@@ -30,6 +30,7 @@ import {
   NetworkError,
   TimeoutError,
   BridgeError,
+  ServerError,
   ValidationError,
 } from "./errors";
 
