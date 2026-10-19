@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
+import net from 'net';
 import { requireScope } from '../middleware/rbacAuth';
-import { webhookDeliveryService } from '../services/webhookDelivery';
+import { isBlockedIp, webhookDeliveryService } from '../services/webhookDelivery';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -12,32 +13,11 @@ const BLOCKED_HOSTNAMES = new Set([
   'metadata',
 ]);
 
-function isBlockedIpv4(host: string): boolean {
-  const parts = host.split('.');
-  if (parts.length !== 4) return false;
-  const octets = parts.map((p) => Number(p));
-  if (octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return false;
-  const [a, b] = octets;
-  if (a === 0) return true; // "this" network
-  if (a === 10) return true; // private
-  if (a === 127) return true; // loopback
-  if (a === 169 && b === 254) return true; // link-local / cloud metadata
-  if (a === 172 && b >= 16 && b <= 31) return true; // private
-  if (a === 192 && b === 168) return true; // private
-  if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
-  return false;
-}
-
 function isBlockedHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (BLOCKED_HOSTNAMES.has(host)) return true;
   if (host.endsWith('.localhost') || host.endsWith('.internal')) return true;
-  if (isBlockedIpv4(host)) return true;
-  // IPv4-mapped IPv6 (::ffff:127.0.0.1) and other IPv6 loopback/link-local forms
-  const mapped = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isBlockedIpv4(mapped[1]);
-  if (host === '::1' || host === '::') return true;
-  if (host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) return true;
+  if (net.isIP(host) && isBlockedIp(host)) return true;
   return false;
 }
 

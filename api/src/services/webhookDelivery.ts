@@ -59,6 +59,27 @@ const DELIVERY_TIMEOUT_MS = 10_000;
  */
 export const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 
+function ipv6ToBigInt(address: string): bigint {
+  let normalized = address.toLowerCase();
+  const ipv4Tail = normalized.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (ipv4Tail) {
+    const octets = ipv4Tail[1].split('.').map(Number);
+    const first = ((octets[0] << 8) | octets[1]).toString(16);
+    const second = ((octets[2] << 8) | octets[3]).toString(16);
+    normalized = `${normalized.slice(0, ipv4Tail.index)}${first}:${second}`;
+  }
+
+  const [leftPart, rightPart = ''] = normalized.split('::');
+  const left = leftPart ? leftPart.split(':') : [];
+  const right = rightPart ? rightPart.split(':') : [];
+  const groups = [...left, ...Array(8 - left.length - right.length).fill('0'), ...right];
+  return groups.reduce((value, group) => (value << 16n) | BigInt(`0x${group || '0'}`), 0n);
+}
+
+function ipv4FromBigInt(value: bigint): string {
+  return [24n, 16n, 8n, 0n].map((shift) => Number((value >> shift) & 0xffn)).join('.');
+}
+
 /**
  * Returns true when the given IP literal falls in a private, loopback,
  * link-local, or cloud-metadata range that must never be reachable via a
@@ -67,10 +88,6 @@ export const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 export function isBlockedIp(ip: string): boolean {
   let addr = ip.trim();
   if (addr.startsWith('[') && addr.endsWith(']')) addr = addr.slice(1, -1);
-
-  // Unwrap IPv4-mapped / IPv4-compatible IPv6 forms (e.g. ::ffff:169.254.169.254).
-  const mapped = addr.match(/^::(?:ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/i);
-  if (mapped) addr = mapped[1];
 
   const version = net.isIP(addr);
   if (version === 4) {
@@ -89,6 +106,16 @@ export function isBlockedIp(ip: string): boolean {
   }
 
   if (version === 6) {
+    const value = ipv6ToBigInt(addr);
+    const prefix96 = value >> 32n;
+    const embeddedIpv4 = value & 0xffffffffn;
+    if (prefix96 === 0n || prefix96 === 0xffffn || prefix96 === 0x64ff9b0000000000000000n) {
+      return isBlockedIp(ipv4FromBigInt(embeddedIpv4));
+    }
+    if (value >> 112n === 0x2002n) {
+      return isBlockedIp(ipv4FromBigInt((value >> 80n) & 0xffffffffn));
+    }
+
     const lower = addr.toLowerCase();
     if (lower === '::' || lower === '::1') return true; // unspecified / loopback
     if (lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb')) {
@@ -255,7 +282,7 @@ export class WebhookDeliveryService {
       const deliveryAuditPayload = {
         payloadHash: hashPayload(payload),
         destination: registration.url,
-        registration
+        registration,
         registrationId: registration.id,
         event,
         attemptNumber: attemptNumber + 1,
