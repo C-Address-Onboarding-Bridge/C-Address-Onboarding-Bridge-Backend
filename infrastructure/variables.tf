@@ -33,3 +33,40 @@ variable "redis_node_type" {
   type        = string
   default     = "cache.t3.micro"
 }
+
+variable "db_security_group_id" {
+  description = "VPC security group ID for the RDS instance"
+  type        = string
+}
+
+variable "db_subnet_group_name" {
+  description = "DB subnet group name for the RDS instance"
+  type        = string
+}
+
+variable "redis_auth_token" {
+  description = "Auth token for Redis replication group"
+  type        = string
+  sensitive   = true
+}
+
+variable "redis_subnet_group_name" {
+  description = "Cache subnet group name for the Redis replication group"
+  type        = string
+}
+
+variable "redis_security_group_id" {
+  description = "VPC security group ID for the Redis replication group"
+  type        = string
+}
+
+variable "cdn_api_origin_domain" {
+  description = "API origin domain for CloudFront CDN"
+  type        = string
+}
+
+variable "cdn_origin_verify_secret" {
+  description = "Origin verification secret for CloudFront CDN"
+  type        = string
+  sensitive   = true
+}
