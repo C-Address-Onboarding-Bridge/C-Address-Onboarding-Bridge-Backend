@@ -54,6 +54,8 @@ module "cdn" {
   source                = "./cdn"
   api_origin_domain     = var.cdn_api_origin_domain
   origin_verify_secret  = var.cdn_origin_verify_secret
+  environment           = var.environment
+  aws_region            = var.aws_region
 }
 
 # Secrets Manager
