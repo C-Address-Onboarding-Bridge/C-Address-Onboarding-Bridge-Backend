@@ -90,6 +90,10 @@ export const config = {
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean),
+  /** Shared secret used to verify request signing HMAC signatures.
+   * Each API key record may store its own signing secret; this is the
+   * global fallback. */
+  signingSecret: process.env.SIGNING_SECRET || '',
   logLevel: process.env.LOG_LEVEL || 'info',
   logging: {
     serviceName: process.env.LOG_SERVICE_NAME || 'bridge-api',
