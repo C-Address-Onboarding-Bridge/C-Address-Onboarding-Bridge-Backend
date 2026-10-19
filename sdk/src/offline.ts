@@ -60,11 +60,9 @@ export class OfflineQueue {
     this.healthTimer = setInterval(async () => {
       try {
         const online = await this.checkHealth();
-        if (!this.serverOnline && online) {
-          this.serverOnline = true;
+        this.serverOnline = online;
+        if (online && this.queue.length > 0) {
           await this.replay();
-        } else if (this.serverOnline && !online) {
-          this.serverOnline = false;
         }
       } catch {
         if (this.serverOnline) this.serverOnline = false;
@@ -97,6 +95,7 @@ export class OfflineQueue {
       retryCount: 0,
       idempotencyKey,
     };
+    this.serverOnline = false;
     this.queue.push(item);
     await this.persistToStorage();
     return id;
@@ -242,6 +241,7 @@ export class OfflineBridgeClient extends BridgeClient {
       return await super.request<T>(method, path, body, params, options, idempotencyKey);
     } catch (err) {
       if (this.autoQueue && this.isNetworkError(err)) {
+        this.offlineQueue.setOnline(false);
         await this.offlineQueue.enqueue({ method, path, body, params });
         throw new OfflineError(true, { locale: this.locale });
       }
