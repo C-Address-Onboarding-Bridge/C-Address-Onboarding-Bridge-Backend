@@ -1,6 +1,22 @@
 import { ValidationError } from './errors';
 
 /**
+ * Prevents a Node.js timer from keeping the process alive. Browsers (and
+ * environments where `setInterval` returns a numeric handle) have no `unref`,
+ * in which case this is a no-op.
+ *
+ * SDK timers are background housekeeping (telemetry flushing, health polling,
+ * queue replay). A host process that forgets to call `destroy()` should not be
+ * held open by them, and a test runner should be able to exit.
+ */
+export function unrefTimer(timer: ReturnType<typeof setInterval>): void {
+  const candidate = timer as unknown as { unref?: () => void };
+  if (typeof candidate.unref === 'function') {
+    candidate.unref();
+  }
+}
+
+/**
  * Returns `true` if the string is a valid Stellar address (G-address or C-address).
  * Note: this accepts both account addresses (G…) and contract addresses (C…).
  * Use `isGAddress` / `isCAddress` when you need to distinguish between them.

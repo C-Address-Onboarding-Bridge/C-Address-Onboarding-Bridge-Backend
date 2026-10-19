@@ -2,6 +2,7 @@ import { QueueEntry, OfflineQueueOptions, StorageAdapter, RequestOptions, HttpMe
 import { BridgeClient, BridgeClientConfig } from './bridge';
 import { OfflineError, QueueFullError, TimeoutError } from './errors';
 import type { SupportedLocale } from './i18n/types';
+import { unrefTimer } from './utils';
 
 const QUEUE_STORAGE_KEY = 'bridge_sdk_offline_queue';
 
@@ -70,6 +71,9 @@ export class OfflineQueue {
         if (this.serverOnline) this.serverOnline = false;
       }
     }, intervalMs);
+    // The health poll is background housekeeping: it must not keep a Node
+    // process (or a test runner, or an SSR request) alive on its own.
+    unrefTimer(this.healthTimer);
   }
 
   async enqueue(entry: Omit<QueueEntry, 'id' | 'timestamp' | 'retryCount'>): Promise<string> {
@@ -131,7 +135,10 @@ export class OfflineQueue {
   }
 
   destroy(): void {
-    if (this.healthTimer !== undefined) clearInterval(this.healthTimer);
+    if (this.healthTimer !== undefined) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = undefined;
+    }
   }
 
   private async replay(): Promise<void> {
@@ -264,8 +271,14 @@ export class OfflineBridgeClient extends BridgeClient {
     this.offlineQueue.onDrained(handler);
   }
 
-  destroy(): void {
+  /**
+   * Stop the offline queue's health poll AND the base client's telemetry
+   * timer/flush. Overriding without the `super.destroy()` call is exactly how
+   * the telemetry timer used to leak for every offline client (#858).
+   */
+  override destroy(): void {
     this.offlineQueue.destroy();
+    super.destroy();
   }
 
   private isNetworkError(err: unknown): boolean {
