@@ -1,5 +1,5 @@
-import { Token, TokenMetadata } from './types';
-import { ValidationError } from './errors';
+import { Token, TokenMetadata } from './types.js';
+import { ValidationError } from './errors.js';
 import { StrKey } from 'stellar-sdk';
 
 // ─── Token Type Guards ────────────────────────────────────────────────────────

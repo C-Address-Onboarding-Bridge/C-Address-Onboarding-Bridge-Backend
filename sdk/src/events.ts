@@ -5,7 +5,7 @@ import {
   EventHandler,
   EventEmitterOptions,
   TransactionStatus,
-} from './types';
+} from './types.js';
 
 type StatusFetcher = (txHash: string) => Promise<TransactionStatus>;
 type HealthChecker = () => Promise<boolean>;

@@ -3,8 +3,8 @@
  * Tests the complete prepare → sign → submit → poll flow.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BridgeClient } from '../bridge';
-import type { FundingPrepareResult, FundingResult } from '../types';
+import { BridgeClient } from '../bridge.js';
+import type { FundingPrepareResult, FundingResult } from '../types.js';
 
 process.env.NODE_ENV = 'test';
 

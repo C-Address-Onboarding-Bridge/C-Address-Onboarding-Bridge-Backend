@@ -1,4 +1,4 @@
-import { ValidationError } from './errors';
+import { ValidationError } from './errors.js';
 
 /**
  * Returns `true` if the string is a valid Stellar address (G-address or C-address).
@@ -120,4 +120,4 @@ export {
   getDefaultDecimals,
   isNativeToken,
   isSacToken,
-} from './token';
+} from './token.js';

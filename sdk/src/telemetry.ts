@@ -1,4 +1,4 @@
-import { SDK_VERSION } from './version';
+import { SDK_VERSION } from './version.js';
 
 export { SDK_VERSION };
 

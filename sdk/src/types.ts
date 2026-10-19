@@ -1,4 +1,4 @@
-import type { SupportedLocale } from './i18n/types';
+import type { SupportedLocale } from './i18n/types.js';
 
 export type BridgeStatus = 'pending' | 'success' | 'failed';
 export type RequestValue = string | number | boolean | undefined;

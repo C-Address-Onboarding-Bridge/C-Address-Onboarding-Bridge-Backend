@@ -1,5 +1,5 @@
-import type { SupportedLocale, MessageKey, MessageParams } from './i18n/types';
-import { MESSAGE_CATALOGS, SUPPORTED_LOCALES } from './i18n';
+import type { SupportedLocale, MessageKey, MessageParams } from './i18n/types.js';
+import { MESSAGE_CATALOGS, SUPPORTED_LOCALES } from './i18n.js';
 
 // ─── Localization ─────────────────────────────────────────────────────────────
 

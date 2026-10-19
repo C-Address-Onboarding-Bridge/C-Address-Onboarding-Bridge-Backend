@@ -11,7 +11,7 @@ import type {
   FundParams,
   Token,
   TokenMetadata,
-} from '../types';
+} from '../types.js';
 
 /** Valid 56-char Stellar C-address (Soroban contract) for use in tests. */
 export const MOCK_C_ADDRESS = 'CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTU';
