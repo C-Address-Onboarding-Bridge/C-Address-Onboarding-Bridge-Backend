@@ -26,8 +26,12 @@ function hashBody(body: unknown): string {
 }
 
 function apiKeyId(req: Request): string {
-  const reqWithKey = req as Request & { apiKey?: { id?: string }; apiKeyId?: string };
-  return reqWithKey.apiKey?.id ?? reqWithKey.apiKeyId ?? 'anonymous';
+  const reqWithKey = req as Request & { apiKeyRecord?: { id?: string }; apiKey?: { id?: string }; apiKeyId?: string };
+  const id = reqWithKey.apiKeyRecord?.id ?? reqWithKey.apiKey?.id ?? reqWithKey.apiKeyId;
+  if (!id) {
+    throw new Error('idempotency middleware requires an authenticated API key record');
+  }
+  return id;
 }
 
 export function idempotencyMiddleware(req: Request, res: Response, next: NextFunction): void {
@@ -47,7 +51,13 @@ export function idempotencyMiddleware(req: Request, res: Response, next: NextFun
     return;
   }
 
-  const scope = apiKeyId(req);
+  let scope: string;
+  try {
+    scope = apiKeyId(req);
+  } catch {
+    res.status(500).json({ error: 'idempotency_auth_unauthenticated' });
+    return;
+  }
   const cacheKey = idempotencyKey(scope, key);
   const inFlightKey = lockKey(scope, key);
   const bodyHash = hashBody(req.body);
