@@ -235,6 +235,10 @@ export interface QueueEntry {
   idempotencyKey?: string;
 }
 
+export type OfflineQueueEvent =
+  | { type: 'replayed'; entry: QueueEntry; response: unknown; at: string }
+  | { type: 'dead-lettered'; entry: QueueEntry; error: unknown; at: string };
+
 export interface OfflineQueueOptions {
    /** Locale for error messages raised by the queue (mirrors OfflineBridgeClient). */
    locale?: SupportedLocale;

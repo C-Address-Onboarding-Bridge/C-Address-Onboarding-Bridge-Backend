@@ -1,4 +1,4 @@
-import { QueueEntry, OfflineQueueOptions, StorageAdapter, RequestOptions, HttpMethod } from './types';
+import { QueueEntry, OfflineQueueEvent, OfflineQueueOptions, StorageAdapter, RequestOptions, HttpMethod } from './types';
 import { BridgeClient, BridgeClientConfig } from './bridge';
 import { OfflineError, QueueFullError, TimeoutError } from './errors';
 import type { SupportedLocale } from './i18n/types';
@@ -19,6 +19,7 @@ const NON_IDEMPOTENT_POST_PATHS: ReadonlySet<string> = new Set([
 ]);
 
 type DrainHandler = (count: number, at: string) => void;
+type QueueEventHandler = (event: OfflineQueueEvent) => void;
 
 export class OfflineQueue {
   private queue: QueueEntry[] = [];
@@ -30,6 +31,7 @@ export class OfflineQueue {
   private serverOnline = true;
   private replaying = false;
   private readonly drainHandlers: DrainHandler[] = [];
+  private readonly eventHandlers: QueueEventHandler[] = [];
   private readonly deadLetters: QueueEntry[] = [];
 
   /**
@@ -123,6 +125,11 @@ export class OfflineQueue {
     this.drainHandlers.push(handler);
   }
 
+  /** Register a callback for each replayed or dead-lettered entry. */
+  onEvent(handler: QueueEventHandler): void {
+    this.eventHandlers.push(handler);
+  }
+
   /** Manually signal connectivity state; triggers replay when transitioning online. */
   setOnline(online: boolean): void {
     const wasOffline = !this.serverOnline;
@@ -143,16 +150,19 @@ export class OfflineQueue {
 
     for (const entry of this.queue) {
       try {
-        await this.executeEntry(entry);
+        const response = await this.executeEntry(entry);
         processedCount++;
+        this.emitQueueEvent({ type: 'replayed', entry: { ...entry }, response, at: new Date().toISOString() });
       } catch (err) {
         if (!this.shouldRetry(err)) {
           this.deadLetters.push(entry);
+          this.emitQueueEvent({ type: 'dead-lettered', entry: { ...entry }, error: err, at: new Date().toISOString() });
           continue;
         }
         entry.retryCount++;
         if (entry.retryCount >= this.maxRetries) {
           this.deadLetters.push(entry);
+          this.emitQueueEvent({ type: 'dead-lettered', entry: { ...entry }, error: err, at: new Date().toISOString() });
           continue;
         }
         remaining.push(entry);
@@ -198,6 +208,14 @@ export class OfflineQueue {
     try {
       await this.storage.set(QUEUE_STORAGE_KEY, JSON.stringify(this.queue));
     } catch {}
+  }
+
+  private emitQueueEvent(event: OfflineQueueEvent): void {
+    for (const handler of this.eventHandlers) {
+      try {
+        handler(event);
+      } catch {}
+    }
   }
 }
 
@@ -248,9 +266,14 @@ export class OfflineBridgeClient extends BridgeClient {
     try {
       return await super.request<T>(method, path, body, params, options, idempotencyKey);
     } catch (err) {
-      if (this.autoQueue && this.isNetworkError(err)) {
-        await this.offlineQueue.enqueue({ method, path, body, params });
-        throw new OfflineError(true, { locale: this.locale });
+      if (this.isNetworkError(err)) {
+        if (method === 'GET') {
+          throw new OfflineError(false, { locale: this.locale });
+        }
+        if (this.autoQueue) {
+          const queueEntryId = await this.offlineQueue.enqueue({ method, path, body, params });
+          throw new OfflineError(true, { locale: this.locale, queueEntryId });
+        }
       }
       throw err;
     }
@@ -269,6 +292,11 @@ export class OfflineBridgeClient extends BridgeClient {
   /** Register a callback that fires when the queue is fully drained after reconnection. */
   onQueueDrained(handler: (count: number, at: string) => void): void {
     this.offlineQueue.onDrained(handler);
+  }
+
+  /** Register a callback for each replayed or dead-lettered request. */
+  onQueueEvent(handler: QueueEventHandler): void {
+    this.offlineQueue.onEvent(handler);
   }
 
   destroy(): void {

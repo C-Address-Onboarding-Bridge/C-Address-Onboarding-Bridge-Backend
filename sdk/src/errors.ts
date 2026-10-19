@@ -124,8 +124,9 @@ export class TimeoutError extends BridgeError {
 export class OfflineError extends BridgeError {
   override readonly type = 'OfflineError' as const;
   readonly queued: boolean;
+  readonly queueEntryId?: string;
 
-  constructor(queued = false, options?: { locale?: SupportedLocale }) {
+  constructor(queued = false, options?: { locale?: SupportedLocale; queueEntryId?: string }) {
     super(
       queued
         ? 'You are offline. The request has been queued and will be retried when connectivity is restored.'
@@ -134,6 +135,7 @@ export class OfflineError extends BridgeError {
     );
     this.name = 'OfflineError';
     this.queued = queued;
+    this.queueEntryId = options?.queueEntryId;
   }
 }
 

@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BridgeClient } from '../src/bridge';
 import { OfflineBridgeClient } from '../src/offline';
+import { OfflineError } from '../src/errors';
 import {
   createMockServer,
   fixtures,
@@ -353,6 +354,52 @@ describe('BridgeMockServer — OfflineBridgeClient integration', () => {
       // OfflineError expected
     }
     expect(client.getQueuedRequests()).toHaveLength(1);
+    client.destroy();
+  });
+
+  it('delivers a replayed fund response and exposes the queue entry id', async () => {
+    mock.onFund().networkError();
+    const client = new OfflineBridgeClient({
+      baseUrl: BASE_URL,
+      offlineOptions: { autoQueue: true, healthCheckIntervalMs: 60_000 },
+    });
+    const replayed = vi.fn();
+    client.onQueueEvent(replayed);
+
+    try {
+      await client.submitSignedXdr({ signedXdr: 'AAAA' });
+      throw new Error('Expected the initial request to be queued');
+    } catch (error) {
+      expect(error).toBeInstanceOf(OfflineError);
+      expect((error as OfflineError).queued).toBe(true);
+      expect((error as OfflineError).queueEntryId).toBe(client.getQueuedRequests()[0].id);
+    }
+
+    mock.onFund().reply(200, { hash: 'replayed-tx-hash' });
+    client.offlineQueue.setOnline(false);
+    client.offlineQueue.setOnline(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(replayed).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'replayed',
+      response: { hash: 'replayed-tx-hash' },
+      entry: expect.objectContaining({ path: '/api/v1/fund' }),
+    }));
+    client.destroy();
+  });
+
+  it('does not queue getQuote when offline', async () => {
+    mock.onQuote().networkError();
+    const client = new OfflineBridgeClient({
+      baseUrl: BASE_URL,
+      offlineOptions: { autoQueue: true, healthCheckIntervalMs: 60_000 },
+    });
+
+    await expect(client.getQuote(MOCK_QUOTE_PARAMS)).rejects.toMatchObject({
+      queued: false,
+      name: 'OfflineError',
+    });
+    expect(client.getQueuedRequests()).toHaveLength(0);
     client.destroy();
   });
 });
