@@ -93,7 +93,7 @@ resource "aws_s3_bucket_policy" "cdn_assets" {
 resource "aws_cloudfront_cache_policy" "static_assets" {
   name        = "${var.project_name}-static-assets-${var.environment}"
   comment     = "1-year cache for content-hashed static files"
-  default_ttl = 31536000   # 1 year
+  default_ttl = 31536000 # 1 year
   min_ttl     = 31536000
   max_ttl     = 31536000
 
@@ -113,6 +113,12 @@ resource "aws_cloudfront_cache_policy" "static_assets" {
 }
 
 # Short TTL for dynamic API responses (quote, status endpoints)
+#
+# `Authorization` is part of the cache key on purpose: CloudFront forbids
+# `Authorization` in an origin request policy, but a cache policy may include
+# it, and doing so keeps one caller's authenticated response from being served
+# to another. Headers in the cache key are forwarded to the origin too; the
+# origin request policy forwards everything else.
 resource "aws_cloudfront_cache_policy" "api_dynamic" {
   name        = "${var.project_name}-api-dynamic-${var.environment}"
   comment     = "Short cache for dynamic API responses (quote, status)"
@@ -138,54 +144,22 @@ resource "aws_cloudfront_cache_policy" "api_dynamic" {
   }
 }
 
-# No cache for write endpoints (fund, offramp, cex)
-resource "aws_cloudfront_cache_policy" "api_no_cache" {
-  name        = "${var.project_name}-api-no-cache-${var.environment}"
-  comment     = "No caching for write/mutating API endpoints"
-  default_ttl = 0
-  min_ttl     = 0
-  max_ttl     = 0
-
-  parameters_in_cache_key_and_forwarded_to_origin {
-    cookies_config {
-      cookie_behavior = "none"
-    }
-    headers_config {
-      header_behavior = "none"
-    }
-    query_strings_config {
-      query_string_behavior = "all"
-    }
-  }
+# AWS-managed policies for cache-free API traffic.
+#
+# A custom cache policy with default/min/max TTL = 0 cannot carry cache-key
+# settings (query strings, headers, cookies), and a custom *origin request*
+# policy may not whitelist `Authorization` at all — CloudFront rejects both at
+# apply time (#859). The managed CachingDisabled policy encodes "do not cache",
+# and AllViewerExceptHostHeader forwards every viewer header (including
+# `Authorization`, `X-Api-Key` and the `X-Timestamp`/`X-Nonce`/`X-Signature`
+# signing headers) plus all query strings and cookies to the origin, while
+# letting CloudFront set the origin Host header.
+data "aws_cloudfront_cache_policy" "caching_disabled" {
+  name = "Managed-CachingDisabled"
 }
 
-# ─── Origin Request Policy for API ──────────────────────────────────────────
-
-resource "aws_cloudfront_origin_request_policy" "api" {
-  name    = "${var.project_name}-api-origin-request-${var.environment}"
-  comment = "Forward required headers to API origin"
-
-  cookies_config {
-    cookie_behavior = "none"
-  }
-  headers_config {
-    header_behavior = "whitelist"
-    headers {
-      items = [
-        "Accept",
-        "Accept-Language",
-        "Authorization",
-        "Content-Type",
-        "X-Api-Key",
-        "X-Correlation-Id",
-        "X-Forwarded-For",
-        "Origin"
-      ]
-    }
-  }
-  query_strings_config {
-    query_string_behavior = "all"
-  }
+data "aws_cloudfront_origin_request_policy" "all_viewer_except_host_header" {
+  name = "Managed-AllViewerExceptHostHeader"
 }
 
 # ─── Response Headers Policy (security headers) ───────────────────────────────
@@ -286,90 +260,94 @@ resource "aws_cloudfront_distribution" "main" {
 
   # ── Default behaviour: serve static assets from S3 ────────────────
   default_cache_behavior {
-    target_origin_id         = "s3-static-assets"
-    viewer_protocol_policy   = "redirect-to-https"
-    allowed_methods          = ["GET", "HEAD", "OPTIONS"]
-    cached_methods           = ["GET", "HEAD"]
-    cache_policy_id          = aws_cloudfront_cache_policy.static_assets.id
+    target_origin_id           = "s3-static-assets"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    cached_methods             = ["GET", "HEAD"]
+    cache_policy_id            = aws_cloudfront_cache_policy.static_assets.id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
-    compress                 = true
+    compress                   = true
   }
 
   # ── API docs (OpenAPI + Postman) — long cache ──────────────────────
   ordered_cache_behavior {
-    path_pattern             = "/docs/*"
-    target_origin_id         = "s3-static-assets"
-    viewer_protocol_policy   = "redirect-to-https"
-    allowed_methods          = ["GET", "HEAD", "OPTIONS"]
-    cached_methods           = ["GET", "HEAD"]
-    cache_policy_id          = aws_cloudfront_cache_policy.static_assets.id
+    path_pattern               = "/docs/*"
+    target_origin_id           = "s3-static-assets"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
+    cached_methods             = ["GET", "HEAD"]
+    cache_policy_id            = aws_cloudfront_cache_policy.static_assets.id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
-    compress                 = true
+    compress                   = true
   }
 
   # ── SDK browser builds — long cache ───────────────────────────────
   ordered_cache_behavior {
-    path_pattern             = "/sdk/*"
-    target_origin_id         = "s3-static-assets"
-    viewer_protocol_policy   = "redirect-to-https"
-    allowed_methods          = ["GET", "HEAD", "OPTIONS"]
-    cached_methods           = ["GET", "HEAD"]
-    cache_policy_id          = aws_cloudfront_cache_policy.static_assets.id
-    compress                 = true
+    path_pattern           = "/sdk/*"
+    target_origin_id       = "s3-static-assets"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
+    cache_policy_id        = aws_cloudfront_cache_policy.static_assets.id
+    compress               = true
   }
 
   # ── Quote / status endpoints — short cache ────────────────────────
   ordered_cache_behavior {
-    path_pattern               = "/api/*/quote"
-    target_origin_id           = "api-origin"
-    viewer_protocol_policy     = "redirect-to-https"
-    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
-    cached_methods             = ["GET", "HEAD"]
-    cache_policy_id            = aws_cloudfront_cache_policy.api_dynamic.id
-    origin_request_policy_id   = aws_cloudfront_origin_request_policy.api.id
-    compress                   = true
+    path_pattern             = "/api/*/quote"
+    target_origin_id         = "api-origin"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = aws_cloudfront_cache_policy.api_dynamic.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host_header.id
+    compress                 = true
   }
 
   ordered_cache_behavior {
-    path_pattern               = "/api/*/status/*"
-    target_origin_id           = "api-origin"
-    viewer_protocol_policy     = "redirect-to-https"
-    allowed_methods            = ["GET", "HEAD", "OPTIONS"]
-    cached_methods             = ["GET", "HEAD"]
-    cache_policy_id            = aws_cloudfront_cache_policy.api_dynamic.id
-    origin_request_policy_id   = aws_cloudfront_origin_request_policy.api.id
-    compress                   = true
+    path_pattern             = "/api/*/status/*"
+    target_origin_id         = "api-origin"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = aws_cloudfront_cache_policy.api_dynamic.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host_header.id
+    compress                 = true
   }
 
   # ── Health check — no cache ───────────────────────────────────────
   ordered_cache_behavior {
-    path_pattern               = "/health"
-    target_origin_id           = "api-origin"
-    viewer_protocol_policy     = "redirect-to-https"
-    allowed_methods            = ["GET", "HEAD"]
-    cached_methods             = ["GET", "HEAD"]
-    cache_policy_id            = aws_cloudfront_cache_policy.api_no_cache.id
-    origin_request_policy_id   = aws_cloudfront_origin_request_policy.api.id
-    compress                   = false
+    path_pattern             = "/health"
+    target_origin_id         = "api-origin"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["GET", "HEAD"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host_header.id
+    compress                 = false
   }
 
   # ── All other API routes — no cache (write endpoints) ─────────────
   ordered_cache_behavior {
-    path_pattern               = "/api/*"
-    target_origin_id           = "api-origin"
-    viewer_protocol_policy     = "redirect-to-https"
-    allowed_methods            = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
-    cached_methods             = ["GET", "HEAD"]
-    cache_policy_id            = aws_cloudfront_cache_policy.api_no_cache.id
-    origin_request_policy_id   = aws_cloudfront_origin_request_policy.api.id
-    compress                   = true
+    path_pattern             = "/api/*"
+    target_origin_id         = "api-origin"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host_header.id
+    compress                 = true
   }
 
   # ── TLS certificate ───────────────────────────────────────────────
+  # When no certificate is supplied the distribution is only reachable via its
+  # CloudFront domain name, so CloudFront must use its default certificate.
+  # `sni-only` with an empty ACM ARN is rejected at apply time (#859).
   viewer_certificate {
-    acm_certificate_arn      = var.acm_certificate_arn
-    ssl_support_method       = "sni-only"
-    minimum_protocol_version = "TLSv1.2_2021"
+    cloudfront_default_certificate = var.acm_certificate_arn == ""
+    acm_certificate_arn            = var.acm_certificate_arn != "" ? var.acm_certificate_arn : null
+    ssl_support_method             = var.acm_certificate_arn != "" ? "sni-only" : null
+    minimum_protocol_version       = var.acm_certificate_arn != "" ? "TLSv1.2_2021" : null
   }
 
   # ── Geo restrictions ──────────────────────────────────────────────
@@ -391,6 +369,15 @@ resource "aws_cloudfront_distribution" "main" {
 
   # ── WAF (uncomment if deploying WAF) ─────────────────────────────
   # web_acl_id = data.aws_wafv2_web_acl.main.arn
+
+  lifecycle {
+    # Catch the mismatch at plan time rather than after a partial apply:
+    # CloudFront rejects custom aliases without a matching ACM certificate.
+    precondition {
+      condition     = length(var.cdn_domain_aliases) == 0 || var.acm_certificate_arn != ""
+      error_message = "acm_certificate_arn must be set (to a us-east-1 certificate) when cdn_domain_aliases is non-empty."
+    }
+  }
 
   tags = {
     Project     = var.project_name
@@ -451,7 +438,7 @@ resource "aws_cloudwatch_metric_alarm" "cdn_origin_latency" {
   namespace           = "AWS/CloudFront"
   period              = 300
   extended_statistic  = "p99"
-  threshold           = 2000   # milliseconds
+  threshold           = 2000 # milliseconds
   treat_missing_data  = "notBreaching"
 
   dimensions = {
