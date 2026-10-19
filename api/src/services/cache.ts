@@ -179,6 +179,18 @@ export async function cacheDel(key: string): Promise<void> {
   }
 }
 
+export async function cacheSetNX(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+  const redis = getClient();
+  if (!redis) return true; // No Redis → allow the request through.
+
+  try {
+    const result = await redis.set(key, value, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
+  } catch {
+    return false; // On error, do not reserve the lock.
+  }
+}
+
 export async function cacheDelPattern(pattern: string): Promise<void> {
   const redis = getClient();
   if (!redis) return;

@@ -96,6 +96,6 @@ export function idempotencyMiddleware(req: Request, res: Response, next: NextFun
       });
     })
     .catch(() => {
-      next();
+      res.status(503).json({ error: 'idempotency_service_unavailable' });
     });
 }
