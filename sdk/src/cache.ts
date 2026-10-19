@@ -48,19 +48,8 @@ export class SimpleCache {
   }
 
   set<T>(key: string, value: T, ttlMs: number, staleWhileRevalidate = false): void {
-<<<<<<< Updated upstream
     const isNewKey = !this.entries.has(key);
     if (isNewKey && this.entries.size >= this.maxEntries) {
-=======
-    // Remove any existing entry first so that:
-    //   1) an overwrite moves the key to the most-recent position, and
-    //   2) capacity is evaluated after the overwrite, not before — otherwise
-    //      setting an existing key at capacity would needlessly evict an
-    //      unrelated (still-fresh) entry.
-    this.entries.delete(key);
-
-    if (this.entries.size >= this.maxEntries) {
->>>>>>> Stashed changes
       const oldestKey = this.entries.keys().next().value;
       if (oldestKey !== undefined) {
         this.entries.delete(oldestKey);
