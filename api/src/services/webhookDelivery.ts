@@ -1,4 +1,7 @@
 import crypto from 'crypto';
+import { lookup } from 'node:dns/promises';
+import ipaddr from 'ipaddr.js';
+import { Agent } from 'undici';
 import { logger } from '../index';
 import { hashPayload, integrityAuditLog } from './auditLog';
 import { enqueueAudit } from './asyncPipeline';
@@ -35,6 +38,33 @@ export interface DLQEntry {
 
 const RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
 const DELIVERY_TIMEOUT_MS = 10_000;
+
+function isPublicAddress(address: string): boolean {
+  try {
+    return ipaddr.parse(address).range() === 'unicast';
+  } catch {
+    return false;
+  }
+}
+
+async function resolveSafeWebhookAddress(url: string): Promise<{
+  hostname: string;
+  address: string;
+  family: number;
+}> {
+  const parsedUrl = new URL(url);
+  if (!['http:', 'https:'].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password) {
+    throw new Error('Webhook URL must use HTTP(S) without credentials');
+  }
+
+  const hostname = parsedUrl.hostname.replace(/^\[|\]$/g, '');
+  const addresses = await lookup(hostname, { all: true, verbatim: true });
+  if (addresses.length === 0 || addresses.some(({ address }) => !isPublicAddress(address))) {
+    throw new Error('Webhook URL resolves to a non-public address');
+  }
+
+  return { hostname, ...addresses[0] };
+}
 
 export class WebhookDeliveryService {
   private registrations = new Map<string, WebhookRegistration>();
@@ -102,9 +132,32 @@ export class WebhookDeliveryService {
       attemptNumber,
     };
 
+    let timeout: NodeJS.Timeout | undefined;
+    let dispatcher: Agent | undefined;
     try {
+      const vettedAddress = await resolveSafeWebhookAddress(registration.url);
+      const pinnedLookup = (
+        requestedHostname: string,
+        options: { all?: boolean } | number,
+        callback: (_error: NodeJS.ErrnoException | null, _address: string | { address: string; family: number }[], _family?: number) => void,
+      ) => {
+        if (requestedHostname !== vettedAddress.hostname || !isPublicAddress(vettedAddress.address)) {
+          const error = new Error('Webhook connection did not match its vetted destination') as NodeJS.ErrnoException;
+          error.code = 'EACCES';
+          callback(error, '');
+          return;
+        }
+
+        if (typeof options === 'object' && options.all) {
+          callback(null, [{ address: vettedAddress.address, family: vettedAddress.family }]);
+        } else {
+          callback(null, vettedAddress.address, vettedAddress.family);
+        }
+      };
+      dispatcher = new Agent({ connect: { lookup: pinnedLookup } });
+
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
+      timeout = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
 
       const response = await fetch(registration.url, {
         method: 'POST',
@@ -116,9 +169,9 @@ export class WebhookDeliveryService {
         },
         body: payload,
         signal: controller.signal,
-      });
+        dispatcher,
+      } as RequestInit & { dispatcher: Agent });
 
-      clearTimeout(timeout);
       attempt.statusCode = response.status;
 
       const deliveryAuditPayload = {
@@ -172,6 +225,9 @@ export class WebhookDeliveryService {
         { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
         'webhook delivery error',
       );
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (dispatcher) void dispatcher.destroy();
     }
 
     this.deliveryLog.push(attempt);
