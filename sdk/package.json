@@ -57,7 +57,7 @@
     "bundle:check": "npm run build:bundle && node scripts/check-bundle-size.mjs",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "lint": "eslint --ext .ts src/"
+    "lint": "eslint --ext .ts src/ && tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
     "@types/node": "^20.11.5",
