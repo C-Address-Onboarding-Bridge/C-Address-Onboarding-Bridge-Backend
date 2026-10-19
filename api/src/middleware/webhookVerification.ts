@@ -55,6 +55,10 @@ export function registerWebhookVerifier(provider: string, verifier: WebhookVerif
   // reads VERIFIERS per request rather than closing over the entry, so the
   // exported verifyMoonpayWebhook / verifyTransakWebhook handlers pick this up
   // even though they were created at module load.
+  if (!secret) {
+    delete VERIFIERS[provider];
+    return;
+  }
   VERIFIERS[provider] = { verifier, secret };
 }
 
@@ -77,7 +81,7 @@ function buildWebhookVerifier(provider: string) {
   return function verifyWebhook(req: Request, res: Response, next: NextFunction): void {
     const entry = VERIFIERS[provider];
     if (!entry) {
-      res.status(500).json({ error: 'provider_not_configured', provider });
+      res.status(503).json({ error: 'provider_not_configured', provider });
       return;
     }
 

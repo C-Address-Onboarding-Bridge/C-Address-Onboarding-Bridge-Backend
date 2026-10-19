@@ -16,6 +16,10 @@ function requireEnv(key: string): string {
   return val;
 }
 
+function requireEnvInProduction(key: string): string {
+  return process.env.NODE_ENV === 'production' ? requireEnv(key) : process.env[key] || '';
+}
+
 /** Centralised runtime configuration derived from environment variables. */
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
@@ -37,12 +41,12 @@ export const config = {
   },
   moonpay: {
     apiKey: process.env.MOONPAY_API_KEY || '',
-    secretKey: process.env.MOONPAY_SECRET_KEY || '',
+    secretKey: requireEnvInProduction('MOONPAY_SECRET_KEY'),
   },
   transak: {
     apiKey: process.env.TRANSAK_API_KEY || '',
     environment: process.env.TRANSAK_ENVIRONMENT || 'STAGING',
-    webhookSecret: process.env.TRANSAK_WEBHOOK_SECRET || '',
+    webhookSecret: requireEnvInProduction('TRANSAK_WEBHOOK_SECRET'),
   },
   /** Exchange API credentials for CEX withdrawal routing. Unauthenticated when empty. */
   cex: {
