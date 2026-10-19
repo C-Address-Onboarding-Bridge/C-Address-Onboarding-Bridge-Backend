@@ -33,6 +33,7 @@ import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xss
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
 import { requestSigningMiddleware } from './middleware/requestSigning';
+import { originVerifyMiddleware } from './middleware/originVerify';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
 import { closePool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
@@ -163,6 +164,8 @@ app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
 // Issue #673: Verify request signing headers
 app.use('/api', requestSigningMiddleware);
+// Issue #862: Enforce X-Origin-Verify header from CloudFront
+app.use('/api', originVerifyMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
 
 // #660: Removed misleading deprecation endpoint — v1 and v2 are identical until one diverges

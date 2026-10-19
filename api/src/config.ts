@@ -90,6 +90,9 @@ export const config = {
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean),
+  /** Shared secret sent by CloudFront as X-Origin-Verify. Enforced by
+   * originVerifyMiddleware when ORIGIN_VERIFY_SECRET is set. */
+  originVerifySecret: process.env.ORIGIN_VERIFY_SECRET || '',
   logLevel: process.env.LOG_LEVEL || 'info',
   logging: {
     serviceName: process.env.LOG_SERVICE_NAME || 'bridge-api',
