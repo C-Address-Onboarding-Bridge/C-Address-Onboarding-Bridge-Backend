@@ -21,6 +21,7 @@ const PERMISSION_SCOPES: PermissionScope[] = [
   'cex:read',
   'admin:keys',
   'transactions:read',
+  'metrics:read',
 ];
 
 const patchApiKeySchema = z

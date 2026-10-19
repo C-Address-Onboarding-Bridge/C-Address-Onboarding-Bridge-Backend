@@ -6,6 +6,10 @@ process.env.NODE_ENV = 'test';
 vi.mock('../index', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+vi.mock('../logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock('../services/db', () => ({ getPool: vi.fn(() => null) }));
 
 import {
   createApiKey,
@@ -18,6 +22,7 @@ import {
   seedLegacyKeys,
   resolveRecord,
 } from '../middleware/rbacAuth';
+import { metricsAuth } from '../routes/metrics';
 
 /**
  * TODO(next-bounty): the tests marked `.skip` in this file assert behaviour that
@@ -124,6 +129,31 @@ describe('createApiKey / rbacAuth', () => {
 
     rbacAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('accepts a Bearer metrics key with only the metrics:read scope', () => {
+    const { rawKey } = createApiKey({ name: 'prometheus-scrape', createdBy: 'test', scopes: ['metrics:read'] });
+    const req = mockReq({ headers: { authorization: `Bearer ${rawKey}` } });
+    const { res } = mockRes();
+    const next = vi.fn();
+
+    metricsAuth(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.resolvedScopes).toEqual(['metrics:read']);
+  });
+
+  it('rejects a Bearer key without the metrics:read scope', () => {
+    const { rawKey } = createApiKey({ name: 'not-for-metrics', createdBy: 'test', scopes: ['quote:read'] });
+    const req = mockReq({ headers: { authorization: `Bearer ${rawKey}` } });
+    const { res, status, json } = mockRes();
+    const next = vi.fn();
+
+    metricsAuth(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(403);
+    expect(json).toHaveBeenCalledWith({ error: 'insufficient_scope', required: ['metrics:read'], missing: ['metrics:read'] });
   });
 
   it('rejects IP not in whitelist', () => {

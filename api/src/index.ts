@@ -16,7 +16,7 @@ import { moonpayWebhookRouter, transakWebhookRouter } from './routes/webhook';
 import { webhookAdminRouter } from './routes/webhookAdmin';
 import { apiKeysRouter } from './routes/apiKeys';
 import { docsRouter } from './routes/docs';
-import { metricsRouter } from './routes/metrics';
+import { metricsAuth, metricsRouter } from './routes/metrics';
 import { telemetryRouter } from './routes/telemetry';
 import { transactionsRouter } from './routes/transactions';
 import { adminRouter } from './routes/admin';
@@ -201,6 +201,4 @@ app.use('/api/v1/admin', rbacAuth, tierRateLimitMiddleware, adminRouter);
 app.use('/api/v1/cache/metrics', rbacAuth, tierRateLimitMiddleware, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('
-
-/* … truncated 579 chars — edit only what you need near the top … */
+app.use('/metrics', metricsAuth, metricsRouter);

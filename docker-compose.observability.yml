@@ -20,6 +20,8 @@ services:
       - ./infrastructure/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infrastructure/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
+    secrets:
+      - prometheus_scrape_key
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=30d
@@ -89,3 +91,7 @@ volumes:
   prometheus_data:
   grafana_data:
   loki_data:
+
+secrets:
+  prometheus_scrape_key:
+    file: ${PROMETHEUS_SCRAPE_API_KEY_FILE:?Set PROMETHEUS_SCRAPE_API_KEY_FILE to the scrape key file}

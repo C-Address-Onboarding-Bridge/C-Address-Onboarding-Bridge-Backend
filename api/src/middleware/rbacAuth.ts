@@ -11,7 +11,8 @@ export type PermissionScope =
   | 'offramp:write'
   | 'cex:read'
   | 'transactions:read'
-  | 'admin:keys';
+  | 'admin:keys'
+  | 'metrics:read';
 
 export interface ApiKeyRecord {
   id: string;
