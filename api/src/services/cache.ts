@@ -184,9 +184,19 @@ export async function cacheDelPattern(pattern: string): Promise<void> {
   if (!redis) return;
 
   try {
-    const keys = await redis.keys(pattern);
-    if (keys.length > 0) {
-      await redis.del(...keys);
+    const stream = redis.scanStream({ match: pattern, count: 500 });
+    for await (const keys of stream as AsyncIterable<string[]>) {
+      if (keys.length > 0) {
+        const BATCH_SIZE = 500;
+        for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+          const batch = keys.slice(i, i + BATCH_SIZE);
+          if (typeof (redis as any).unlink === 'function') {
+            await (redis as any).unlink(...batch);
+          } else {
+            await redis.del(...batch);
+          }
+        }
+      }
     }
   } catch {
     // Gracefully degrade.
