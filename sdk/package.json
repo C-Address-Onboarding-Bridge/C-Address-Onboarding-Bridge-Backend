@@ -48,6 +48,9 @@
     }
   },
   "sideEffects": false,
+  "dependencies": {
+    "@stellar/stellar-sdk": "^12.1.0"
+  },
   "scripts": {
     "prebuild": "node scripts/sync-version.mjs",
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.esm.json && tsc -p tsconfig.umd.json",

@@ -1,6 +1,6 @@
 import { Token, TokenMetadata } from './types';
 import { ValidationError } from './errors';
-import { StrKey } from 'stellar-sdk';
+import { StrKey } from '@stellar/stellar-sdk';
 
 // ─── Token Type Guards ────────────────────────────────────────────────────────
 
@@ -25,7 +25,7 @@ export function isSacTokenAddress(address: string): boolean {
 export function validateSacTokenAddress(address: string): void {
   if (!isSacTokenAddress(address)) {
     throw new ValidationError('Invalid SAC token address', {
-      contractId: `Must be a valid contract address (C-address), got: ${address}`,
+      fields: { contractId: `Must be a valid contract address (C-address), got: ${address}` },
     });
   }
 }
@@ -72,14 +72,24 @@ export function tokenFromLegacy(tokenAddress?: string, sourceAsset?: string): To
  * @returns Human-readable amount (e.g. `"1.000000"`).
  */
 export function formatTokenAmount(amount: string, decimals: number): string {
-  // Handle zero case
-  if (amount === '0') return '0';
+  if (!/^-?\d+$/.test(amount)) {
+    throw new TypeError('amount must be an integer string');
+  }
+  if (!Number.isInteger(decimals) || decimals < 0) {
+    throw new RangeError('decimals must be a non-negative integer');
+  }
 
-  const padded = amount.padStart(decimals + 1, '0');
-  const integerPart = padded.slice(0, -decimals) || '0';
+  const negative = amount.startsWith('-');
+  const digits = (negative ? amount.slice(1) : amount).replace(/^0+(?=\d)/, '');
+  if (decimals === 0) {
+    return `${negative ? '-' : ''}${digits}`;
+  }
+
+  const padded = digits.padStart(decimals + 1, '0');
+  const integerPart = padded.slice(0, -decimals);
   const fractionalPart = padded.slice(-decimals);
 
-  return `${integerPart}.${fractionalPart}`;
+  return `${negative ? '-' : ''}${integerPart}.${fractionalPart}`;
 }
 
 /**

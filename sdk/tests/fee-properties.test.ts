@@ -111,7 +111,7 @@ describe('Fee calculation properties', () => {
 describe('Token amount formatting properties', () => {
   const decimalArb = fc.integer({ min: 0, max: 18 });
 
-  it.skip('parseTokenAmount is inverse of formatTokenAmount for non-negative amounts', () => {
+  it('parseTokenAmount is inverse of formatTokenAmount for non-negative amounts', () => {
     fc.assert(
       fc.property(
         fc.bigInt({ min: BigInt(0), max: BigInt('999999999999999999') }),
@@ -126,7 +126,7 @@ describe('Token amount formatting properties', () => {
     );
   });
 
-    it.skip('formatTokenAmount always produces a string with exactly N fractional digits', () => {
+  it('formatTokenAmount always produces a string with exactly N fractional digits', () => {
     fc.assert(
       fc.property(
         fc.string({ minLength: 1, maxLength: 20 }).map(s => s.replace(/[^0-9]/g, '') || '0'),
