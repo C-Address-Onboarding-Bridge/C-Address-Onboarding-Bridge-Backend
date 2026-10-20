@@ -13,7 +13,7 @@
  */
 
 import { Request, Response, NextFunction, RequestHandler } from 'express';
-import { swrGet, swrSet, isRedisEnabled } from '../services/cache';
+import { swrGet, swrSet, isRedisEnabled, withSingleFlight } from '../services/cache';
 
 export interface CacheMiddlewareOptions {
   /** Primary TTL in seconds (stale entries live for TTL + SWR_EXTENSION_SECONDS). */
@@ -28,6 +28,8 @@ export interface CacheMiddlewareOptions {
    * Useful when the key is already computed upstream (e.g. in route handlers).
    */
   key?: (req: Request) => string;
+  /** Compute a fresh response body without running Express middleware again. */
+  revalidate: (req: Request) => Promise<unknown>;
 }
 
 /**
@@ -91,27 +93,32 @@ export function cacheMiddleware(opts: CacheMiddlewareOptions): RequestHandler {
       return;
     }
 
-    if (isCachedResponse(entry)) {
-      const age = Math.max(0, Math.floor((Date.now() - entry.cachedAt) / 1000));
-      const isStale = age >= ttl;
+    const cached = entry && typeof entry === 'object' && 'value' in entry
+      ? (entry as { value: unknown }).value
+      : entry;
+    const stale = !!(entry && typeof entry === 'object' && 'stale' in entry && (entry as { stale: boolean }).stale);
+
+    if (isCachedResponse(cached)) {
+      const age = Math.max(0, Math.floor((Date.now() - cached.cachedAt) / 1000));
+      const isStale = stale || age >= ttl;
 
       res.setHeader('X-Cache', isStale ? 'STALE' : 'HIT');
       res.setHeader('Cache-Control', `public, max-age=${ttl}`);
       res.setHeader('Age', String(age));
-      if (entry.headers) {
-        for (const [name, value] of Object.entries(entry.headers)) {
+      if (cached.headers) {
+        for (const [name, value] of Object.entries(cached.headers)) {
           res.setHeader(name, value);
         }
       }
 
       if (isStale) {
         // Serve stale data while triggering background revalidation (SWR).
-        res.status(entry.status).json(entry.body);
-        void revalidate(req, res, cacheKey, ttl);
+        res.status(cached.status).json(cached.body);
+        void revalidate(req, cacheKey, ttl, opts.revalidate);
         return;
       }
 
-      res.status(entry.status).json(entry.body);
+      res.status(cached.status).json(cached.body);
       return;
     }
 
@@ -140,88 +147,21 @@ export function cacheMiddleware(opts: CacheMiddlewareOptions): RequestHandler {
 }
 
 /**
- * Background revalidation for stale entries: run the route handler into a
- * throwaway response, then persist the fresh result.
+ * Recompute stale entries without replaying Express middleware or writing to
+ * the response that has already been sent.
  */
 async function revalidate(
   req: Request,
-  res: Response,
   cacheKey: string,
   ttl: number,
+  compute: (req: Request) => Promise<unknown>,
 ): Promise<void> {
   try {
-    const captured = await captureResponse(req, res);
-    if (captured && captured.status >= 200 && captured.status < 300) {
-      const payload: CachedResponse = {
-        status: captured.status,
-        body: captured.body,
-        cachedAt: Date.now(),
-      };
-      await swrSet(cacheKey, payload, ttl);
-    }
+    await withSingleFlight(cacheKey, async () => {
+      const body = await compute(req);
+      await swrSet(cacheKey, { status: 200, body, cachedAt: Date.now() } satisfies CachedResponse, ttl);
+    });
   } catch {
     /* background revalidation failures are non-fatal */
   }
-}
-
-/**
- * Re-run the downstream handler chain against a synthetic response to capture
- * a fresh payload without touching the already-sent response.
- */
-function captureResponse(
-  req: Request,
-  res: Response,
-): Promise<{ status: number; body: unknown } | null> {
-  return new Promise((resolve) => {
-    const synthetic = Object.create(res) as Response;
-    let settled = false;
-
-    synthetic.status = function syntheticStatus(code: number): Response {
-      res.statusCode = code;
-      return synthetic;
-    };
-    synthetic.json = function syntheticJson(body?: unknown): Response {
-      if (!settled) {
-        settled = true;
-        resolve({ status: res.statusCode, body });
-      }
-      return synthetic;
-    };
-    synthetic.send = function syntheticSend(body?: unknown): Response {
-      if (!settled) {
-        settled = true;
-        resolve({ status: res.statusCode, body });
-      }
-      return synthetic;
-    };
-
-    const stack = (req.app && (req.app as unknown as { _router?: { stack: unknown[] } })._router?.stack) || [];
-    const handlers = stack
-      .map((layer) => (layer as { handle?: RequestHandler }).handle)
-      .filter((handle): handle is RequestHandler => typeof handle === 'function');
-
-    let index = 0;
-    const runNext: NextFunction = (err?: unknown) => {
-      if (settled) return;
-      if (err) {
-        settled = true;
-        resolve(null);
-        return;
-      }
-      const handler = handlers[index++];
-      if (!handler) {
-        settled = true;
-        resolve(null);
-        return;
-      }
-      try {
-        handler(req, synthetic, runNext);
-      } catch {
-        settled = true;
-        resolve(null);
-      }
-    };
-
-    runNext();
-  });
 }

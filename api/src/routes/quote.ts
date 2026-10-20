@@ -18,6 +18,17 @@ const getQuoteSchema = z.object({
   targetAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid target Stellar address'),
 });
 
+async function computeQuote(req: Request) {
+  const params = getQuoteSchema.parse(req.query);
+  const quote = await sorobanService.getQuote(
+    params.sourceAsset,
+    params.amount,
+    params.targetAddress,
+  );
+  setFeeRateBps(quote.feeBps);
+  return quote;
+}
+
 quoteRouter.get(
   '/',
   requireScopes(PermissionScope.QUOTE_READ),
@@ -27,18 +38,11 @@ quoteRouter.get(
       const params = getQuoteSchema.parse(req.query);
       return buildCacheKey('quote', `${params.sourceAsset}:${params.amount}:${params.targetAddress}`);
     },
+    revalidate: computeQuote,
   }),
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const params = getQuoteSchema.parse(_req.query);
-      const quote = await sorobanService.getQuote(
-        params.sourceAsset,
-        params.amount,
-        params.targetAddress,
-      );
-
-      setFeeRateBps(quote.feeBps);
-      res.json(quote);
+      res.json(await computeQuote(_req));
     } catch (err) {
       next(err);
     }
