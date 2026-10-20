@@ -18,9 +18,24 @@ import {
   WithdrawalRouter,
   createCexWithdrawalMemo,
   parseCexWithdrawalMemo,
+  createKrakenApiSignature,
   defaultCexHandlers,
   WithdrawalRequest,
 } from '../../../cex/withdrawal-router';
+
+describe('Kraken API signing', () => {
+  it('matches Kraken’s published TradeBalance API-Sign example', () => {
+    const apiSecret = 'FRs+gtq09rR7OFtKj9BGhyOGS3u5vtY/EdiIBO9kD8NFtRX7w7LeJDSrX6cq1D8zmQmGkWFjksuhBvKOAWJohQ==';
+    const signature = createKrakenApiSignature(
+      '/0/private/TradeBalance',
+      '1540973848000',
+      'nonce=1540973848000&asset=xbt',
+      apiSecret,
+    );
+
+    expect(signature).toBe('RdQzoXRC83TPmbERpFj0XFVArq0Hfadm0eLolmXTuN2R24hzIqtAnF/f7vSfW1tGt7xQOn8bjm+Ht+X0KrMwlA==');
+  });
+});
 
 const request: WithdrawalRequest = {
   destinationAddress: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',

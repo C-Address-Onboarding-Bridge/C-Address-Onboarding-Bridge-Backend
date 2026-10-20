@@ -123,6 +123,22 @@ async function postToExchange(
   }
 }
 
+/** Generate Kraken's REST API-Sign value for a URL path and form-encoded body. */
+export function createKrakenApiSignature(
+  path: string,
+  nonce: string,
+  body: string,
+  apiSecret: string,
+): string {
+  const sha256Digest = crypto.createHash('sha256').update(nonce + body).digest();
+  const message = Buffer.concat([Buffer.from(path, 'utf8'), sha256Digest]);
+
+  return crypto
+    .createHmac('sha512', Buffer.from(apiSecret, 'base64'))
+    .update(message)
+    .digest('base64');
+}
+
 /**
  * Default handlers for Binance, Coinbase, and Kraken.
  * Each calls the exchange's withdrawal API using credentials from `config`, signed per that
@@ -224,10 +240,7 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
         nonce,
       }).toString();
 
-      const signature = crypto
-        .createHmac('sha256', Buffer.from(config.apiSecret ?? '', 'base64'))
-        .update(path + crypto.createHash('sha256').update(nonce + body).digest())
-        .digest('base64');
+      const signature = createKrakenApiSignature(path, nonce, body, config.apiSecret ?? '');
 
       const res = await postToExchange(`${config.apiBaseUrl}${path}`, {
         'API-Key': config.apiKey ?? '',
