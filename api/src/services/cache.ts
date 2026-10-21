@@ -262,6 +262,17 @@ export async function swrSet<T>(key: string, value: T, ttlSeconds: number): Prom
  * Acquire a short-lived distributed lock using Redis SETNX.
  * Returns `true` if the lock was acquired, `false` if another instance holds it.
  */
+export async function cacheSetNX(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+  const redis = getClient();
+  if (!redis) return true; // No Redis → allow the request through.
+  try {
+    const result = await redis.set(key, value, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
+  } catch {
+    return true; // On error, allow through rather than blocking.
+  }
+}
+
 async function acquireRedisLock(lockKey: string, ttlMs = 5000): Promise<boolean> {
   const redis = getClient();
   if (!redis) return true; // No Redis → allow the request through.

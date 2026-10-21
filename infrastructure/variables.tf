@@ -33,3 +33,24 @@ variable "redis_node_type" {
   type        = string
   default     = "cache.t3.micro"
 }
+
+variable "db_security_group_id" {
+  description = "Security group ID for RDS database"
+  type        = string
+}
+
+variable "db_subnet_group_name" {
+  description = "DB subnet group name for RDS"
+  type        = string
+}
+
+variable "cdn_api_origin_domain" {
+  description = "API origin domain for CloudFront CDN"
+  type        = string
+}
+
+variable "cdn_origin_verify_secret" {
+  description = "Origin verify secret for CloudFront CDN"
+  type        = string
+  sensitive   = true
+}
