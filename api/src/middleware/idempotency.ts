@@ -26,8 +26,15 @@ function hashBody(body: unknown): string {
 }
 
 function apiKeyId(req: Request): string {
-  const reqWithKey = req as Request & { apiKey?: { id?: string }; apiKeyId?: string };
-  return reqWithKey.apiKey?.id ?? reqWithKey.apiKeyId ?? 'anonymous';
+  // Extract API key from x-api-key header and use it as the scope
+  // This ensures idempotency keys are properly scoped per tenant/API key
+  const apiKey = req.headers['x-api-key'] as string;
+  if (apiKey) {
+    // Use a hash of the API key to avoid storing the full key in cache keys
+    return createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
+  }
+  // Fallback to anonymous if no API key provided
+  return 'anonymous';
 }
 
 export function idempotencyMiddleware(req: Request, res: Response, next: NextFunction): void {

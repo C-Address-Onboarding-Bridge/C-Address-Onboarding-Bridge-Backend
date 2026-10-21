@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { logger } from '../logger';
-import { cacheGet, cacheSet } from '../services/cache';
+import { cacheGet, cacheSet, config } from '../config';
+import { config as appConfig } from '../config';
 
 /**
  * Issue #673: Verify request signing headers (X-Timestamp, X-Nonce, X-Signature).
@@ -18,6 +19,16 @@ function constantTimeCompare(a: string, b: string): boolean {
     result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return result === 0;
+}
+
+function getSigningSecret(apiKey: string): string {
+  // In production, use a dedicated signing secret from config
+  // Fall back to a derived key from the API key with a salt
+  const signingSecret = appConfig.requestSigning?.signingSecret;
+  if (signingSecret) return signingSecret;
+  // Derive a signing key from the API key using a fixed salt
+  // This is not ideal but better than using the API key directly
+  return crypto.createHmac('sha256', 'c-address-signing-salt-v1').update(apiKey).digest('hex');
 }
 
 export function requestSigningMiddleware(req: Request, res: Response, next: NextFunction): void {
@@ -43,7 +54,27 @@ export function requestSigningMiddleware(req: Request, res: Response, next: Next
     return res.status(401).json({ error: 'stale_timestamp' });
   }
 
-  // Verify nonce hasn't been replayed
+  // Verify signature FIRST before burning nonce
+  const apiKey = req.headers['x-api-key'] as string;
+  if (!apiKey) {
+    return res.status(401).json({ error: 'missing_api_key' });
+  }
+
+  // Reconstruct the signed payload: body.timestamp.nonce
+  const bodyStr = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
+  const payload = `${bodyStr}.${timestamp}.${nonce}`;
+
+  // Use a dedicated signing secret (not the API key directly)
+  const signingKey = getSigningSecret(apiKey);
+  const expectedSig = crypto.createHmac('sha256', signingKey).update(payload).digest('hex');
+  const sigFormat = signature.startsWith('sha256=') ? signature.slice(7) : signature;
+
+  if (!constantTimeCompare(expectedSig, sigFormat)) {
+    logger.warn('Invalid request signature', { apiKey: apiKey.slice(0, 8) + '...' });
+    return res.status(401).json({ error: 'invalid_signature' });
+  }
+
+  // Signature verified - now check and cache nonce to prevent replay
   const nonceKey = `nonce:${nonce}`;
   cacheGet(nonceKey)
     .then((cached) => {
@@ -51,30 +82,10 @@ export function requestSigningMiddleware(req: Request, res: Response, next: Next
         return res.status(401).json({ error: 'replay_nonce' });
       }
 
-      // Store nonce to prevent replay
+      // Store nonce to prevent replay (only after successful signature verification)
       cacheSet(nonceKey, 'used', NONCE_CACHE_TTL).catch(() => {
         logger.warn('Failed to cache nonce for replay detection', { nonce });
       });
-
-      // Verify signature
-      const apiKey = req.headers['x-api-key'] as string;
-      if (!apiKey) {
-        return res.status(401).json({ error: 'missing_api_key' });
-      }
-
-      // Reconstruct the signed payload: body.timestamp.nonce
-      const bodyStr = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
-      const payload = `${bodyStr}.${timestamp}.${nonce}`;
-
-      // Issue #673: Derive HMAC key from signing secret (not the API key itself)
-      // For now, use apiKey as placeholder; in production use a separate signing_secret
-      const expectedSig = crypto.createHmac('sha256', apiKey).update(payload).digest('hex');
-      const sigFormat = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-
-      if (!constantTimeCompare(expectedSig, sigFormat)) {
-        logger.warn('Invalid request signature', { apiKey: apiKey.slice(0, 8) + '...' });
-        return res.status(401).json({ error: 'invalid_signature' });
-      }
 
       next();
     })

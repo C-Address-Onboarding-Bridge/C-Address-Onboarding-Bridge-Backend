@@ -44,6 +44,46 @@ const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
 const ALLOWED_BODY_CONTENT_TYPES = new Set(['application/json']);
 
+/**
+ * Verify the X-Origin-Verify header to ensure requests come through CloudFront.
+ * CloudFront sets this header with a secret value that only CloudFront and the API know.
+ * If the header is missing or doesn't match the expected secret, the request is rejected.
+ * Issue #862.
+ */
+export function originVerifyMiddleware(req: Request, res: Response, next: NextFunction): void {
+  // Only enforce in production/staging environments
+  const env = process.env.APP_ENV || process.env.NODE_ENV || 'development';
+  if (env === 'development' || env === 'test') {
+    next();
+    return;
+  }
+
+  const expectedSecret = process.env.CLOUDFRONT_ORIGIN_VERIFY_SECRET;
+  if (!expectedSecret) {
+    // Secret not configured - log warning but don't block in case of misconfiguration
+    logger.warn('CLOUDFRONT_ORIGIN_VERIFY_SECRET not configured, skipping origin verification');
+    next();
+    return;
+  }
+
+  const originVerify = req.headers['x-origin-verify'] as string;
+  if (!originVerify) {
+    logger.warn({ ip: req.ip, path: req.path }, 'Missing X-Origin-Verify header');
+    res.status(403).json({ error: 'forbidden', message: 'Origin verification required' });
+    return;
+  }
+
+  if (originVerify !== expectedSecret) {
+    logger.warn({ ip: req.ip, path: req.path }, 'Invalid X-Origin-Verify header');
+    res.status(403).json({ error: 'forbidden', message: 'Invalid origin verification' });
+    return;
+  }
+
+  next();
+}
+
+const ALLOWED_BODY_CONTENT_TYPES = new Set(['application/json']);
+
 function flattenValue(v: unknown): string[] {
   if (typeof v === 'string') return [v];
   if (Array.isArray(v)) return v.flatMap((item) => flattenValue(item));

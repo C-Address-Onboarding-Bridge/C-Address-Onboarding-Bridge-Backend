@@ -2,10 +2,11 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "module": "ES2022",
+    "moduleResolution": "node16",
+    "verbatimModuleSyntax": true,
     "outDir": "dist/esm",
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
-    "moduleResolution": "node"
+    "sourceMap": true
   }
 }
