@@ -17,6 +17,17 @@ const getQuoteSchema = z.object({
   token: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid token Stellar address').optional(),
 });
 
+async function computeQuote(req: Request) {
+  const params = getQuoteSchema.parse(req.query);
+  const quote = await sorobanService.getQuote(
+    params.sourceAsset,
+    params.amount,
+    params.targetAddress,
+  );
+  setFeeRateBps(quote.feeBps);
+  return quote;
+}
+
 quoteRouter.get(
   '/',
   cacheMiddleware({
@@ -28,6 +39,7 @@ quoteRouter.get(
         `${params.sourceAsset}:${params.amount}:${params.targetAddress}:${params.sourceAddress ?? ''}:${params.token ?? ''}`,
       );
     },
+    revalidate: computeQuote,
   }),
   async (_req: Request, res: Response, next: NextFunction) => {
     try {

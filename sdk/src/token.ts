@@ -97,14 +97,24 @@ export function tokenFromLegacy(tokenAddress?: string, sourceAsset?: string): To
  * @returns Human-readable amount (e.g. `"1.000000"`).
  */
 export function formatTokenAmount(amount: string, decimals: number): string {
-  // Handle zero case
-  if (amount === '0') return '0';
+  if (!/^-?\d+$/.test(amount)) {
+    throw new TypeError('amount must be an integer string');
+  }
+  if (!Number.isInteger(decimals) || decimals < 0) {
+    throw new RangeError('decimals must be a non-negative integer');
+  }
 
-  const padded = amount.padStart(decimals + 1, '0');
-  const integerPart = padded.slice(0, -decimals) || '0';
+  const negative = amount.startsWith('-');
+  const digits = (negative ? amount.slice(1) : amount).replace(/^0+(?=\d)/, '');
+  if (decimals === 0) {
+    return `${negative ? '-' : ''}${digits}`;
+  }
+
+  const padded = digits.padStart(decimals + 1, '0');
+  const integerPart = padded.slice(0, -decimals);
   const fractionalPart = padded.slice(-decimals);
 
-  return `${integerPart}.${fractionalPart}`;
+  return `${negative ? '-' : ''}${integerPart}.${fractionalPart}`;
 }
 
 /**

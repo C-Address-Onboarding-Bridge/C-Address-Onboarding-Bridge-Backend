@@ -29,6 +29,7 @@ import {
   parseHttpError,
   NetworkError,
   TimeoutError,
+  ServerError,
   BridgeError,
   ServerError,
   ValidationError,
