@@ -267,3 +267,31 @@ export function parseHttpError(
       });
   }
 }
+
+// ─── Network error detection ──────────────────────────────────────────────────
+
+/**
+ * Determine whether an error represents a network/transport failure.
+ *
+ * Recognises the SDK's own {@link NetworkError} (which is what `fetch`
+ * `TypeError`s are converted into by the bridge), raw `TypeError`s thrown by
+ * `fetch`, and plain errors whose message indicates a connectivity problem.
+ * `TimeoutError` is explicitly *not* treated as a network error.
+ */
+export function isNetworkError(err: unknown): boolean {
+  if (err instanceof TimeoutError) return false;
+  if (err instanceof NetworkError) return true;
+  if (err instanceof TypeError) return true;
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes('failed to fetch') ||
+      msg.includes('fetch failed') ||
+      msg.includes('load failed') ||
+      msg.includes('network') ||
+      msg.includes('econnrefused') ||
+      msg.includes('enotfound')
+    );
+  }
+  return false;
+}
