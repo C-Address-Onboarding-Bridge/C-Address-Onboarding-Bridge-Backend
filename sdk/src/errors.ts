@@ -101,7 +101,10 @@ export class ServerError extends BridgeError {
    *   is non-transient — e.g. a malformed success body that would fail on every
    *   retry — so the client does not re-send the request.
    */
-  constructor(message?: string, options?: { statusCode?: number; code?: string; retryable?: boolean; cause?: unknown; locale?: SupportedLocale }) {
+  constructor(
+    message?: string,
+    options?: { statusCode?: number; code?: string; retryable?: boolean; cause?: unknown; locale?: SupportedLocale },
+  ) {
     const resolvedMessage = message ?? 'A server error occurred. Please try again later.';
     super(resolvedMessage, {
       statusCode: options?.statusCode ?? 500,
@@ -140,8 +143,14 @@ export class TimeoutError extends BridgeError {
   readonly timeoutMs: number;
   readonly operation: string;
 
-  constructor(operation: string, timeoutMs: number, options?: { locale?: SupportedLocale }) {
-    super(`Operation "${operation}" timed out after ${timeoutMs} ms.`, { retryable: true });
+  /**
+   * @param options.retryable Override the default retryability. Defaults to
+   *   `true` so callers building their own retry logic can retry idempotent
+   *   requests. The bridge sets this to `false` for non-idempotent requests
+   *   (e.g. POSTs without an idempotency key) that must not be re-sent.
+   */
+  constructor(operation: string, timeoutMs: number, options?: { locale?: SupportedLocale; retryable?: boolean }) {
+    super(`Operation "${operation}" timed out after ${timeoutMs} ms.`, { retryable: options?.retryable ?? true });
     this.name = 'TimeoutError';
     this.timeoutMs = timeoutMs;
     this.operation = operation;
@@ -186,7 +195,44 @@ interface ErrorBody {
   retryAfter?: number;
 }
 
-export function parseHttpError(status: number, body: ErrorBody, cause?: unknown, locale?: SupportedLocale): BridgeError {
+/**
+ * Parse a `Retry-After` header value into milliseconds.
+ *
+ * The header may be either a number of seconds (`"2"`, `"0.5"`) or an
+ * HTTP-date (`"Wed, 21 Oct 2015 07:28:00 GMT"`). Returns `undefined` when the
+ * value is missing or cannot be interpreted.
+ */
+export function parseRetryAfterHeader(value: string | null | undefined): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+
+  // Numeric seconds (may be fractional).
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return Number.isFinite(seconds) ? Math.max(0, Math.round(seconds * 1000)) : undefined;
+  }
+
+  // HTTP-date.
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+
+  return undefined;
+}
+
+export function parseHttpError(
+  status: number,
+  body: ErrorBody,
+  cause?: unknown,
+  locale?: SupportedLocale,
+  retryAfterHeader?: string | null,
+): BridgeError {
+  const headerRetryAfterMs = parseRetryAfterHeader(retryAfterHeader);
+  const bodyRetryAfterMs = body.retryAfter !== undefined ? body.retryAfter * 1000 : undefined;
+  const retryAfterMs = headerRetryAfterMs ?? bodyRetryAfterMs;
+
   switch (status) {
     case 401:
     case 403:
@@ -200,10 +246,25 @@ export function parseHttpError(status: number, body: ErrorBody, cause?: unknown,
     case 404:
       return new NotFoundError(body.message, { code: body.code, cause, locale });
     case 429:
-      return new RateLimitError(body.message, { retryAfterMs: body.retryAfter, code: body.code, cause, locale });
+      return new RateLimitError(body.message, {
+        retryAfterMs,
+        code: body.code,
+        cause,
+        locale,
+      });
+    case 503:
+      return new ServerError(body.message ?? 'Service temporarily unavailable. Please try again later.', {
+        statusCode: 503,
+        code: body.code,
+        cause,
+      });
     default:
       if (status >= 500) {
-        return new ServerError(body.message, { statusCode: status, code: body.code, cause, locale });
+        return new ServerError(body.message ?? `Server error (${status}).`, {
+          statusCode: status,
+          code: body.code,
+          cause,
+        });
       }
       return new BridgeError(body.message ?? `Request failed with status ${status}.`, {
         statusCode: status,

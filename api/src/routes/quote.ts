@@ -16,6 +16,8 @@ const getQuoteSchema = z.object({
   sourceAsset: z.string().min(1),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
   targetAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid target Stellar address'),
+  sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid source Stellar address').optional(),
+  token: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid token Stellar address').optional(),
 });
 
 quoteRouter.get(
@@ -25,7 +27,10 @@ quoteRouter.get(
     ttl: CACHE_TTL.quote,
     keyFn: (req) => {
       const params = getQuoteSchema.parse(req.query);
-      return buildCacheKey('quote', `${params.sourceAsset}:${params.amount}:${params.targetAddress}`);
+      return buildCacheKey(
+        'quote',
+        `${params.sourceAsset}:${params.amount}:${params.targetAddress}:${params.sourceAddress ?? ''}:${params.token ?? ''}`,
+      );
     },
   }),
   async (_req: Request, res: Response, next: NextFunction) => {
@@ -35,6 +40,8 @@ quoteRouter.get(
         params.sourceAsset,
         params.amount,
         params.targetAddress,
+        params.sourceAddress,
+        params.token,
       );
 
       setFeeRateBps(quote.feeBps);

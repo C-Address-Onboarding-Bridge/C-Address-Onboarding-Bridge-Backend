@@ -854,3 +854,15 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-784 -->
 - #784: bug(contract): onboarding-bridge no longer compiles — 35 errors from a half-finished #[contracterror] migration
+<!-- handsoff-issue-826 -->
+- #826: docs(contract): crate-level docs describe fee recipients, auto-withdraw and a single Admin key that don't exist (#233 closed)
+
+<!-- handsoff-issue-829 -->
+- #829: ci: Deploy Contract and deploy-contract.sh look for the WASM in a root target/ directory that the build never creates
+<!-- handsoff-issue-820 -->
+- #820: test(contract): test_full_scenario is still #[ignore]d (#596 closed)
+<!-- handsoff-issue-693 -->
+- #693: feat(contract): validate proposal parameters at propose() time
+
+<!-- handsoff-issue-694 -->
+- #694: feat(contract): get_stats returns mixed-unit totals — add per-token statistics

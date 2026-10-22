@@ -84,6 +84,8 @@ export const config = {
   moonpay: {
     apiKey: process.env.MOONPAY_API_KEY || '',
     secretKey: process.env.MOONPAY_SECRET_KEY || '',
+    /** Use the MoonPay sandbox host (buy-sandbox.moonpay.com) instead of production. */
+    sandbox: process.env.MOONPAY_SANDBOX === 'true' || process.env.MOONPAY_ENVIRONMENT === 'sandbox',
   },
   transak: {
     apiKey: process.env.TRANSAK_API_KEY || '',
@@ -115,6 +117,9 @@ export const config = {
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean),
+  /** Shared secret sent by CloudFront as X-Origin-Verify. Enforced by
+   * originVerifyMiddleware when ORIGIN_VERIFY_SECRET is set. */
+  originVerifySecret: process.env.ORIGIN_VERIFY_SECRET || '',
   logLevel: process.env.LOG_LEVEL || 'info',
   logging: {
     serviceName: process.env.LOG_SERVICE_NAME || 'bridge-api',
@@ -187,7 +192,6 @@ export const config = {
     enabled: process.env.JOBS_ENABLED !== 'false' && (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),
     txPollIntervalMs: parseInt(process.env.JOB_TX_POLL_INTERVAL_MS || '60000', 10),
     metricsIntervalMs: parseInt(process.env.JOB_METRICS_INTERVAL_MS || '3600000', 10),
-    cleanupIntervalMs: parseInt(process.env.JOB_CLEANUP_INTERVAL_MS || '86400000', 10),
     concurrency: {
       txStatus: parseInt(process.env.JOB_CONCURRENCY_TX_STATUS || '5', 10),
       webhookRetry: parseInt(process.env.JOB_CONCURRENCY_WEBHOOK_RETRY || '3', 10),

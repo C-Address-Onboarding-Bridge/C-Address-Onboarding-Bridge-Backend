@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Readable } from 'stream';
 
 process.env.NODE_ENV = 'test';
 
@@ -47,6 +48,21 @@ const redisMethods = {
   del: vi.fn(async (...keys: string[]) => {
     for (const k of keys) mockStore.delete(k);
     return keys.length;
+  }),
+  unlink: vi.fn(async (...keys: string[]) => {
+    for (const k of keys) mockStore.delete(k);
+    return keys.length;
+  }),
+  scanStream: vi.fn((options?: { match?: string; count?: number }) => {
+    const pattern = options?.match ?? '*';
+    const re = new RegExp('^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+    const matched = [...mockStore.keys()].filter((k) => re.test(k));
+    const batchSize = options?.count ?? 500;
+    const batches: string[][] = [];
+    for (let i = 0; i < matched.length; i += batchSize) {
+      batches.push(matched.slice(i, i + batchSize));
+    }
+    return Readable.from(batches);
   }),
   keys: vi.fn(async (pattern: string) => {
     const re = new RegExp('^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
@@ -168,14 +184,38 @@ describe('cacheDel', () => {
 describe('cacheDelPattern', () => {
   beforeEach(clearStore);
 
-  it('deletes all keys matching a glob pattern', async () => {
+  it('deletes all keys matching a glob pattern using scanStream and unlink', async () => {
+    redisMethods.scanStream.mockClear();
+    redisMethods.unlink.mockClear();
+
     await cacheSet('quote:XLM:1', 'a', 60);
     await cacheSet('quote:XLM:2', 'b', 60);
     await cacheSet('status:abc', 'c', 60);
+
     await cacheDelPattern('quote:*');
+
+    expect(redisMethods.scanStream).toHaveBeenCalledWith({ match: 'quote:*', count: 500 });
+    expect(redisMethods.unlink).toHaveBeenCalledWith('quote:XLM:1', 'quote:XLM:2');
     expect(await cacheGet('quote:XLM:1')).toBeNull();
     expect(await cacheGet('quote:XLM:2')).toBeNull();
     expect(await cacheGet('status:abc')).toBe('c');
+  });
+
+  it('unlinks keys in batches of 500 when keyspace is large', async () => {
+    redisMethods.unlink.mockClear();
+
+    // Populate 1200 matching keys
+    for (let i = 0; i < 1200; i++) {
+      mockStore.set(`bulk:${i}`, { value: `val-${i}`, expiresAt: Date.now() + 60000 });
+    }
+
+    await cacheDelPattern('bulk:*');
+
+    expect(redisMethods.unlink).toHaveBeenCalled();
+    for (const call of redisMethods.unlink.mock.calls) {
+      expect(call.length).toBeLessThanOrEqual(500);
+    }
+    expect(mockStore.size).toBe(0);
   });
 });
 

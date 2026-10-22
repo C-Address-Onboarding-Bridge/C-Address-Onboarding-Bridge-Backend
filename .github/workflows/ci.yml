@@ -32,7 +32,11 @@ jobs:
 
       - name: Clippy
         working-directory: contracts/onboarding-bridge
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Clippy (fuzz crate)
+        working-directory: contracts/onboarding-bridge/fuzz
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
         working-directory: contracts/onboarding-bridge
@@ -152,6 +156,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check package exports and types
+        run: npm run check:exports
+
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
@@ -194,39 +201,64 @@ jobs:
           MOONPAY_SECRET_KEY: sim-moonpay-secret
           TRANSAK_WEBHOOK_SECRET: sim-transak-secret
 
+  monitoring-config:
+    name: Monitoring Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Alertmanager does not expand ${VAR} placeholders, so the committed
+      # config must be valid on its own. amtool check-config catches literal
+      # ${...} URLs and other schema errors before they reach production.
+      - name: Validate alertmanager.yaml
+        run: |
+          docker run --rm \
+            --entrypoint amtool \
+            -v "$PWD/monitoring/alertmanager:/a" \
+            prom/alertmanager:v0.27.0 \
+            check-config /a/alertmanager.yaml
+
   deploy-testnet:
     name: Deploy to Testnet
     runs-on: ubuntu-latest
     needs: [soroban-contract, api-server, sdk, e2e, webhook-sim]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     env:
+      # Secret key used only to sign transactions; never passed as an address.
       SOURCE_ACCOUNT: ${{ secrets.SOROBAN_SOURCE_ACCOUNT }}
+      # Comma-separated public keys (G...) for the contract's admin set.
+      ADMIN_ADDRESSES: ${{ vars.ADMIN_ADDRESSES }}
     steps:
       - name: Skip when deploy credentials are not configured
-        if: env.SOURCE_ACCOUNT == ''
-        run: echo "SOROBAN_SOURCE_ACCOUNT secret not set; skipping testnet deploy."
+        if: env.SOURCE_ACCOUNT == '' || env.ADMIN_ADDRESSES == ''
+        run: echo "SOROBAN_SOURCE_ACCOUNT secret or ADMIN_ADDRESSES variable not set; skipping testnet deploy."
 
       - uses: actions/checkout@v4
-        if: env.SOURCE_ACCOUNT != ''
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        if: env.SOURCE_ACCOUNT != ''
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
         with:
           toolchain: stable
           target: wasm32v1-none
 
       - name: Install Stellar CLI
-        if: env.SOURCE_ACCOUNT != ''
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
         run: cargo install stellar-cli --locked
 
+      - name: Build WASM (release)
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
+        working-directory: contracts/onboarding-bridge
+        run: cargo build --target wasm32v1-none --release
+
       - name: Deploy contract to testnet
-        if: env.SOURCE_ACCOUNT != ''
-        run: bash scripts/deploy.sh --network testnet
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
+        run: bash scripts/deploy-contract.sh --network testnet
         env:
           BRIDGE_FEE_BPS: '30'
 
       - name: Upload deployment artifacts
-        if: env.SOURCE_ACCOUNT != ''
+        if: env.SOURCE_ACCOUNT != '' && env.ADMIN_ADDRESSES != ''
         uses: actions/upload-artifact@v4
         with:
           name: deployment-testnet
