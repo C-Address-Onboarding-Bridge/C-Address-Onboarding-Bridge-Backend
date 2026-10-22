@@ -1,5 +1,6 @@
 import { createHmac } from 'crypto';
 import { config } from '../config';
+import { getCircuitBreaker } from '../circuit-breaker';
 
 interface MoonpayWidgetParams {
   apiKey: string;
@@ -92,14 +93,18 @@ export class MoonpayService {
       areFeesIncluded: 'true',
     });
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    let res: Response;
-    try {
-      res = await fetch(`${url}?${query.toString()}`, { signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
-    }
+    // Network errors and 5xx responses count towards the breaker; 4xx do not.
+    const res = await getCircuitBreaker('moonpay').execute(async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        const response = await fetch(`${url}?${query.toString()}`, { signal: controller.signal });
+        if (response.status >= 500) throw new Error(`moonpay quote failed: ${response.statusText}`);
+        return response;
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
 
     if (!res.ok) throw new Error(`moonpay quote failed: ${res.statusText}`);
 

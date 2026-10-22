@@ -24,7 +24,7 @@ import { rbacAuth, requireScopes, seedLegacyKeys } from './middleware/rbacAuth';
 import { registerWebhookVerifier, moonpayVerifier, transakVerifier } from './middleware/webhookVerification';
 import { compressionMiddleware } from './middleware/compression';
 import { errorHandler } from './middleware/error';
-import { CircuitBreaker } from './circuit-breaker';
+import { circuitBreakers } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
 import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
@@ -32,7 +32,9 @@ import { setFeeRateBps, updateCircuitBreakerMetrics } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
 import { loggingMiddleware } from './middleware/logging';
+import { DEFAULT_JSON_LIMIT, FUNDING_PATHS, fundingJsonParser } from './middleware/bodyParser';
 import { requestSigningMiddleware } from './middleware/requestSigning';
+import { originVerifyMiddleware } from './middleware/originVerify';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
 import { closePool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
@@ -44,12 +46,7 @@ import { cacheMetricsRouter } from './routes/cacheMetrics';
 
 export { logger } from './logger';
 
-export const circuitBreakers = new Map<string, CircuitBreaker>([
-  ['soroban', new CircuitBreaker('soroban')],
-  ['moonpay', new CircuitBreaker('moonpay')],
-  ['transak', new CircuitBreaker('transak')],
-  ['cex', new CircuitBreaker('cex')],
-]);
+export { circuitBreakers };
 
 registerWebhookVerifier('moonpay', moonpayVerifier, config.moonpay.secretKey);
 registerWebhookVerifier('transak', transakVerifier, config.transak.webhookSecret);
@@ -154,7 +151,8 @@ app.use(requestTracker);
 app.use(loggingMiddleware);
 
 app.use('/api/webhook', express.text({ type: '*/*' }));
-app.use('/api', express.json({ limit: '32kb' }));
+app.use(FUNDING_PATHS, fundingJsonParser);
+app.use('/api', express.json({ limit: DEFAULT_JSON_LIMIT }));
 
 // suspiciousRateLimiting is mounted exactly once here. It only counts requests
 // that actually tripped a detector (see middleware/security.ts), so normal
@@ -163,6 +161,8 @@ app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
 // Issue #673: Verify request signing headers
 app.use('/api', requestSigningMiddleware);
+// Issue #862: Enforce X-Origin-Verify header from CloudFront
+app.use('/api', originVerifyMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
 
 // #660: Removed misleading deprecation endpoint — v1 and v2 are identical until one diverges
@@ -201,6 +201,24 @@ app.use('/api/v1/admin', rbacAuth, tierRateLimitMiddleware, adminRouter);
 app.use('/api/v1/cache/metrics', rbacAuth, tierRateLimitMiddleware, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('
+app.use('/api/v1/metrics', rbacAuth, metricsRouter);
 
-/* … truncated 579 chars — edit only what you need near the top … */
+app.use('/api/v1/token', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, tokenRouter);
+app.use('/api/v2/token', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, tokenRouter);
+
+app.use(xssErrorSanitizer);
+app.use(errorHandler);
+
+const server = app.listen(config.port, () => {
+  logger.info({ port: config.port, env: config.env }, 'Server started');
+});
+
+const wss = createWebSocketServer(server);
+server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket, head));
+
+registerSignalHandlers(async () => {
+  await shutdownTracing();
+  await closePool();
+});
+
+export { app, server, wss };

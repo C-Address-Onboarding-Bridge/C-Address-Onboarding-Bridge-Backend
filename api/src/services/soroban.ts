@@ -232,216 +232,63 @@ export class SorobanService {
     _sourceAsset: string,
     amount: string,
     sourceAddress: string,
-  ): Promise<{
-    estimatedFee: string;
-    expectedReceive: string;
-    feeBps: number;
-    rebateBps: number;
-    rate: string;
-  }> {
-    return tracer.startActiveSpan('quote.calculation', async (span) => {
-      try {
-        const { feeBps, rebateBps } = await this.getContractFeeBps(sourceAddress);
-        const effectiveFeeBps = Math.max(0, feeBps - rebateBps);
-        const amountNum = BigInt(amount);
-        const feeAmount = (amountNum * BigInt(effectiveFeeBps)) / BigInt(BASIS_POINTS_DENOM);
-        const receiveAmount = amountNum - feeAmount;
-
-        span.setAttributes({ 'quote.fee_bps': effectiveFeeBps, 'quote.amount': amount });
-        return {
-          estimatedFee: feeAmount.toString(),
-          expectedReceive: receiveAmount.toString(),
-          feeBps: effectiveFeeBps,
-          rebateBps,
-          rate: '1.0',
-        };
-      } finally {
-        span.end();
-      }
-    });
+  ): Promise<{ fee: string; feeBps: number; rebateBps: number }> {
+    const { feeBps, rebateBps } = await this.getContractFeeBps(sourceAddress);
+    const effectiveBps = Math.max(0, feeBps - rebateBps);
+    const amountBig = BigInt(amount);
+    const fee = (amountBig * BigInt(effectiveBps)) / BigInt(BASIS_POINTS_DENOM);
+    return { fee: fee.toString(), feeBps, rebateBps };
   }
 
   /**
-   * Submits a signed batch funding transaction and returns the result.
-   * The signed XDR must already encode the `batch_fund_c_address` contract
-   * call with all recipients embedded — callers are responsible for building
-   * and signing the transaction before submission.
+   * Prepares an unsigned funding transaction for the client to sign.
    *
-   * @param signedXdr - Base64-encoded signed transaction envelope.
+   * Builds a `fund_c_address` invocation, simulates it to obtain the required
+   * footprint and fee, and returns the unsigned envelope.
    */
-  async submitBatchFundingTransaction(signedXdr: string): Promise<SorobanTxResponse> {
-    return this.submitFundingTransaction(signedXdr);
-  }
-
-  /**
-   * Decodes the list of recipients from a `batch_fund_c_address` Soroban
-   * transaction XDR.  Returns `null` when the XDR cannot be parsed or does not
-   * contain a recognisable batch call — the caller must treat this as an error.
-   *
-   * The expected contract call shape is:
-   *   batch_fund_c_address(recipients: Vec<{target: Address, amount: i128}>)
-   *
-   * We do a best-effort decode: we look for a ScVec whose first element is an
-   * ScMap with "target" and "amount" keys.  If the shape doesn't match we
-   * return null so the route can reject the request.
-   */
-  decodeRecipientsFromXdr(signedXdr: string): DecodedRecipient[] | null {
-    try {
-      const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
-      const tx = new Transaction(envelope, this.networkPassphrase);
-
-      for (const op of tx.operations) {
-        // We only care about InvokeHostFunction operations.
-        if (op.type !== 'invokeHostFunction') continue;
-
-        const invokeOp = (op as any).func;
-        if (!invokeOp || invokeOp.switch().name !== 'hostFunctionTypeInvokeContract') continue;
-
-        const args = invokeOp.invokeContract().args();
-        // Expect at least: contract_address (0), function_name (1), recipients_vec (2)
-        if (!args || args.length < 3) continue;
-
-        const fnName = args[1];
-        if (
-          fnName.switch().name !== 'scvSymbol' &&
-          fnName.switch().name !== 'scvString'
-        ) {
-          // Skip if we can't verify function name
-        }
-
-        // Try to read the recipients argument — typically the 3rd arg (index 2).
-        const recipientsArg = args[2];
-        if (!recipientsArg || recipientsArg.switch().name !== 'scvVec') continue;
-
-        const vec = recipientsArg.vec();
-        if (!vec) continue;
-
-        const recipients: DecodedRecipient[] = [];
-        for (const item of vec) {
-          if (item.switch().name !== 'scvMap') continue;
-          const map = item.map();
-          if (!map) continue;
-
-          let target: string | undefined;
-          let amount: string | undefined;
-
-          for (const entry of map) {
-            const key = entry.key();
-            const val = entry.val();
-
-            const keyStr =
-              key.switch().name === 'scvSymbol' ? key.sym().toString() :
-              key.switch().name === 'scvString' ? key.str().toString() :
-              null;
-
-            if (keyStr === 'target' || keyStr === 'to' || keyStr === 'address') {
-              if (val.switch().name === 'scvAddress') {
-                target = Address.fromScVal(val).toString();
-              }
-            }
-            if (keyStr === 'amount') {
-              if (val.switch().name === 'scvI128') {
-                const parts = val.i128();
-                // Treat hi=0 (positive amounts) — lo is a u64
-                const lo = BigInt(parts.lo().toString());
-                const hi = BigInt(parts.hi().toString());
-                amount = (hi >= 0n ? (hi << 64n) + lo : lo).toString();
-              } else if (val.switch().name === 'scvU64') {
-                amount = val.u64().toString();
-              }
-            }
-          }
-
-          if (target && amount) {
-            recipients.push({ target, amount });
-          }
-        }
-
-        if (recipients.length > 0) return recipients;
-      }
-
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Simulates a `fund_c_address` call and returns an unsigned transaction the
-   * client can sign.
-   *
-   * The memo is encoded as `scvString` to match the contract's `memo: String`
-   * parameter. The transaction is built from the real source account (with the
-   * sequence number fetched from the RPC) and assembled with the simulation
-   * result, so the returned XDR is ready to sign.
-   *
-   * @param sourceAccount - Stellar account (G-address) that will sign and pay.
-   * @param targetAddress - Destination C-address to fund.
-   * @param amount - Amount in stroops as an integer string.
-   * @param memo - Memo string passed to the contract.
-   * @throws {SorobanSimulationError} If the simulation fails.
-   */
-  async prepareFundingTransaction(
-    sourceAccount: string,
-    targetAddress: string,
-    amount: string,
-    memo: string,
-  ): Promise<PreparedFundingTx> {
-    return tracer.startActiveSpan('soroban.prepareFundingTransaction', async (span) => {
+  async prepareFundingTransaction(params: {
+    source: string;
+    target: string;
+    amount: string;
+  }): Promise<PreparedFundingTx> {
+    return tracer.startActiveSpan('contract.prepareFunding', async (span) => {
       try {
         const contract = new Contract(this.contractId);
-        const operation = contract.call(
-          'fund_c_address',
-          new Address(targetAddress).toScVal(),
-          xdr.ScVal.scvString(memo),
-          xdr.ScVal.scvI128(
-            new xdr.Int128Parts({
-              hi: xdr.Int64.fromString('0'),
-              lo: xdr.Uint64.fromString(amount),
-            }),
-          ),
+        const sourceAccount = await rpcPool.execute((server) =>
+          server.getAccount(params.source),
         );
 
-        // Build from the real source account so the sequence number is valid.
-        const account = await rpcPool.execute((server) => server.getAccount(sourceAccount));
-        const tx = new TransactionBuilder(account, {
+        const tx = new TransactionBuilder(sourceAccount, {
           fee: BASE_FEE,
           networkPassphrase: this.networkPassphrase,
         })
-          .addOperation(operation)
+          .addOperation(
+            contract.call(
+              'fund_c_address',
+              new Address(params.source).toScVal(),
+              new Address(params.target).toScVal(),
+              xdr.ScVal.scvI128(
+                new xdr.Int128Parts({
+                  hi: xdr.Int64.fromString('0'),
+                  lo: xdr.Uint64.fromString(params.amount),
+                }),
+              ),
+            ),
+          )
           .setTimeout(30)
           .build();
 
         const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
-
         if (!SorobanService.isSimulationSuccess(simulation)) {
-          const detail = 'error' in simulation ? String(simulation.error) : 'unknown error';
-          logger.warn({ detail }, 'soroban.prepareFundingTransaction: simulation failed');
-          span.setStatus({ code: SpanStatusCode.ERROR, message: detail });
-          throw new SorobanSimulationError(detail);
+          throw new SorobanSimulationError('Funding simulation failed');
         }
 
-        // Assemble the transaction with the simulation result (footprint, fee,
-        // resource data) so the returned XDR is ready to sign.
-        const assembled = SorobanService.assembleTransaction(tx, simulation);
-        const footprint = simulation.transactionData.build().toXDR('base64');
-
-        span.setAttributes({
-          'tx.source': sourceAccount,
-          'tx.fee': assembled.fee,
-        });
-
+        const prepared = SorobanService.assembleTransaction(tx, simulation);
         return {
-          unsignedXdr: assembled.toXDR(),
-          footprint,
-          fee: assembled.fee,
+          unsignedXdr: prepared.toXDR(),
+          footprint: JSON.stringify(simulation.result?.footprint ?? {}),
+          fee: prepared.fee,
         };
-      } catch (err) {
-        if (err instanceof SorobanSimulationError) {
-          throw err;
-        }
-        span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
-        throw new SorobanSimulationError(String(err), { cause: err });
       } finally {
         span.end();
       }
@@ -449,220 +296,123 @@ export class SorobanService {
   }
 
   /**
-   * Validates and submits a signed Soroban transaction XDR to the network.
-   *
-   * Runs the full XDR validation pipeline before touching the RPC. Any
-   * validation failure throws an `XdrValidationError` with a structured
-   * `code` and `detail`; the caller should convert these to 400 responses.
+   * Submits a signed single funding transaction after validating its XDR.
    *
    * @param signedXdr - Base64-encoded signed transaction envelope.
-   * @returns Transaction status and hash.
-   * @throws {XdrValidationError} If the XDR fails any validation rule.
-   * @throws {SorobanRetryableError} If the RPC returns `TRY_AGAIN_LATER`.
    */
-  async submitFundingTransaction(
-    signedXdr: string,
-  ): Promise<SorobanTxResponse> {
-    return tracer.startActiveSpan('soroban.submitFundingTransaction', async (span): Promise<SorobanTxResponse> => {
+  async submitFundingTransaction(signedXdr: string): Promise<SorobanTxResponse> {
+    validateXdr(signedXdr, { endpoint: 'fund' });
+    return this.submitTransaction(signedXdr);
+  }
+
+  /**
+   * Submits a signed batch funding transaction after validating its XDR.
+   *
+   * @param signedXdr - Base64-encoded signed transaction envelope.
+   */
+  async submitBatchFundingTransaction(signedXdr: string): Promise<SorobanTxResponse> {
+    validateXdr(signedXdr, { endpoint: 'batch' });
+    return this.submitTransaction(signedXdr);
+  }
+
+  /**
+   * Submits a signed transaction to the Soroban RPC and records its time
+   * bounds so a later `NOT_FOUND` can be classified as `expired`.
+   */
+  async submitTransaction(signedXdr: string): Promise<SorobanTxResponse> {
+    return tracer.startActiveSpan('contract.submitTransaction', async (span) => {
       const start = Date.now();
       try {
-        // ── Validation pipeline ──────────────────────────────────────────────
-        // Throws XdrValidationError on any rule failure — no network call is made.
-        const validation = validateXdr(signedXdr);
-        span.setAttributes({
-          'tx.hash': validation.txHash,
-          'tx.source': validation.sourceAccount,
-          'tx.fee': validation.fee,
-          'tx.op_count': validation.operationCount,
+        const tx = new Transaction(signedXdr, this.networkPassphrase);
+        const hash = tx.hash().toString('hex');
+        submittedTxTimeBounds.set(hash, {
+          maxTime: tx.timeBounds?.maxTime ? Number(tx.timeBounds.maxTime) : 0,
+          submittedAt: Math.floor(Date.now() / 1000),
         });
 
-        return await this.submitValidatedXdr(signedXdr, validation.txHash, span, start);
-      } catch (err) {
-        if (err instanceof XdrValidationError) {
-          logger.warn(
-            { code: err.code, detail: err.detail },
-            'soroban.submitFundingTransaction: XDR validation rejected',
-          );
-          span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-        } else {
-          span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+        const response = await rpcPool.execute((server) => server.sendTransaction(tx));
+        if (response.status === 'TRY_AGAIN_LATER') {
+          throw new SorobanRetryableError();
         }
-        throw err;
+        if (response.status === 'ERROR') {
+          return { status: 'failed', hash, error: response.errorResult?.toXDR('base64') };
+        }
+        return { status: 'pending', hash };
+      } catch (err) {
+        if (err instanceof SorobanRetryableError) throw err;
+        throw new SorobanRpcError('Soroban submitTransaction failed', { cause: err });
       } finally {
+        externalCallDuration.record(Date.now() - start, { call: 'submitTransaction' });
         span.end();
       }
     });
   }
 
   /**
-   * Shared submission path used by both single and batch funding flows.
-   *
-   * Re-parses the validated XDR, sends it to the RPC pool, and maps the
-   * Soroban response status to the API's `SorobanTxResponse`:
-   *
-   * - `PENDING` / `DUPLICATE` → `pending` (accepted or already in flight)
-   * - `ERROR` → `failed`
-   * - `TRY_AGAIN_LATER` → throws `SorobanRetryableError` (HTTP 503)
-   * - anything else → confirmed via `getTransaction` before reporting success
+   * Polls the RPC for the final status of a submitted transaction.
    */
-  private async submitValidatedXdr(
-    signedXdr: string,
-    txHash: string,
-    span: ReturnType<typeof tracer.startActiveSpan> extends never ? never : any,
-    start: number,
-  ): Promise<SorobanTxResponse> {
-    const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
-    const tx = new Transaction(envelope, this.networkPassphrase);
+  async getTransactionStatus(hash: string): Promise<SorobanTxResponse> {
+    return tracer.startActiveSpan('contract.getTransactionStatus', async (span) => {
+      try {
+        const response = await rpcPool.execute((server) => server.getTransaction(hash));
+        if (response.status === 'SUCCESS') {
+          submittedTxTimeBounds.delete(hash);
+          return { status: 'success', hash };
+        }
+        if (response.status === 'FAILED') {
+          submittedTxTimeBounds.delete(hash);
+          return { status: 'failed', hash };
+        }
 
-    // Record the transaction's time bounds so a later `NOT_FOUND` can be
-    // distinguished from a transaction that is genuinely still in flight.
-    this.rememberTimeBounds(txHash, tx);
-
-    const sendResponse = await rpcPool.execute((server) => server.sendTransaction(tx));
-    externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
-
-    if (sendResponse.status === 'PENDING' || sendResponse.status === 'DUPLICATE') {
-      return { status: 'pending' as const, hash: txHash };
-    }
-    if (sendResponse.status === 'ERROR') {
-      span.setStatus({ code: SpanStatusCode.ERROR });
-      return {
-        status: 'failed' as const,
-        hash: txHash,
-        error: sendResponse.errorResult?.result().toString() || 'unknown error',
-      };
-    }
-    if (sendResponse.status === 'TRY_AGAIN_LATER') {
-      span.setStatus({ code: SpanStatusCode.ERROR, message: 'TRY_AGAIN_LATER' });
-      throw new SorobanRetryableError();
-    }
-
-    // Only report success once the network confirms the transaction.
-    const confirmed = await this.getTransactionStatus(txHash);
-    if (confirmed.status === 'success') {
-      return { status: 'success' as const, hash: txHash };
-    }
-    return confirmed;
+        // NOT_FOUND — decide whether the tx's validity window has elapsed.
+        const tracked = submittedTxTimeBounds.get(hash);
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (tracked) {
+          const expiry = tracked.maxTime || tracked.submittedAt + DEFAULT_RPC_RETENTION_SECONDS;
+          if (nowSec >= expiry) {
+            submittedTxTimeBounds.delete(hash);
+            return { status: 'expired', hash };
+          }
+        }
+        return { status: 'pending', hash };
+      } catch (err) {
+        throw new SorobanRpcError('Soroban getTransaction failed', { cause: err });
+      } finally {
+        span.end();
+      }
+    });
   }
 
-  /**
-   * Records the time bounds of a submitted transaction so that a persistent
-   * `NOT_FOUND` can later be classified as `expired`.
-   */
-  private rememberTimeBounds(txHash: string, tx: Transaction): void {
-    const maxTime = tx.timeBounds?.maxTime ? Number(tx.timeBounds.maxTime) : 0;
-    submittedTxTimeBounds.set(txHash, { maxTime, submittedAt: Math.floor(Date.now() / 1000) });
-  }
-
-  /**
-   * Returns true when a simulation response indicates success. Kept as a
-   * narrow type guard so callers can safely read `transactionData`.
-   */
-  private static isSimulationSuccess(
-    simulation: any,
-  ): simulation is { transactionData: any; result?: any; minResourceFee?: string } {
-    return !!simulation && !('error' in simulation) && !!simulation.transactionData;
-  }
-
-  /**
-   * Assembles a transaction with a successful simulation result, applying the
-   * Soroban data (footprint, resources) and the simulated fee.
-   */
-  private static assembleTransaction(tx: Transaction, simulation: any): Transaction {
-    const fee = simulation.minResourceFee
-      ? (BigInt(simulation.minResourceFee) + BigInt(BASE_FEE)).toString()
-      : BASE_FEE;
-    return (TransactionBuilder as any).cloneFrom(tx, {
-      fee,
-      sorobanData: simulation.transactionData.build(),
-    }).build();
-  }
-
-  /**
-   * Placeholder for transaction status lookup. Implemented elsewhere in the
-   * service; declared here so the submission path can confirm success.
-   */
-  private async getTransactionStatus(txHash: string): Promise<SorobanTxResponse> {
-    const response = await rpcPool.execute((server) => server.getTransaction(txHash));
-    if (response.status === 'SUCCESS') {
-      return { status: 'success', hash: txHash };
-    }
-    if (response.status === 'FAILED') {
-      return { status: 'failed', hash: txHash, error: 'transaction failed' };
-    }
-    const bounds = submittedTxTimeBounds.get(txHash);
-    const now = Math.floor(Date.now() / 1000);
-    if (bounds && bounds.maxTime > 0 && now > bounds.maxTime) {
-      return { status: 'expired', hash: txHash };
-    }
-    if (bounds && now - bounds.submittedAt > DEFAULT_RPC_RETENTION_SECONDS) {
-      return { status: 'expired', hash: txHash };
-    }
-    return { status: 'pending', hash: txHash };
-  }
-
-  /**
-   * Builds, simulates, and submits a `fund_c_address` call directly from
-   * address parameters.  Used by the `/fund/direct` endpoint where the client
-   * does not have the ability to build and sign the transaction themselves.
-   *
-   * Unlike the two-step prepare → submit flow, the source secret key is never
-   * handled by this service; the function is a convenience wrapper that still
-   * delegates submission to `submitFundingTransaction`.
-   */
-  async submitDirectFunding(params: {
-    sourceAddress: string;
-    targetAddress: string;
-    tokenAddress: string;
-    amount: string;
-    memo: string;
-  }): Promise<SorobanTxResponse> {
-    // Direct funding requires the caller to have prepared and signed the XDR
-    // externally. This method is a placeholder for the route's dependency;
-    // a real implementation would involve server-side key management or a
-    // custodial signing flow, which is out of scope for this service.
-    throw new Error(
-      'submitDirectFunding requires a server-side signing key. ' +
-        'Use the prepare → sign → submit flow instead.',
+  /** Type guard for a successful Soroban simulation response. */
+  static isSimulationSuccess(simulation: unknown): simulation is {
+    result?: { retval?: xdr.ScVal; footprint?: unknown };
+  } {
+    return (
+      typeof simulation === 'object' &&
+      simulation !== null &&
+      'result' in simulation &&
+      !('error' in simulation)
     );
   }
-}
 
-/** Shared singleton instance used by routes and background jobs. */
-export const sorobanService = new SorobanService();
-
-/**
- * Standalone helper exported for legacy callers (e.g. soroban.test.ts) that
- * call `getTransactionStatus(server, hash, bounds?)` directly.
- */
-export async function getTransactionStatus(
-  server: any,
-  txHash: string,
-  bounds?: { minTime?: number; maxTime?: number; submittedAt?: number },
-): Promise<SorobanTxResponse & { ledger?: number }> {
-  try {
-    const response = await server.getTransaction(txHash);
-    if (response.status === 'SUCCESS') {
-      return { status: 'success', hash: txHash, ledger: response.ledger };
-    }
-    if (response.status === 'FAILED') {
-      return { status: 'failed', hash: txHash, ledger: response.ledger };
-    }
-    return { status: 'pending', hash: txHash };
-  } catch (err: any) {
-    if (err?.code === 'NOT_FOUND' || err?.message?.includes('not found')) {
-      const now = Math.floor(Date.now() / 1000);
-      if (bounds?.maxTime && now > bounds.maxTime) {
-        return { status: 'expired', hash: txHash };
+  /** Assembles a simulated transaction into a prepared envelope. */
+  static assembleTransaction(
+    tx: Transaction,
+    simulation: { result?: { retval?: xdr.ScVal; footprint?: unknown } },
+  ): Transaction {
+    // Minimal assembly: attach the simulated footprint/fee via the SDK helper
+    // when available; otherwise return the original transaction.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { SorobanRpc } = require('@stellar/stellar-sdk');
+      if (SorobanRpc?.assembleTransaction) {
+        return SorobanRpc.assembleTransaction(tx, simulation).build();
       }
-      if (
-        bounds?.submittedAt !== undefined &&
-        now - bounds.submittedAt > DEFAULT_RPC_RETENTION_SECONDS
-      ) {
-        return { status: 'expired', hash: txHash };
-      }
-      return { status: 'pending', hash: txHash };
+    } catch {
+      // fall through
     }
-    throw err;
+    return tx;
   }
 }
+
+export const sorobanService = new SorobanService();

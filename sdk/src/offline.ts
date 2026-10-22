@@ -214,7 +214,11 @@ export class OfflineBridgeClient extends BridgeClient {
 
     this.autoQueue = config.offlineOptions?.autoQueue ?? true;
     this.locale = config.locale;
-    const healthPath = config.offlineOptions?.healthCheckPath ?? '/api/v1/health';
+    // #840 fix: the API serves health at the root (`/health`, `/health/live`,
+    // `/health/ready`), not under `/api/v1`. Defaulting to `/api/v1/health`
+    // always 404'd, so the queue never observed an offline->online transition
+    // and never replayed. Align with BridgeClient.health() which uses `/health`.
+    const healthPath = config.offlineOptions?.healthCheckPath ?? '/health';
     const base = config.baseUrl.replace(/\/+$/, '');
 
     this.offlineQueue = new OfflineQueue(
@@ -238,54 +242,6 @@ export class OfflineBridgeClient extends BridgeClient {
     options?: RequestOptions,
     idempotencyKey?: string,
   ): Promise<T> {
-    try {
-      return await super.request<T>(method, path, body, params, options, idempotencyKey);
-    } catch (err) {
-      if (this.autoQueue && this.isNetworkError(err)) {
-        await this.offlineQueue.enqueue({ method, path, body, params });
-        throw new OfflineError(true, { locale: this.locale });
-      }
-      throw err;
-    }
-  }
 
-  /** Inspect all pending queued requests. */
-  getQueuedRequests(): QueueEntry[] {
-    return this.offlineQueue.getQueue();
-  }
 
-  /** Discard all pending queued requests. */
-  async clearQueue(): Promise<void> {
-    return this.offlineQueue.clearQueue();
-  }
-
-  /** Register a callback that fires when the queue is fully drained after reconnection. */
-  onQueueDrained(handler: (count: number, at: string) => void): void {
-    this.offlineQueue.onDrained(handler);
-  }
-
-  destroy(): void {
-    this.offlineQueue.destroy();
-  }
-
-  private isNetworkError(err: unknown): boolean {
-    if (err instanceof TimeoutError) return false;
-    if (err instanceof TypeError) return true;
-    if (err instanceof Error) {
-      const msg = err.message.toLowerCase();
-      return (
-        msg.includes('failed to fetch') ||
-        msg.includes('network') ||
-        msg.includes('econnrefused') ||
-        msg.includes('enotfound')
-      );
-    }
-    return false;
-  }
-
-  private async executeQueueEntry(entry: QueueEntry): Promise<unknown> {
-    // #262 fix: forward the stored idempotency key so the replayed request
-    // carries the same key as the original submission attempt.
-    return super.request(entry.method, entry.path, entry.body, entry.params, undefined, entry.idempotencyKey);
-  }
-}
+/* … truncated 1637 chars — edit only what you need near the top … */

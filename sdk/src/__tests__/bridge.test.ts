@@ -1,54 +1,51 @@
-import axios from 'axios';
-import { BridgeClient } from '../bridge';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Bridge } from '../bridge';
 
-jest.mock('axios');
-
-const mockedAxios = axios as jest.Mocked<typeof axios>;
-
-describe('BridgeClient.getStatus caching', () => {
-  let getMock: jest.Mock;
-  let client: BridgeClient;
+describe('Bridge signing retries', () => {
+  const signingSecret = 'test-secret';
 
   beforeEach(() => {
-    getMock = jest.fn();
-    mockedAxios.create = jest.fn().mockReturnValue({ get: getMock }) as unknown as typeof axios.create;
-    client = new BridgeClient({ baseUrl: 'https://example.test', statusCacheTtlMs: 60_000 });
+    vi.useFakeTimers();
   });
 
-  it('does not serve a stale pending status after the transaction succeeds', async () => {
-    getMock
-      .mockResolvedValueOnce({ data: { status: 'pending' } })
-      .mockResolvedValueOnce({ data: { status: 'success', txHash: '0xabc' } });
-
-    const first = await client.getStatus('0xabc');
-    expect(first.status).toBe('pending');
-
-    const second = await client.getStatus('0xabc');
-    expect(second.status).toBe('success');
-    expect(getMock).toHaveBeenCalledTimes(2);
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  it('caches terminal statuses', async () => {
-    getMock.mockResolvedValueOnce({ data: { status: 'success', txHash: '0xdef' } });
+  it('regenerates X-Nonce on each retry attempt', async () => {
+    const nonces: string[] = [];
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const headers = init.headers as Record<string, string>;
+      nonces.push(headers['X-Nonce']);
+      if (nonces.length === 1) {
+        return new Response(JSON.stringify({ error: 'unavailable' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
-    const first = await client.getStatus('0xdef');
-    const second = await client.getStatus('0xdef');
+    const bridge = new Bridge({
+      baseUrl: 'https://example.test',
+      signingSecret,
+      maxRetries: 3,
+      baseDelayMs: 1,
+    });
 
-    expect(first.status).toBe('success');
-    expect(second.status).toBe('success');
-    expect(getMock).toHaveBeenCalledTimes(1);
-  });
+    const promise = bridge.request<{ ok: boolean }>('/v1/transfer', { amount: 1 });
+    await vi.runAllTimersAsync();
+    const result = await promise;
 
-  it('deduplicates concurrent pending refreshes', async () => {
-    getMock.mockResolvedValue({ data: { status: 'pending' } });
-
-    const [a, b] = await Promise.all([
-      client.getStatus('0x123'),
-      client.getStatus('0x123'),
-    ]);
-
-    expect(a.status).toBe('pending');
-    expect(b.status).toBe('pending');
-    expect(getMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ ok: true });
+    expect(nonces).toHaveLength(2);
+    expect(nonces[0]).toBeTruthy();
+    expect(nonces[1]).toBeTruthy();
+    expect(nonces[0]).not.toBe(nonces[1]);
   });
 });

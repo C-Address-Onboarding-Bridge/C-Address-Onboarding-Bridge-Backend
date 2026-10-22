@@ -24,6 +24,7 @@ vi.mock('../index', () => ({
 
 vi.mock('../jobs/queue', () => ({
   enqueueWebhookRetry: vi.fn().mockResolvedValue(undefined),
+  WEBHOOK_RETRY_DELAYS_MS: [10_000, 60_000, 300_000],
   enqueueAuditLog: vi.fn().mockResolvedValue(undefined),
 }));
 
