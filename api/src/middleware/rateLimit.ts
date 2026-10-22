@@ -215,6 +215,35 @@ export function applyRateLimitHeaders(
 }
 
 /**
+ * Express middleware wrapper around {@link applyRateLimitHeaders}.
+ *
+ * `applyRateLimitHeaders` takes `(res, limit, remaining, resetMs)` and is a
+ * plain helper, not middleware. Mounting it directly with `app.use` made
+ * Express treat it as a four-argument error handler, so it never ran on normal
+ * requests and threw `res.set is not a function` when an error propagated.
+ *
+ * This wrapper has the real `(req, res, next)` signature and only sets the
+ * headers when the limiter has recorded values on the response. The
+ * `X-RateLimit-*` headers are already emitted by `express-rate-limit`
+ * (`standardHeaders: true`), so this is a no-op unless values are present.
+ */
+export function rateLimitHeadersMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const limit = Number(res.getHeader('X-RateLimit-Limit'));
+  const remaining = Number(res.getHeader('X-RateLimit-Remaining'));
+  const reset = Number(res.getHeader('X-RateLimit-Reset'));
+
+  if (Number.isFinite(limit) && Number.isFinite(remaining) && Number.isFinite(reset)) {
+    applyRateLimitHeaders(res, limit, remaining, reset * 1000);
+  }
+
+  next();
+}
+
+/**
  * Track request cost for an API key. Returns false when the cost limit is
  * exceeded (and fires an abuse alert).
  */

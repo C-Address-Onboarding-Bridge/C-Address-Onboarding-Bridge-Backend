@@ -127,7 +127,7 @@ resource "aws_cloudfront_cache_policy" "api_dynamic" {
     headers_config {
       header_behavior = "whitelist"
       headers {
-        items = ["Accept", "Authorization"]
+        items = ["Accept", "X-Api-Key"]
       }
     }
     query_strings_config {

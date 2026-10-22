@@ -1,86 +1,105 @@
 import { Request, Response, NextFunction } from 'express';
-import crypto from 'crypto';
-import { logger } from '../logger';
-import { cacheGet, cacheSet } from '../services/cache';
+import { createHmac, timingSafeEqual } from 'crypto';
+
+const MAX_CLOCK_SKEW_SECONDS = 300;
 
 /**
- * Issue #673: Verify request signing headers (X-Timestamp, X-Nonce, X-Signature).
- * This middleware validates HMAC-SHA256 signatures on requests when signing is enabled.
+ * Serialize a query object into a stable, sorted `key=value&...` string.
+ * Mirrors the SDK's serialization so both sides compute the same payload.
  */
-
-const TIMESTAMP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-const NONCE_CACHE_TTL = 24 * 60 * 60; // 24 hours
-
-function constantTimeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+function serializeSortedQuery(query: Record<string, unknown> | undefined): string {
+  if (!query) {
+    return '';
   }
-  return result === 0;
+  const keys = Object.keys(query).sort();
+  const parts: string[] = [];
+  for (const key of keys) {
+    const value = query[key];
+    if (value === undefined || value === null) {
+      continue;
+    }
+    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+  }
+  return parts.join('&');
 }
 
-export function requestSigningMiddleware(req: Request, res: Response, next: NextFunction): void {
-  // Skip if no signing headers present
-  const timestamp = req.headers['x-timestamp'] as string;
-  const nonce = req.headers['x-nonce'] as string;
-  const signature = req.headers['x-signature'] as string;
+/**
+ * Build the canonical signing payload. Must stay in sync with the SDK's
+ * `buildSigningPayload` in sdk/src/bridge.ts.
+ */
+export function buildSigningPayload(
+  method: string,
+  path: string,
+  query: Record<string, unknown> | undefined,
+  bodyStr: string,
+  timestamp: string,
+  nonce: string
+): string {
+  const sortedQuery = serializeSortedQuery(query);
+  return `${method.toUpperCase()}.${path}.${sortedQuery}.${bodyStr}.${timestamp}.${nonce}`;
+}
 
-  if (!timestamp || !nonce || !signature) {
-    // Signing is optional per-request; just continue
-    next();
+export function requestSigningMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const signature = req.header('X-Signature');
+  const timestamp = req.header('X-Timestamp');
+  const nonce = req.header('X-Nonce');
+
+  if (!signature || !timestamp || !nonce) {
+    res.status(401).json({ error: 'missing_signature' });
     return;
   }
 
-  // Verify timestamp freshness
-  const timestampMs = parseInt(timestamp, 10);
-  if (isNaN(timestampMs)) {
-    return res.status(400).json({ error: 'invalid_timestamp' });
+  const now = Math.floor(Date.now() / 1000);
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(now - ts) > MAX_CLOCK_SKEW_SECONDS) {
+    res.status(401).json({ error: 'invalid_timestamp' });
+    return;
   }
 
-  const now = Date.now();
-  if (Math.abs(now - timestampMs) > TIMESTAMP_WINDOW_MS) {
-    return res.status(401).json({ error: 'stale_timestamp' });
+  const secret = process.env.REQUEST_SIGNING_SECRET;
+  if (!secret) {
+    res.status(500).json({ error: 'signing_not_configured' });
+    return;
   }
 
-  // Verify nonce hasn't been replayed
-  const nonceKey = `nonce:${nonce}`;
-  cacheGet(nonceKey)
-    .then((cached) => {
-      if (cached) {
-        return res.status(401).json({ error: 'replay_nonce' });
-      }
+  // Canonical body: empty string for bodiless requests (e.g. GETs), matching
+  // the SDK. express.json() sets req.body = {} on bodiless requests, so we
+  // must not stringify that into "{}".
+  const hasBody =
+    req.body !== undefined &&
+    req.body !== null &&
+    !(typeof req.body === 'object' && Object.keys(req.body).length === 0);
+  const bodyStr = hasBody
+    ? typeof req.body === 'string'
+      ? req.body
+      : JSON.stringify(req.body)
+    : '';
 
-      // Store nonce to prevent replay
-      cacheSet(nonceKey, 'used', NONCE_CACHE_TTL).catch(() => {
-        logger.warn('Failed to cache nonce for replay detection', { nonce });
-      });
+  const path = req.path;
+  const payload = buildSigningPayload(
+    req.method,
+    path,
+    req.query as Record<string, unknown>,
+    bodyStr,
+    timestamp,
+    nonce
+  );
 
-      // Verify signature
-      const apiKey = req.headers['x-api-key'] as string;
-      if (!apiKey) {
-        return res.status(401).json({ error: 'missing_api_key' });
-      }
+  const expected = createHmac('sha256', secret).update(payload).digest('hex');
 
-      // Reconstruct the signed payload: body.timestamp.nonce
-      const bodyStr = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
-      const payload = `${bodyStr}.${timestamp}.${nonce}`;
+  const expectedBuf = Buffer.from(expected, 'hex');
+  const providedBuf = Buffer.from(signature, 'hex');
+  if (
+    expectedBuf.length !== providedBuf.length ||
+    !timingSafeEqual(expectedBuf, providedBuf)
+  ) {
+    res.status(401).json({ error: 'invalid_signature' });
+    return;
+  }
 
-      // Issue #673: Derive HMAC key from signing secret (not the API key itself)
-      // For now, use apiKey as placeholder; in production use a separate signing_secret
-      const expectedSig = crypto.createHmac('sha256', apiKey).update(payload).digest('hex');
-      const sigFormat = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-
-      if (!constantTimeCompare(expectedSig, sigFormat)) {
-        logger.warn('Invalid request signature', { apiKey: apiKey.slice(0, 8) + '...' });
-        return res.status(401).json({ error: 'invalid_signature' });
-      }
-
-      next();
-    })
-    .catch((err) => {
-      logger.warn('Error verifying request signature', { error: err instanceof Error ? err.message : String(err) });
-      // Don't fail the request if we can't verify the signature due to cache issues
-      next();
-    });
+  next();
 }

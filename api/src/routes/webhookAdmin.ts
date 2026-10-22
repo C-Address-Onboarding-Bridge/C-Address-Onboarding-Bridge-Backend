@@ -1,10 +1,9 @@
-import { Router, Request, Response } from 'express';
-import { randomUUID } from 'crypto';
+import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { requireScopes } from '../middleware/rbacAuth';
 import { webhookDeliveryService } from '../services/webhookDelivery';
+import { requireScopes } from '../middleware/rbacAuth';
 
-const router = Router();
+export const webhookAdminRouter = Router();
 
 const BLOCKED_HOSTNAMES = new Set([
   'localhost',
@@ -62,21 +61,42 @@ const registerSchema = z.object({
   events: z.array(z.string().min(1)).min(1, 'at least one event required').default(['*']),
 });
 
-interface WebhookRegistration {
-  id: string;
-  url: string;
-  events: string[];
-  apiKeyId: string;
-  createdAt: string;
-  active: boolean;
-}
+// Register a webhook callback URL
+webhookAdminRouter.post('/register', requireScopes('admin:keys'), (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const apiKeyId = req.apiKeyRecord?.id ?? '';
+    const body = registerSchema.parse(req.body);
+    const registration = webhookDeliveryService.register({ ...body, apiKeyId });
+    res.status(201).json({
+      id: registration.id,
+      url: registration.url,
+      events: registration.events,
+      createdAt: registration.createdAt,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
-const registrations = new Map<string, WebhookRegistration>();
+// List registered webhooks for the current API key
+webhookAdminRouter.get('/registrations', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const apiKeyId = req.apiKeyRecord?.id ?? '';
+  const registrations = webhookDeliveryService.getRegistrationsByApiKeyId(apiKeyId).map((r) => ({
+    id: r.id,
+    url: r.url,
+    events: r.events,
+    createdAt: r.createdAt,
+  }));
+  res.json({ registrations });
+});
 
-router.post('/register', requireScopes('webhooks:write'), (req: Request, res: Response) => {
-  const parsed = registerSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'invalid_request', details: parsed.error.flatten() });
+// Delete a registration owned by the calling key
+webhookAdminRouter.delete('/registrations/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const apiKeyId = req.apiKeyRecord?.id ?? '';
+  const registration = webhookDeliveryService.getRegistration(req.params.id);
+  if (!registration || registration.apiKeyId !== apiKeyId) {
+    res.status(404).json({ error: 'not_found', message: 'registration not found' });
+    return;
   }
   const { url, events, secret } = parsed.data;
 
@@ -128,11 +148,8 @@ router.delete('/:id', requireScopes('webhooks:write'), (req: Request, res: Respo
 });
 
 // DLQ inspection — list failed deliveries for the calling key
-router.get('/dlq', requireScopes('webhooks:read'), (req: Request, res: Response) => {
-  const apiKeyId = req.apiKeyRecord?.id;
-  if (!apiKeyId) {
-    return res.status(401).json({ error: 'missing API key record' });
-  }
+webhookAdminRouter.get('/dlq', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const apiKeyId = req.apiKeyRecord?.id ?? '';
   const entries = webhookDeliveryService
     .getDLQ()
     .filter((e) => e.registration.apiKeyId === apiKeyId)
@@ -148,25 +165,20 @@ router.get('/dlq', requireScopes('webhooks:read'), (req: Request, res: Response)
 });
 
 // DLQ entry detail — full payload and attempt history
-router.get('/dlq/:id', requireScopes('webhooks:read'), (req: Request, res: Response) => {
-  const apiKeyId = req.apiKeyRecord?.id;
-  if (!apiKeyId) {
-    return res.status(401).json({ error: 'missing API key record' });
-  }
+webhookAdminRouter.get('/dlq/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const apiKeyId = req.apiKeyRecord?.id ?? '';
   const entry = webhookDeliveryService.getDLQEntry(req.params.id);
   if (!entry || entry.registration.apiKeyId !== apiKeyId) {
     res.status(404).json({ error: 'not_found', message: 'DLQ entry not found' });
     return;
   }
-  res.json({ entry });
+  const { secret: _secret, apiKeyId: _apiKeyId, ...safeRegistration } = entry.registration;
+  res.json({ ...entry, registration: safeRegistration });
 });
 
 // Remove a DLQ entry after manual inspection / resolution
-router.delete('/dlq/:id', requireScopes('webhooks:write'), (req: Request, res: Response) => {
-  const apiKeyId = req.apiKeyRecord?.id;
-  if (!apiKeyId) {
-    return res.status(401).json({ error: 'missing API key record' });
-  }
+webhookAdminRouter.delete('/dlq/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const apiKeyId = req.apiKeyRecord?.id ?? '';
   const entry = webhookDeliveryService.getDLQEntry(req.params.id);
   if (!entry || entry.registration.apiKeyId !== apiKeyId) {
     res.status(404).json({ error: 'not_found', message: 'DLQ entry not found' });
@@ -176,19 +188,19 @@ router.delete('/dlq/:id', requireScopes('webhooks:write'), (req: Request, res: R
   res.json({ status: 'deleted' });
 });
 
+// Webhook health dashboard
+webhookAdminRouter.get('/stats', requireScopes('admin:keys'), (_req: Request, res: Response) => {
+  res.json(webhookDeliveryService.getStats());
+});
+
 // Delivery log — scoped to the calling key's registrations
-router.get('/log', requireScopes('webhooks:read'), (req: Request, res: Response) => {
-  const apiKeyId = req.apiKeyRecord?.id;
-  if (!apiKeyId) {
-    return res.status(401).json({ error: 'missing API key record' });
-  }
+webhookAdminRouter.get('/log', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const apiKeyId = req.apiKeyRecord?.id ?? '';
   const registrationIds = new Set(
-    webhookDeliveryService.getRegistrationsByApiKey(apiKeyId).map((r) => r.id),
+    webhookDeliveryService.getRegistrationsByApiKeyId(apiKeyId).map((r) => r.id),
   );
   const attempts = webhookDeliveryService
     .getDeliveryLog()
     .filter((a) => registrationIds.has(a.registrationId));
   res.json({ attempts });
 });
-
-export { router as webhookAdminRouter, registrations as webhookRegistrations };
