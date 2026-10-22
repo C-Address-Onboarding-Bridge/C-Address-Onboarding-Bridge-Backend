@@ -10,7 +10,9 @@
 set -euo pipefail
 
 # ── defaults ─────────────────────────────────────────────────────────────────
-NETWORK="${NETWORK:-testnet}"
+# NOTE: NETWORK is intentionally NOT defaulted here. It is resolved after the
+# ENVIRONMENT block so that ENVIRONMENT=production can default to mainnet.
+NETWORK="${NETWORK:-}"
 ENVIRONMENT="${ENVIRONMENT:-}"   # dev | staging | production (optional, sets env-specific defaults)
 DRY_RUN=false
 SKIP_BUILD=false
@@ -59,6 +61,17 @@ case "${ENVIRONMENT}" in
     exit 1
     ;;
 esac
+
+# ── resolve network default (after ENVIRONMENT block) ────────────────────────
+# Only default NETWORK here so production resolves to mainnet unless --network
+# (or NETWORK env) was explicitly given.
+NETWORK="${NETWORK:-testnet}"
+
+# Production must never deploy to a non-mainnet network.
+if [[ "${ENVIRONMENT}" == "production" && "$NETWORK" != "mainnet" ]]; then
+  echo "ERROR: ENVIRONMENT=production requires network 'mainnet', got '$NETWORK'." >&2
+  exit 1
+fi
 
 # ── network config ───────────────────────────────────────────────────────────
 case "$NETWORK" in

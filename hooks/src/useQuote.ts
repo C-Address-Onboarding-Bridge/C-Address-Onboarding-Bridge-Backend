@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BridgeClientConfig, Quote, QuoteParams } from '@c-address-bridge/sdk';
-import { useCAddressBridge } from './useCAddressBridge';
+import { useCAddressBridge } from './useCAddressBridge.js';
 
 export interface UseQuoteOptions {
   /** When false, the quote is not fetched. Defaults to true. */
@@ -8,10 +8,11 @@ export interface UseQuoteOptions {
 }
 
 export interface UseQuoteResult {
+  /** The quote for the current `params`; reset to `undefined` when `params` change. */
   data: Quote | undefined;
   error: Error | undefined;
   loading: boolean;
-  /** Re-runs the quote request, bypassing nothing but re-triggering the fetch effect. */
+  /** Re-runs the quote request, bypassing the SDK's quote cache. */
   refetch: () => void;
 }
 
@@ -32,6 +33,17 @@ export function useQuote(
   const [refetchToken, setRefetchToken] = useState(0);
 
   const paramsKey = params ? JSON.stringify(params) : undefined;
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
+
+  // Drop the previous quote as soon as params change so it is never shown
+  // against an amount/asset it was not calculated for.
+  const [dataParamsKey, setDataParamsKey] = useState(paramsKey);
+  if (dataParamsKey !== paramsKey) {
+    setDataParamsKey(paramsKey);
+    setData(undefined);
+    setError(undefined);
+  }
 
   useEffect(() => {
     if (!enabled || !params) {
@@ -61,7 +73,10 @@ export function useQuote(
     };
   }, [client, paramsKey, enabled, refetchToken]);
 
-  const refetch = useCallback(() => setRefetchToken((n) => n + 1), []);
+  const refetch = useCallback(() => {
+    if (paramsRef.current) client.invalidateQuoteCache(paramsRef.current);
+    setRefetchToken((n) => n + 1);
+  }, [client]);
 
   return { data, error, loading, refetch };
 }
