@@ -14,11 +14,11 @@ import type {
 } from '../types.js';
 
 /** Valid 56-char Stellar C-address (Soroban contract) for use in tests. */
-export const MOCK_C_ADDRESS = 'CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTU';
+export const MOCK_C_ADDRESS = 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
 /** Valid 56-char Stellar G-address (classic account) for use in tests. */
-export const MOCK_G_ADDRESS = 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTU';
+export const MOCK_G_ADDRESS = 'GABAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEJXA';
 /** Valid 56-char token contract address for use in tests. */
-export const MOCK_TOKEN_ADDRESS = 'CATOKEN7ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMN';
+export const MOCK_TOKEN_ADDRESS = 'CABQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGCK3';
 /** Deterministic mock transaction hash for use in test assertions. */
 export const MOCK_TX_HASH = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
 
@@ -49,7 +49,7 @@ export const MOCK_TOKEN_METADATA: TokenMetadata = {
   decimals: 6,
   name: 'USD Coin',
   symbol: 'USDC',
-  issuer: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTU',
+  issuer: MOCK_G_ADDRESS,
 };
 
 /**
@@ -90,9 +90,14 @@ export const fixtures = {
 
   fundingPrepareResult(overrides?: Partial<FundingPrepareResult>): FundingPrepareResult {
     return {
-      instruction: 'sign-and-submit',
-      simulation: { status: 'success', fee: '100' },
-      params: { ...MOCK_FUND_PARAMS },
+      unsignedXdr: 'AAAAAgAAAAB...mock-unsigned-xdr...',
+      footprint: 'AAAAAgAAAAB...mock-footprint...',
+      fee: '100',
+      sourceAddress: MOCK_FUND_PARAMS.sourceAddress,
+      targetAddress: MOCK_FUND_PARAMS.targetAddress,
+      tokenAddress: MOCK_FUND_PARAMS.tokenAddress,
+      amount: MOCK_FUND_PARAMS.amount,
+      memo: MOCK_FUND_PARAMS.memo,
       ...overrides,
     };
   },
@@ -136,7 +141,7 @@ export const fixtures = {
       decimals: 6,
       name: 'USD Coin',
       symbol: 'USDC',
-      issuer: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTU',
+      issuer: MOCK_G_ADDRESS,
       ...overrides,
     };
   },

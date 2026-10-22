@@ -6,6 +6,7 @@ import {
   EventEmitterOptions,
   TransactionStatus,
 } from './types.js';
+import { unrefTimer } from './utils.js';
 
 type StatusFetcher = (txHash: string) => Promise<TransactionStatus>;
 type HealthChecker = () => Promise<boolean>;
@@ -154,7 +155,10 @@ export class BridgeEventEmitter {
     }
     this.watchTimers.clear();
     this.statusCache.clear();
-    if (this.healthTimer !== undefined) clearInterval(this.healthTimer);
+    if (this.healthTimer !== undefined) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = undefined;
+    }
     this.handlers.clear();
     this.history.length = 0;
   }
@@ -184,6 +188,7 @@ export class BridgeEventEmitter {
         }
       }
     }, this.healthCheckIntervalMs);
+    unrefTimer(this.healthTimer);
   }
 
   private emit<K extends BridgeEventType>(
