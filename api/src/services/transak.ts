@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { getCircuitBreaker } from '../circuit-breaker';
 
 interface TransakWidgetParams {
   apiKey: string;
@@ -83,14 +84,18 @@ export class TransakService {
       network: 'stellar',
     });
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    let res: Response;
-    try {
-      res = await fetch(`${url}?${query.toString()}`, { signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
-    }
+    // Network errors and 5xx responses count towards the breaker; 4xx do not.
+    const res = await getCircuitBreaker('transak').execute(async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      try {
+        const response = await fetch(`${url}?${query.toString()}`, { signal: controller.signal });
+        if (response.status >= 500) throw new Error(`transak quote failed: ${response.statusText}`);
+        return response;
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
 
     if (!res.ok) throw new Error(`transak quote failed: ${res.statusText}`);
 

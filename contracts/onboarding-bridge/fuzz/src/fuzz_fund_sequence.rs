@@ -8,14 +8,10 @@
 ///   4. unique_funder_count is monotonically non-decreasing
 
 use onboarding_bridge::OnboardingBridgeClient;
-<<<<<<< Updated upstream
-use soroban_sdk::{testutils::Address as _, token, Address, Env, String};
-=======
-use soroban_sdk::{testutils::Address as _, Address, Env, String, Vec};
+use soroban_sdk::{testutils::Address as _, token, Address, Env, String, Vec};
 
 mod test_token;
 use test_token::TestToken;
->>>>>>> Stashed changes
 
 struct Lcg(u64);
 
@@ -67,9 +63,8 @@ fn run_iteration(rng: &mut Lcg) {
     let bridge = OnboardingBridgeClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-<<<<<<< Updated upstream
-    let mut admins = soroban_sdk::Vec::new(&env);
-    admins.push_back(admin);
+    let mut admins: Vec<Address> = Vec::new(&env);
+    admins.push_back(admin.clone());
 
     let fee_bps = rng.next_u32_bounded(10000);
     let max_fee_bps = fee_bps.saturating_add(rng.next_u32_bounded(10000 - fee_bps));
@@ -82,16 +77,10 @@ fn run_iteration(rng: &mut Lcg) {
         &1i128,  // min_amount
         &1_000_000_000i128,  // max_amount
     );
-=======
-    let mut admins: Vec<Address> = Vec::new(&env);
-    admins.push_back(admin.clone());
-    bridge.initialize(&admins, &1, &100, &10000, &1, &i128::MAX);
->>>>>>> Stashed changes
 
     let source = Address::generate(&env);
     let exchange = Address::generate(&env);
     let target = Address::generate(&env);
-<<<<<<< Updated upstream
 
     // Register a real token contract and mint the source account so the
     // contract's token transfer during fund_c_address succeeds. Previously
@@ -102,8 +91,6 @@ fn run_iteration(rng: &mut Lcg) {
     let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
     let token_address = token_id.address();
     let token_client = token::StellarAssetClient::new(&env, &token_address);
-=======
->>>>>>> Stashed changes
 
     let token = setup_token(&env, &source, 1_000_000_000);
     let _ = setup_token(&env, &exchange, 1_000_000_000);
@@ -114,15 +101,6 @@ fn run_iteration(rng: &mut Lcg) {
     let mut expected_count: u32 = 0;
     let mut seen_funders: std::collections::HashSet<std::string::String> = std::collections::HashSet::new();
 
-<<<<<<< Updated upstream
-    for _ in 0..n_calls {
-        let amount = rng.next_i128_bounded(max_amount) + 1; // at least 1
-        // Fund the source account with enough balance for this transfer.
-        token_client.mint(&source, &amount);
-        let memo = String::from_str(&env, "fuzz");
-        let fee = bridge.fund_c_address(&source, &target, &token_address, &amount, &memo);
-        expected_fees += fee;
-=======
     let n_ops = rng.next_usize_bounded(19) + 1;
 
     for _ in 0..n_ops {
@@ -132,7 +110,9 @@ fn run_iteration(rng: &mut Lcg) {
         match op {
             Op::Fund => {
                 let amount = rng.next_i128_bounded(max_amount) + 1;
-                let fee = bridge.fund_c_address(&source, &target, &token, &amount, &memo);
+                // Fund the source account with enough balance for this transfer.
+                token_client.mint(&source, &amount);
+                let fee = bridge.fund_c_address(&source, &target, &token_address, &amount, &memo);
                 expected_fees += fee;
                 expected_volume += amount;
                 expected_count += 1;
@@ -147,7 +127,7 @@ fn run_iteration(rng: &mut Lcg) {
 
                 for _ in 0..batch_size {
                     targets.push_back(Address::generate(&env));
-                    tokens.push_back(token.clone());
+                    tokens.push_back(token_address.clone());
                     amounts.push_back(rng.next_i128_bounded(max_amount) + 1);
                     memos.push_back(String::from_str(&env, "batch"));
                 }
@@ -166,7 +146,7 @@ fn run_iteration(rng: &mut Lcg) {
             }
             Op::RouteFromExchange => {
                 let amount = rng.next_i128_bounded(max_amount) + 1;
-                let fee = bridge.route_from_exchange(&exchange, &target, &token, &amount, &memo);
+                let fee = bridge.route_from_exchange(&exchange, &target, &token_address, &amount, &memo);
                 expected_fees += fee;
                 expected_volume += amount;
                 expected_count += 1;
@@ -199,7 +179,6 @@ fn run_iteration(rng: &mut Lcg) {
             stats.unique_funder_count,
             seen_funders.len()
         );
->>>>>>> Stashed changes
     }
 
     let final_stats = bridge.get_stats();
@@ -228,5 +207,5 @@ fn main() {
         }
     }
 
-    println!("fuzz_fund_sequence: all {iterations} iterations passed.");
+    println!("fuzz_fund_sequence: all {} iterations passed", iterations);
 }

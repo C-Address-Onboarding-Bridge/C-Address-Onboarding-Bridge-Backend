@@ -4,7 +4,6 @@ import { config } from '../config';
 import { closeQueues } from './queue';
 import { processCacheWarmup } from './processors/cacheWarmup';
 import { processMetrics } from './processors/metrics';
-import { processCleanup } from './processors/cleanup';
 import { processAuditLog } from './processors/asyncAuditLog';
 import { processAsyncPipeline } from './processors/asyncPipeline';
 import { processWebhookRetry } from './processors/webhookRetry';
@@ -31,7 +30,6 @@ export function startWorkers(): Worker[] {
   workers.push(
     new Worker('cache-warmup', processCacheWarmup, makeWorkerOptions(2)),
     new Worker('metrics-compute', processMetrics, makeWorkerOptions(1)),
-    new Worker('cleanup', processCleanup, makeWorkerOptions(1)),
     new Worker('async-critical', processAuditLog, makeWorkerOptions(5)),
     new Worker('async-pipeline', processAsyncPipeline, makeWorkerOptions(10)),
     new Worker('webhook-retry', processWebhookRetry, makeWorkerOptions(3)),

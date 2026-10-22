@@ -163,7 +163,7 @@ function isValidStellarAddress(addr: string): boolean {
 
 // ── Rule implementations ──────────────────────────────────────────────────────
 
-function checkSize(xdrString: string, maxByteLength: number): void {
+export function checkSize(xdrString: string, maxByteLength: number = MAX_XDR_BYTE_LENGTH): void {
   // Buffer.byteLength on a base64 string gives the decoded size ×0.75, but we
   // want to bound the raw string length too — a 64 KB base64 string decodes to
   // ~48 KB of binary, which is already far beyond any legitimate transaction.
@@ -197,6 +197,13 @@ function decodeBase64(xdrString: string): Buffer {
  * fee-bump envelopes — making the `instanceof FeeBumpTransaction` branch dead
  * code and rejecting every fee-bump transaction with `XDR_PARSE_FAILED`.
  *
+ * `TransactionBuilder.fromXDR` accepts a base64 string or a decoded
+ * `xdr.TransactionEnvelope` — NOT a raw `Buffer`. Passing a Buffer makes the
+ * SDK treat it as an envelope object and fail with
+ * `envelope.switch is not a function`, rejecting every XDR as
+ * `XDR_PARSE_FAILED`. We therefore decode the buffer into an
+ * `xdr.TransactionEnvelope` and hand that to the builder.
+ *
  * For fee bumps we validate the fee source address and unwrap the inner
  * transaction so the remaining rules run against the transaction that actually
  * carries the operations.
@@ -207,7 +214,8 @@ function parseEnvelope(
 ): Transaction {
   let parsed: Transaction | FeeBumpTransaction;
   try {
-    parsed = TransactionBuilder.fromXDR(rawBuf, networkPassphrase);
+    const envelope = xdr.TransactionEnvelope.fromXDR(rawBuf);
+    parsed = TransactionBuilder.fromXDR(envelope, networkPassphrase);
   } catch (err) {
     throw new XdrValidationError(
       'XDR_PARSE_FAILED',
