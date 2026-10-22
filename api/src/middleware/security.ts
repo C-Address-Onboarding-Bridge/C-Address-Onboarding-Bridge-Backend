@@ -90,10 +90,6 @@ function hasParameterPollution(query: Record<string, unknown>): boolean {
   });
 }
 
-function sanitizeErrorMessage(msg: string): string {
-  return msg.replace(/<[^>]*>/g, '').replace(/javascript:/gi, '').replace(/on\w+=/gi, '');
-}
-
 export function contentTypeEnforcement(req: Request, res: Response, next: NextFunction): void {
   // Only methods that carry a body are worth gating. GET/HEAD/DELETE/OPTIONS
   // are allowed through even when a client sends a stray Content-Type.
@@ -223,26 +219,42 @@ export function injectionProtection(req: Request, res: Response, next: NextFunct
       }
 
       for (const [key, value] of Object.entries(objMap)) {
-        const fieldPath = path ? `${path}.${key}` : key;
-        const isFreetextCheckField = isInFreetextField || isFreetextField(fieldPath);
-        const isEncodedCheckField = isInEncodedField || isEncodedField(fieldPath);
-        const result = checkForInjection(value, fieldPath, isFreetextCheckField, isEncodedCheckField);
+        const childPath = path ? `${path}.${key}` : key;
+        const result = checkForInjection(
+          value,
+          childPath,
+          isInFreetextField || isFreetextField(childPath),
+          isInEncodedField || isEncodedField(childPath),
+        );
         if (result) return result;
       }
-      return null;
     }
 
     return null;
   }
 
-  const injectionResult = checkForInjection(req.body) ?? checkForInjection(req.query) ?? checkForInjection(req.params);
+  const sources: Array<{ name: string; data: unknown }> = [
+    { name: 'body', data: req.body },
+    { name: 'query', data: req.query },
+    { name: 'params', data: req.params },
+  ];
 
-  if (injectionResult) {
-    res.status(400).json({
-      error: 'invalid_input',
-      message: `field '${injectionResult.field}' contains disallowed patterns`,
-    });
-    return;
+  for (const source of sources) {
+    if (!source.data) continue;
+    const result = checkForInjection(source.data, source.name);
+    if (result) {
+      logger.warn(
+        { ip: req.ip, path: req.path, method: req.method, field: result.field, source: source.name },
+        'rejected request with suspicious input pattern',
+      );
+      // Mark the request so suspiciousRateLimiting can count it (#620).
+      (req as Request & { suspicious?: boolean }).suspicious = true;
+      res.status(400).json({
+        error: 'invalid_input',
+        message: 'Request contains potentially malicious input',
+      });
+      return;
+    }
   }
 
   next();
@@ -250,26 +262,104 @@ export function injectionProtection(req: Request, res: Response, next: NextFunct
 
 export function parameterPollutionProtection(req: Request, res: Response, next: NextFunction): void {
   if (hasParameterPollution(req.query as Record<string, unknown>)) {
-    res.status(400).json({ error: 'invalid_input', message: 'duplicate or nested query parameters detected' });
+    logger.warn(
+      { ip: req.ip, path: req.path, method: req.method },
+      'rejected request with parameter pollution',
+    );
+    (req as Request & { suspicious?: boolean }).suspicious = true;
+    res.status(400).json({
+      error: 'invalid_input',
+      message: 'Request contains invalid query parameters',
+    });
     return;
   }
+
   next();
 }
 
-const suspiciousIpCounts = new Map<string, { count: number; windowStart: number }>();
-const SUSPICIOUS_WINDOW_MS = 60_000;
-const SUSPICIOUS_THRESHOLD = 10;
+/**
+ * Composes the input-screening guards into a single middleware so index.ts
+ * can mount them with one `app.use`. Order matters: cheap size check first,
+ * then query-shape validation, then the pattern scan over body/query/params.
+ */
+export function securityMiddleware(req: Request, res: Response, next: NextFunction): void {
+  requestSizeLimiting(req, res, (err?: unknown) => {
+    if (err) {
+      next(err);
+      return;
+    }
+    if (res.headersSent) return;
+    parameterPollutionProtection(req, res, (err2?: unknown) => {
+      if (err2) {
+        next(err2);
+        return;
+      }
+      if (res.headersSent) return;
+      injectionProtection(req, res, next);
+    });
+  });
+}
+
+interface SuspiciousBucket {
+  count: number;
+  resetAt: number;
+}
+
+const SUSPICIOUS_WINDOW_MS = 60 * 1000;
+const SUSPICIOUS_MAX_PER_WINDOW = 10;
+const suspiciousBuckets = new Map<string, SuspiciousBucket>();
 
 /**
- * Track suspicious request counts per IP within a rolling window.
+ * Throttles IPs that repeatedly trip a detector (#620). Only requests that
+ * were flagged by injectionProtection/parameterPollutionProtection are
+ * counted; clean traffic is never penalised. Mounted before
+ * securityMiddleware so an already-throttled IP is rejected up front.
  */
-export function trackSuspiciousRequest(ip: string): boolean {
+export function suspiciousRateLimiting(req: Request, res: Response, next: NextFunction): void {
+  const key = req.ip ?? 'unknown';
   const now = Date.now();
-  const entry = suspiciousIpCounts.get(ip);
-  if (!entry || now - entry.windowStart > SUSPICIOUS_WINDOW_MS) {
-    suspiciousIpCounts.set(ip, { count: 1, windowStart: now });
-    return false;
+  const bucket = suspiciousBuckets.get(key);
+
+  if (bucket && bucket.resetAt > now && bucket.count >= SUSPICIOUS_MAX_PER_WINDOW) {
+    logger.warn({ ip: key, path: req.path, method: req.method }, 'throttled suspicious IP');
+    res.status(429).json({
+      error: 'too_many_requests',
+      message: 'Too many suspicious requests, please slow down',
+    });
+    return;
   }
-  entry.count += 1;
-  return entry.count >= SUSPICIOUS_THRESHOLD;
+
+  // Record the outcome after downstream handlers have run so we only count
+  // requests that actually tripped a detector.
+  res.on('finish', () => {
+    if (!(req as Request & { suspicious?: boolean }).suspicious) return;
+    const current = suspiciousBuckets.get(key);
+    if (!current || current.resetAt <= now) {
+      suspiciousBuckets.set(key, { count: 1, resetAt: now + SUSPICIOUS_WINDOW_MS });
+    } else {
+      current.count += 1;
+    }
+  });
+
+  next();
+}
+
+/**
+ * Strips HTML/script fragments from error messages before they are sent to
+ * clients, so reflected input cannot execute in a browser.
+ */
+export function xssErrorSanitizer(err: unknown, req: Request, res: Response, next: NextFunction): void {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : 'Internal server error';
+  const sanitized = message
+    .replace(/<[^>]*>/g, '')
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+\s*=/gi, '');
+
+  logger.error({ err, ip: req.ip, path: req.path, method: req.method }, 'request failed');
+  res.status(500).json({ error: 'internal_error', message: sanitized });
 }

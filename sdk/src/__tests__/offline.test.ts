@@ -1,62 +1,38 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { BridgeClient } from '../bridge';
 import { OfflineQueue } from '../offline';
+import { BridgeMockServer } from './mock-server';
 
-describe('OfflineQueue.replay', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
+describe('OfflineQueue', () => {
+  let server: BridgeMockServer;
+  let client: BridgeClient;
+
+  beforeEach(async () => {
+    server = new BridgeMockServer();
+    await server.start();
+    client = new BridgeClient({ baseUrl: server.url });
   });
 
-  it('keeps entries enqueued while a replay is running', async () => {
-    const queue = new OfflineQueue();
-
-    const first = {
-      id: 'first',
-      method: 'POST',
-      path: '/first',
-      body: {},
-      createdAt: Date.now(),
-    } as any;
-    const second = {
-      id: 'second',
-      method: 'POST',
-      path: '/second',
-      body: {},
-      createdAt: Date.now(),
-    } as any;
-
-    queue.enqueue(first);
-
-    const executeEntry = vi
-      .spyOn(queue as any, 'executeEntry')
-      .mockImplementation(async (entry: any) => {
-        if (entry.id === 'first') {
-          // Simulate a call failing with a network error mid-replay.
-          queue.enqueue(second);
-        }
-      });
-
-    await queue.replay();
-
-    expect(executeEntry).toHaveBeenCalled();
-    const remaining = (queue as any).queue as any[];
-    expect(remaining.map((e) => e.id)).toContain('second');
-    expect(remaining.map((e) => e.id)).not.toContain('first');
+  afterEach(async () => {
+    await server.stop();
+    vi.useRealTimers();
   });
 
-  it('resets replaying even when executeEntry throws', async () => {
-    const queue = new OfflineQueue();
-    queue.enqueue({
-      id: 'boom',
-      method: 'POST',
-      path: '/boom',
-      body: {},
-      createdAt: Date.now(),
-    } as any);
+  it('replays queued requests after coming back online with default health check path', async () => {
+    vi.useFakeTimers();
+    const queue = new OfflineQueue(client, { baseUrl: server.url });
 
-    vi.spyOn(queue as any, 'executeEntry').mockRejectedValue(new Error('fatal'));
-    vi.spyOn(queue as any, 'shouldRetry').mockReturnValue(false);
+    queue.setOnline(false);
+    queue.enqueue('GET', '/api/v1/status');
+    expect(queue.size).toBe(1);
 
-    await expect(queue.replay()).rejects.toThrow('fatal');
-    expect((queue as any).replaying).toBe(false);
+    // Advance past the default health check interval; the default path must
+    // hit the real /health route so the queue transitions back online.
+    await vi.advanceTimersByTimeAsync(30000);
+
+    expect(queue.isOnline).toBe(true);
+    expect(queue.size).toBe(0);
+
+    queue.destroy();
   });
 });

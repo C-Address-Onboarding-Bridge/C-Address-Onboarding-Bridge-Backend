@@ -851,3 +851,34 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <!-- handsoff-issue-596 -->
 - #596: test(contract): fix and un-ignore test_full_scenario
+
+<!-- handsoff-issue-790 -->
+- #790: bug(contract): WithdrawFees with amount = 0 transfers the cross-token AccumulatedFees total in a single token
+
+<!-- handsoff-issue-792 -->
+- #792: bug(sdk): request() throws ServerError without importing it, so a non-JSON 2xx body becomes a ReferenceError and gets retried
+
+<!-- handsoff-issue-793 -->
+- #793: security(contract): fund_c_address still never calls source.require_auth() (#577 closed)
+<!-- handsoff-issue-799 -->
+- #799: bug(contract): batch_fund_c_address still ignores the paused flag (#579 closed)
+<!-- handsoff-issue-787 -->
+- #787: bug(contract): get_proposal reads proposals from instance storage, but they are written to persistent storage
+<!-- handsoff-issue-808 -->
+- #808: bug(contract): prune_proposals still requires admins[0] and stops behind the first active proposal (#594 closed)
+<!-- handsoff-issue-811 -->
+- #811: bug(contract): rebate tier and fee-token config entries are never TTL-extended after they are set
+<!-- handsoff-issue-784 -->
+- #784: bug(contract): onboarding-bridge no longer compiles — 35 errors from a half-finished #[contracterror] migration
+<!-- handsoff-issue-826 -->
+- #826: docs(contract): crate-level docs describe fee recipients, auto-withdraw and a single Admin key that don't exist (#233 closed)
+
+<!-- handsoff-issue-829 -->
+- #829: ci: Deploy Contract and deploy-contract.sh look for the WASM in a root target/ directory that the build never creates
+<!-- handsoff-issue-820 -->
+- #820: test(contract): test_full_scenario is still #[ignore]d (#596 closed)
+<!-- handsoff-issue-693 -->
+- #693: feat(contract): validate proposal parameters at propose() time
+
+<!-- handsoff-issue-694 -->
+- #694: feat(contract): get_stats returns mixed-unit totals — add per-token statistics

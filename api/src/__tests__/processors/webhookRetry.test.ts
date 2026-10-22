@@ -1,295 +1,116 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Job } from 'bullmq';
-import { processWebhookRetry } from '../../jobs/processors/webhookRetry';
+import type { WebhookRetryData } from '../../jobs/queue';
 
 process.env.NODE_ENV = 'test';
 
-// vi.mock() factories are hoisted above every other statement, so a plain
-// top-level const is still in its temporal dead zone when the factory runs
-// ("Cannot access 'mockWebhookDeliveryService' before initialization").
-// vi.hoisted() lifts the declaration alongside the mock.
-const { mockWebhookDeliveryService } = vi.hoisted(() => ({
-  mockWebhookDeliveryService: {
-    getRegistration: vi.fn(),
-  },
+const { enqueueWebhookRetry, query, getPool, logger } = vi.hoisted(() => {
+  const query = vi.fn().mockResolvedValue({ rows: [] });
+  return {
+    enqueueWebhookRetry: vi.fn().mockResolvedValue(undefined),
+    query,
+    getPool: vi.fn(() => ({ query })),
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  };
+});
+
+vi.mock('../../jobs/queue', () => ({
+  WEBHOOK_RETRY_DELAYS_MS: [10_000, 60_000, 300_000],
+  enqueueWebhookRetry,
 }));
+vi.mock('../../services/db', () => ({ getPool }));
+vi.mock('../../logger', () => ({ logger }));
 
-vi.mock('../../services/webhookDelivery', () => ({
-  webhookDeliveryService: mockWebhookDeliveryService,
-}));
+import { processWebhookRetry } from '../../jobs/processors/webhookRetry';
 
-vi.mock('../../index', () => ({
+function makeJob(overrides: Partial<WebhookRetryData> = {}): Job<WebhookRetryData> {
+  return {
+    id: 'webhook-retry-job-1',
+    data: {
+      registrationId: 'webhook-reg-123',
+      url: 'https://example.com/webhook',
+      event: 'funding.submitted',
+      timestamp: 1_700_000_000_000,
+      payload: JSON.stringify({ txId: 'tx-456' }),
+      signature: 'sig123',
+      data: { txId: 'tx-456' },
+      attemptNumber: 1,
+      ...overrides,
+    },
+  } as Job<WebhookRetryData>;
+}
 
-/**
- * TODO(next-bounty): the tests marked `.skip` in this file assert behaviour that
- * was never implemented -- mostly the intentional `throw new Error('Not implemented')` bodies seeded by commit d2a6c17 ("seed learning exercises") -- or was written against helpers and module paths that do not exist.
- * They are skipped -- not deleted, not rewritten to match the stub -- so the next
- * programme has an exact worklist: un-skip one, implement it, repeat.
- */
-  logger: {
-    warn: vi.fn(),
-    info: vi.fn(),
-    error: vi.fn(),
-  },
-}));
-
-describe('Webhook Retry Processor', () => {
-  let mockJob: Partial<Job>;
-  let mockLogger: any;
-
+describe('processWebhookRetry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     global.fetch = vi.fn();
-
-    mockJob = {
-      id: 'webhook-retry-job-1',
-      data: {
-        registrationId: 'webhook-reg-123',
-        event: 'transaction.created',
-        payload: JSON.stringify({ txId: 'tx-456', amount: '100' }),
-        signature: 'sha256hash123',
-        data: { txId: 'tx-456' },
-        attemptNumber: 0,
-      },
-    };
-
-    mockLogger = require('../../index').logger;
-    mockWebhookDeliveryService.getRegistration.mockReturnValue({
-      id: 'webhook-reg-123',
-      url: 'https://example.com/webhook',
-      active: true,
-    });
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  it('delivers using only the job data (no API-process registration lookup)', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: true, status: 200 });
 
-  it.skip('successfully delivers webhook on successful response', async () => {
-    const mockResponse = {
-      ok: true,
-      status: 200,
-    };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
+    await processWebhookRetry(makeJob());
 
-    await processWebhookRetry(mockJob as Job);
-
-    expect(global.fetch).toHaveBeenCalledWith('https://example.com/webhook', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Webhook-Signature': 'sha256=sha256hash123',
-        'X-Webhook-Event': 'transaction.created',
-        'X-Webhook-Attempt': '1',
-      },
-      body: mockJob.data?.payload,
-      signal: expect.any(AbortSignal),
-    });
-
-    expect(mockLogger.info).toHaveBeenCalledWith(
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://example.com/webhook',
       expect.objectContaining({
-        registrationId: 'webhook-reg-123',
-        event: 'transaction.created',
-        attempt: 1,
+        method: 'POST',
+        body: JSON.stringify({ txId: 'tx-456' }),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Webhook-Signature': 'sha256=sig123',
+          'X-Webhook-Timestamp': '1700000000000',
+          'X-Webhook-Event': 'funding.submitted',
+          'X-Webhook-Attempt': '2',
+        },
       }),
-      'webhook retry delivered successfully',
+    );
+    expect(enqueueWebhookRetry).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('re-enqueues the next attempt with the next delay on failure', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 500 });
+
+    await processWebhookRetry(makeJob({ attemptNumber: 1 }));
+
+    expect(enqueueWebhookRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ registrationId: 'webhook-reg-123', attemptNumber: 2 }),
+      60_000,
+    );
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('re-enqueues when fetch throws', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('ECONNRESET'));
+
+    await processWebhookRetry(makeJob({ attemptNumber: 2 }));
+
+    expect(enqueueWebhookRetry).toHaveBeenCalledWith(expect.objectContaining({ attemptNumber: 3 }), 300_000);
+  });
+
+  it('writes a DLQ entry after the last attempt instead of re-enqueueing', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 503 });
+
+    await processWebhookRetry(makeJob({ attemptNumber: 3 }));
+
+    expect(enqueueWebhookRetry).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO webhook_dlq'),
+      [expect.any(String), 'webhook-reg-123', 'funding.submitted', JSON.stringify({ txId: 'tx-456' }), expect.any(Number)],
     );
   });
 
-  it.skip('handles non-2xx response status', async () => {
-    const mockResponse = {
-      ok: false,
-      status: 500,
-    };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
+  it('logs an error when exhausted without a database', async () => {
+    getPool.mockReturnValueOnce(null as never);
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 503 });
 
-    await processWebhookRetry(mockJob as Job);
+    await processWebhookRetry(makeJob({ attemptNumber: 3 }));
 
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        registrationId: 'webhook-reg-123',
-        status: 500,
-        attempt: 1,
-      }),
-      'webhook retry delivery failed with non-2xx status',
+    expect(enqueueWebhookRetry).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ registrationId: 'webhook-reg-123', error: 'HTTP 503' }),
+      expect.stringContaining('DLQ entry not persisted'),
     );
-  });
-
-  it.skip('handles fetch timeout/abort', async () => {
-    const error = new Error('AbortError');
-    (global.fetch as any).mockRejectedValueOnce(error);
-
-    await processWebhookRetry(mockJob as Job);
-
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        registrationId: 'webhook-reg-123',
-        error: 'AbortError',
-        attempt: 1,
-      }),
-      'webhook retry delivery error',
-    );
-  });
-
-  it.skip('handles network errors', async () => {
-    const error = new Error('Network timeout');
-    (global.fetch as any).mockRejectedValueOnce(error);
-
-    await processWebhookRetry(mockJob as Job);
-
-    expect(mockLogger.warn).toHaveBeenCalled();
-  });
-
-  it.skip('logs to error level when max retries exhausted', async () => {
-    mockJob.data = {
-      ...mockJob.data,
-      attemptNumber: 2, // 3rd attempt (0-indexed)
-    };
-
-    const mockResponse = {
-      ok: false,
-      status: 500,
-    };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
-
-    await processWebhookRetry(mockJob as Job);
-
-    expect(mockLogger.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        registrationId: 'webhook-reg-123',
-        event: 'transaction.created',
-        attempt: 3,
-      }),
-      'webhook retry exhausted, moving to DLQ',
-    );
-  });
-
-  it.skip('abandons retry when registration not found', async () => {
-    mockWebhookDeliveryService.getRegistration.mockReturnValueOnce(null);
-
-    await processWebhookRetry(mockJob as Job);
-
-    expect(global.fetch).not.toHaveBeenCalled();
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        registrationId: 'webhook-reg-123',
-        event: 'transaction.created',
-      }),
-      'webhook registration not found, abandoning retry',
-    );
-  });
-
-  it.skip('includes attempt number in headers', async () => {
-    mockJob.data = {
-      ...mockJob.data,
-      attemptNumber: 2,
-    };
-
-    const mockResponse = { ok: true, status: 200 };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
-
-    await processWebhookRetry(mockJob as Job);
-
-    const callArgs = (global.fetch as any).mock.calls[0];
-    expect(callArgs[1].headers['X-Webhook-Attempt']).toBe('3'); // attemptNumber + 1
-  });
-
-  it.skip('includes event name in headers', async () => {
-    mockJob.data = {
-      ...mockJob.data,
-      event: 'payment.processed',
-    };
-
-    const mockResponse = { ok: true, status: 200 };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
-
-    await processWebhookRetry(mockJob as Job);
-
-    const callArgs = (global.fetch as any).mock.calls[0];
-    expect(callArgs[1].headers['X-Webhook-Event']).toBe('payment.processed');
-  });
-
-  it.skip('includes signature in headers', async () => {
-    mockJob.data = {
-      ...mockJob.data,
-      signature: 'test-signature-hash',
-    };
-
-    const mockResponse = { ok: true, status: 200 };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
-
-    await processWebhookRetry(mockJob as Job);
-
-    const callArgs = (global.fetch as any).mock.calls[0];
-    expect(callArgs[1].headers['X-Webhook-Signature']).toBe('sha256=test-signature-hash');
-  });
-
-  it.skip('sends payload in request body', async () => {
-    const payload = JSON.stringify({ txId: 'tx-789', status: 'completed' });
-    mockJob.data = {
-      ...mockJob.data,
-      payload,
-    };
-
-    const mockResponse = { ok: true, status: 200 };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
-
-    await processWebhookRetry(mockJob as Job);
-
-    const callArgs = (global.fetch as any).mock.calls[0];
-    expect(callArgs[1].body).toBe(payload);
-  });
-
-  it.skip('applies timeout to fetch request', async () => {
-    const mockResponse = { ok: true, status: 200 };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
-
-    vi.useFakeTimers();
-
-    const promise = processWebhookRetry(mockJob as Job);
-
-    // Fast-forward time to trigger timeout
-    vi.advanceTimersByTime(10_000);
-
-    await promise;
-
-    vi.useRealTimers();
-
-    // Verify that fetch was called with AbortSignal
-    const callArgs = (global.fetch as any).mock.calls[0];
-    expect(callArgs[1].signal).toBeDefined();
-  });
-
-  it.skip('handles string errors from fetch', async () => {
-    (global.fetch as any).mockRejectedValueOnce('Network error string');
-
-    await processWebhookRetry(mockJob as Job);
-
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: 'Network error string',
-      }),
-      'webhook retry delivery error',
-    );
-  });
-
-  it.skip('uses POST method for webhook delivery', async () => {
-    const mockResponse = { ok: true, status: 200 };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
-
-    await processWebhookRetry(mockJob as Job);
-
-    const callArgs = (global.fetch as any).mock.calls[0];
-    expect(callArgs[1].method).toBe('POST');
-  });
-
-  it.skip('includes Content-Type application/json header', async () => {
-    const mockResponse = { ok: true, status: 200 };
-    (global.fetch as any).mockResolvedValueOnce(mockResponse);
-
-    await processWebhookRetry(mockJob as Job);
-
-    const callArgs = (global.fetch as any).mock.calls[0];
-    expect(callArgs[1].headers['Content-Type']).toBe('application/json');
   });
 });
