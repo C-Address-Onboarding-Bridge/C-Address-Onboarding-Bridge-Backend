@@ -179,6 +179,41 @@ describe('OfflineQueue — replay via setOnline', () => {
   });
 });
 
+describe('OfflineQueue — replay on healthy health checks', () => {
+  it('replays an entry enqueued while the server is already online', async () => {
+    const execute = vi.fn().mockResolvedValue(undefined);
+    const checkHealth = vi.fn().mockResolvedValue(true);
+    const q = new OfflineQueue(execute, checkHealth, { healthCheckIntervalMs: 5 });
+
+    await q.enqueue(BASE_ENTRY);
+    await new Promise((r) => setTimeout(r, 25));
+
+    expect(checkHealth).toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(q.getQueue()).toHaveLength(0);
+    q.destroy();
+  });
+
+  it('replays entries loaded from storage while the server stays online', async () => {
+    const storage = makeStorage();
+    const execute = vi.fn().mockResolvedValue(undefined);
+    storage.store.set('bridge_sdk_offline_queue', JSON.stringify([
+      { id: 'stored-online', timestamp: new Date().toISOString(), retryCount: 0, method: 'GET', path: '/loaded' },
+    ]));
+    const q = new OfflineQueue(execute, vi.fn().mockResolvedValue(true), {
+      storageAdapter: storage,
+      healthCheckIntervalMs: 5,
+    });
+
+    await new Promise((r) => setTimeout(r, 25));
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ id: 'stored-online' }));
+    expect(q.getQueue()).toHaveLength(0);
+    q.destroy();
+  });
+});
+
 // ─── OfflineQueue — onDrained ─────────────────────────────────────────────────
 
 describe('OfflineQueue — onDrained', () => {
@@ -234,16 +269,39 @@ describe('OfflineQueue — onDrained', () => {
   });
 });
 
+describe('OfflineQueue — per-entry events', () => {
+  it('reports dead-lettered entries with their replay error', async () => {
+    const error = new Error('permanent failure');
+    const execute = vi.fn().mockRejectedValue(error);
+    const q = new OfflineQueue(execute, vi.fn(), {
+      healthCheckIntervalMs: 60_000,
+      shouldRetry: () => false,
+    });
+    const handler = vi.fn();
+    q.onEvent(handler);
+    q.setOnline(false);
+    const id = await q.enqueue(POST_ENTRY);
+
+    q.setOnline(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'dead-lettered',
+      error,
+      entry: expect.objectContaining({ id }),
+    }));
+    expect(q.getDeadLetters().map((entry) => entry.id)).toContain(id);
+    q.destroy();
+  });
+});
+
 // ─── OfflineQueue — setOnline ─────────────────────────────────────────────────
 
 describe('OfflineQueue — setOnline', () => {
-  it('does not replay when already online', async () => {
+  it('does not replay when already online and the queue is empty', async () => {
     const execute = vi.fn().mockResolvedValue(undefined);
     const q = new OfflineQueue(execute, vi.fn(), { healthCheckIntervalMs: 60_000 });
-    // Start online (default); add an entry while online (would not normally happen
-    // but proves setOnline(true) when already online is a no-op for replay)
-    await q.enqueue(BASE_ENTRY);
-    q.setOnline(true); // no-op — was already online
+    q.setOnline(true);
     await new Promise((r) => setTimeout(r, 20));
     expect(execute).not.toHaveBeenCalled();
     q.destroy();

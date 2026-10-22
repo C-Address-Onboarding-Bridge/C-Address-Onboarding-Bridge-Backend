@@ -1,6 +1,6 @@
 /**
  * Issue #674 / #867: SDK funding flow tests against real types.
- * Tests the complete prepare -> sign -> submit flow.
+ * Tests the complete prepare → sign → submit flow.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BridgeClient } from '../src/bridge';
@@ -22,7 +22,13 @@ describe('SDK Funding Flows', () => {
     client = new BridgeClient({
       baseUrl: 'http://localhost:3000',
       apiKey: 'test-key-12345',
+      retry: { maxRetries: 0 },
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   describe('Funding preparation', () => {
@@ -52,39 +58,70 @@ describe('SDK Funding Flows', () => {
         amount: '100',
       });
 
-      expect(result).toBeDefined();
-      expect(result.hash).toBe('mock-transaction-hash-123');
-      expect(result.envelope).toBeDefined();
-      expect(result.networkPassphrase).toBe('Test SDF Network ; September 2015');
+      expect(result.instruction).toBe(prepareResult.instruction);
+      expect(result.simulation).toEqual({ minResourceFee: '100' });
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/api/v1/fund/prepare');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        sourceAddress: TARGET,
+        targetAddress: TARGET,
+        tokenAddress: 'native',
+        amount: '100',
+      });
     });
   });
 
   describe('Transaction submission', () => {
-    it('submits a signed transaction and returns funding result', async () => {
-      global.fetch = vi.fn(async (url: string) => {
-        if (typeof url === 'string' && url.includes('/api/v1/fund')) {
-          return new Response(
-            JSON.stringify({
-              success: true,
-              data: {
-                hash: 'submitted-tx-hash',
-                status: 'pending',
-                createdAt: new Date().toISOString(),
-              } as FundingResult,
-            }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } }
-          );
-        }
-        throw new Error('Unexpected request');
-      });
+    it('submits a signed transaction and returns the funding result', async () => {
+      const fundingResult: FundingResult = { hash: 'submitted-tx-hash', status: 'pending' };
+      const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(fundingResult));
+      vi.stubGlobal('fetch', fetchMock);
 
-      const result = await client.submitSignedXdr({
-        signedXdr: 'AAAAAgAAAACJL+8TP++pRfI4CRAZhA+mWXG1w3E1HxP+7i+pF+QvAAAB6AHjDCAAACKUAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAAAAAABsrz2mgAAAABj5qn8',
-      });
+      const result = await client.submitSignedXdr({ signedXdr: VALID_XDR });
 
-      expect(result).toBeDefined();
       expect(result.hash).toBe('submitted-tx-hash');
       expect(result.status).toBe('pending');
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain('/api/v1/fund');
+      expect(JSON.parse(String(init.body))).toEqual({ signedXdr: VALID_XDR });
+    });
+
+    it('sends an idempotency key for the non-idempotent fund submission', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ hash: 'h1', status: 'pending' }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await client.submitSignedXdr({ signedXdr: VALID_XDR });
+
+      const headers = headersOf(fetchMock.mock.calls[0] as [string, RequestInit]);
+      // Issue #671: the lowercase header name is what the API middleware reads.
+      expect(headers['x-idempotency-key']).toBeTruthy();
+      expect(headers['x-idempotency-key']).toMatch(/^[0-9a-f-]{16,}$/i);
+    });
+
+    it('reuses the same idempotency key when the submission is retried', async () => {
+      const retrying = new BridgeClient({
+        baseUrl: 'http://localhost:3000',
+        apiKey: 'test-key-12345',
+        retry: { maxRetries: 1, baseDelayMs: 0, jitterMs: 0 },
+      });
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ message: 'Service Unavailable' }, 503))
+        .mockResolvedValueOnce(jsonResponse({ hash: 'h2', status: 'pending' }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await retrying.submitSignedXdr({ signedXdr: VALID_XDR });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const first = headersOf(fetchMock.mock.calls[0] as [string, RequestInit]);
+      const second = headersOf(fetchMock.mock.calls[1] as [string, RequestInit]);
+      expect(first['x-idempotency-key']).toBeTruthy();
+      expect(first['x-idempotency-key']).toBe(second['x-idempotency-key']);
     });
 
     it('includes idempotency key in submit requests', async () => {
@@ -125,22 +162,18 @@ describe('SDK Funding Flows', () => {
 
   describe('Signing header support', () => {
     it('includes signing headers when signing is enabled', async () => {
-      let capturedHeaders: Record<string, string | undefined> = {};
-
       const signingClient = new BridgeClient({
         baseUrl: 'http://localhost:3000',
         apiKey: 'signing-key-secret',
         signing: { enabled: true },
+        retry: { maxRetries: 0 },
       });
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ hash: 'signed-tx', status: 'pending' }));
+      vi.stubGlobal('fetch', fetchMock);
 
-      global.fetch = vi.fn(async (url: string, opts: RequestInit) => {
-        if (typeof url === 'string' && url.includes('/api/v1/fund')) {
-          const headers = opts.headers as Record<string, string>;
-          capturedHeaders = {
-            'x-timestamp': headers['x-timestamp'],
-            'x-nonce': headers['x-nonce'],
-            'x-signature': headers['x-signature'],
-          };
+      await signingClient.submitSignedXdr({ signedXdr: VALID_XDR });
 
           return new Response(
             JSON.stringify({

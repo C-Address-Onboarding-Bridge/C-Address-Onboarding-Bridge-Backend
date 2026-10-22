@@ -1,4 +1,4 @@
-import { PaginatedResponse, PaginatedRequestParams, AutoPaginateOptions, PageFetcher } from './types';
+import { PaginatedResponse, PaginatedRequestParams, AutoPaginateOptions, PageFetcher } from './types.js';
 
 export class PaginationHelper<T> {
   constructor(
