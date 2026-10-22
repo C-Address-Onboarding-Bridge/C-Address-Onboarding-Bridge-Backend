@@ -10,6 +10,18 @@ The SDK can emit anonymous usage telemetry when enabled. Telemetry is opt-out an
 
 The payload includes only non-PII metadata such as SDK version, Node.js version, platform, invoked method, response time, and error type. No API keys, addresses, or transaction data are collected.
 
+## Lifecycle and cleanup
+
+Every client owns background timers (telemetry flushing, and for offline clients a health poll). Call `destroy()` when you are done with a client:
+
+```ts
+const client = new BridgeClient({ baseUrl, telemetry: { endpoint } });
+// ... use the client ...
+client.destroy(); // stops the timers and flushes pending telemetry
+```
+
+In Node.js every SDK interval is `unref()`'d, so a forgotten `destroy()` will not keep a process or test runner alive. Browsers have no `unref`, so `destroy()` is required there. `destroy()` is idempotent, and `OfflineBridgeClient.destroy()` also stops the offline queue's health poll.
+
 ## Browser usage
 
 The SDK ships with an ESM build for bundlers and a UMD bundle for browser script tags. Browser usage requires a global `fetch` implementation in the target environment.
@@ -39,7 +51,7 @@ const prepared = await client.prepareFundingTransaction({
   amount: '10000000',
 });
 
-// 3. Sign prepared.instruction with the user's wallet, then submit it
+// 3. Sign prepared.unsignedXdr with the user's wallet, then submit it
 const result = await client.submitSignedXdr({ signedXdr: '...' });
 
 console.log(result.status); // 'pending' | 'success' | 'failed'

@@ -30,6 +30,7 @@ import {
   NetworkError,
   TimeoutError,
   BridgeError,
+  ServerError,
   ValidationError,
 } from "./errors";
 
@@ -93,6 +94,21 @@ export class BridgeClient {
       jitterMs: config.retry?.jitterMs ?? 50,
       logger: config.retry?.logger ?? console,
     };
+  }
+
+  /**
+   * Stop the client's background work and release its resources.
+   *
+   * Today that is the telemetry flush timer (flushed one final time so queued
+   * events are not lost). Subclasses that start timers, such as
+   * `OfflineBridgeClient`, extend this to stop their own.
+   *
+   * In Node this also means the process can exit; every SDK timer is
+   * `unref()`'d, but a browser client needs `destroy()` to stop its interval.
+   * Idempotent.
+   */
+  destroy(): void {
+    this.telemetry.destroy();
   }
 
   protected shouldRetry(err: unknown): boolean {
@@ -436,6 +452,7 @@ export class BridgeClient {
       { signedXdr: params.signedXdr },
       undefined,
       { timeout: this.fundSubmissionTimeout, ...options },
+      options?.idempotencyKey,
     );
   }
 

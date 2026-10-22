@@ -1,10 +1,11 @@
 import crypto from 'crypto';
-import dns from 'dns';
-import net from 'net';
+import { lookup } from 'node:dns/promises';
+import ipaddr from 'ipaddr.js';
+import { Agent } from 'undici';
 import { logger } from '../index';
 import { hashPayload, integrityAuditLog } from './auditLog';
 import { enqueueAudit } from './asyncPipeline';
-import { enqueueWebhookRetry } from '../jobs/queue';
+import { enqueueWebhookRetry, WEBHOOK_RETRY_DELAYS_MS } from '../jobs/queue';
 
 export interface WebhookRegistration {
   id: string;
@@ -49,15 +50,40 @@ export const WEBHOOK_EVENTS = {
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[keyof typeof WEBHOOK_EVENTS];
 
-const RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
 const DELIVERY_TIMEOUT_MS = 10_000;
+const DEFAULT_DELIVERY_LOG_LIMIT = 10_000;
 
-/**
- * Recommended freshness window (in milliseconds) for receivers verifying the
- * `X-Webhook-Timestamp` header. Deliveries whose timestamp falls outside this
- * window should be rejected to prevent replay attacks.
- */
-export const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
+function isPublicAddress(address: string): boolean {
+  try {
+    return ipaddr.parse(address).range() === 'unicast';
+  } catch {
+    return false;
+  }
+}
+
+async function resolveSafeWebhookAddress(url: string): Promise<{
+  hostname: string;
+  address: string;
+  family: number;
+}> {
+  const parsedUrl = new URL(url);
+  if (!['http:', 'https:'].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password) {
+    throw new Error('Webhook URL must use HTTP(S) without credentials');
+  }
+
+  const hostname = parsedUrl.hostname.replace(/^\[|\]$/g, '');
+  const addresses = await lookup(hostname, { all: true, verbatim: true });
+  if (addresses.length === 0 || addresses.some(({ address }) => !isPublicAddress(address))) {
+    throw new Error('Webhook URL resolves to a non-public address');
+  }
+
+  return { hostname, ...addresses[0] };
+}
+
+export class WebhookDeliveryService {
+  private registrations = new Map<string, WebhookRegistration>();
+  private dlq: DLQEntry[] = [];
+  private deliveryLog: DeliveryAttempt[] = [];
 
 function ipv6ToBigInt(address: string): bigint {
   let normalized = address.toLowerCase();
@@ -167,10 +193,305 @@ export async function assertSafeWebhookUrl(rawUrl: string): Promise<void> {
   }
 }
 
-export class WebhookDeliveryService {
+/**
+ * Minimal persistence contract for webhook state. Implementations may back this
+ * with Postgres (production) or an in-memory store (tests / single-process).
+ */
+export interface WebhookStore {
+  saveRegistration(registration: WebhookRegistration): void;
+  deleteRegistration(id: string): boolean;
+  getRegistration(id: string): WebhookRegistration | undefined;
+  listRegistrations(): WebhookRegistration[];
+  appendDeliveryAttempt(attempt: DeliveryAttempt): void;
+  listDeliveryAttempts(): DeliveryAttempt[];
+  pruneDeliveryLog(maxEntries: number): void;
+  saveDLQEntry(entry: DLQEntry): void;
+  listDLQEntries(): DLQEntry[];
+  getDLQEntry(id: string): DLQEntry | undefined;
+  deleteDLQEntry(id: string): boolean;
+}
+
+/**
+ * In-memory fallback store. Used when no Postgres-backed store is injected so
+ * the service keeps working in tests and single-process deployments.
+ */
+export class InMemoryWebhookStore implements WebhookStore {
   private registrations = new Map<string, WebhookRegistration>();
+  private attempts: DeliveryAttempt[] = [];
   private dlq: DLQEntry[] = [];
-  private deliveryLog: DeliveryAttempt[] = [];
+
+  saveRegistration(registration: WebhookRegistration): void {
+    this.registrations.set(registration.id, registration);
+  }
+
+  getRegistration(id: string): WebhookRegistration | undefined {
+    return this.registrations.get(id);
+  }
+
+  getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[] {
+    return [...this.registrations.values()].filter((r) => r.apiKeyId === apiKeyId);
+  }
+
+  deleteRegistration(id: string): boolean {
+    return this.registrations.delete(id);
+  }
+
+  recordAttempt(attempt: DeliveryAttempt): void {
+    this.attempts.push(attempt);
+  }
+
+  getAttempts(registrationId?: string): DeliveryAttempt[] {
+    return registrationId
+      ? this.attempts.filter((a) => a.registrationId === registrationId)
+      : [...this.attempts];
+  }
+
+  addToDLQ(entry: DLQEntry): void {
+    this.dlq.push(entry);
+  }
+
+  getDLQ(): DLQEntry[] {
+    return [...this.dlq];
+  }
+}
+
+/**
+ * Persistent store backed by a repository. Delegates to the injected
+ * repository so the service stays storage-agnostic.
+ */
+export class WebhookDeliveryRepository implements WebhookDeliveryStore {
+  constructor(private readonly store: WebhookDeliveryStore = new InMemoryWebhookDeliveryStore()) {}
+
+  saveRegistration(registration: WebhookRegistration): void {
+    this.store.saveRegistration(registration);
+  }
+
+  getRegistration(id: string): WebhookRegistration | undefined {
+    return this.store.getRegistration(id);
+  }
+
+  getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[] {
+    return this.store.getRegistrationsByApiKeyId(apiKeyId);
+  }
+
+  deleteRegistration(id: string): boolean {
+    return this.store.deleteRegistration(id);
+  }
+
+  recordAttempt(attempt: DeliveryAttempt): void {
+    this.store.recordAttempt(attempt);
+  }
+
+  getAttempts(registrationId?: string): DeliveryAttempt[] {
+    return this.store.getAttempts(registrationId);
+  }
+
+  addToDLQ(entry: DLQEntry): void {
+    this.store.addToDLQ(entry);
+  }
+
+  getDLQ(): DLQEntry[] {
+    return this.store.getDLQ();
+  }
+}
+
+export class WebhookDeliveryService {
+  private store: WebhookDeliveryStore;
+
+  constructor(store: WebhookDeliveryStore = new InMemoryWebhookDeliveryStore()) {
+    this.store = store;
+  }
+
+  saveRegistration(registration: WebhookRegistration): void {
+    this.registrations.set(registration.id, registration);
+  }
+
+  deleteRegistration(id: string): boolean {
+    return this.registrations.delete(id);
+  }
+
+  getRegistration(id: string): WebhookRegistration | undefined {
+    return this.registrations.get(id);
+  }
+
+  listRegistrations(): WebhookRegistration[] {
+    return [...this.registrations.values()];
+  }
+
+  sign(payload: string, secret: string): string {
+    return crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  }
+
+  async deliver(registration: WebhookRegistration, event: string, data: unknown): Promise<void> {
+    const payload = JSON.stringify({ event, data, timestamp: Date.now() });
+    const signature = this.sign(payload, registration.secret);
+
+    await this.attemptDelivery(registration, event, data, payload, signature, 0);
+  }
+
+  async deliverToAll(apiKey: string, event: string, data: unknown): Promise<void> {
+    const targets = this.getRegistrationsByApiKey(apiKey).filter(
+      (r) => r.events.includes(event) || r.events.includes('*'),
+    );
+    await Promise.all(targets.map((r) => this.deliver(r, event, data)));
+  }
+
+  private async attemptDelivery(
+    registration: WebhookRegistration,
+    event: string,
+    data: unknown,
+    payload: string,
+    signature: string,
+    attemptNumber: number,
+  ): Promise<void> {
+    const attempt: DeliveryAttempt = {
+      id: crypto.randomUUID(),
+      registrationId: registration.id,
+      webhookUrl: registration.url,
+      event,
+      timestamp: Date.now(),
+      attemptNumber,
+    };
+
+    let timeout: NodeJS.Timeout | undefined;
+    let dispatcher: Agent | undefined;
+    try {
+      const vettedAddress = await resolveSafeWebhookAddress(registration.url);
+      const pinnedLookup = (
+        requestedHostname: string,
+        options: { all?: boolean } | number,
+        callback: (_error: NodeJS.ErrnoException | null, _address: string | { address: string; family: number }[], _family?: number) => void,
+      ) => {
+        if (requestedHostname !== vettedAddress.hostname || !isPublicAddress(vettedAddress.address)) {
+          const error = new Error('Webhook connection did not match its vetted destination') as NodeJS.ErrnoException;
+          error.code = 'EACCES';
+          callback(error, '');
+          return;
+        }
+
+        if (typeof options === 'object' && options.all) {
+          callback(null, [{ address: vettedAddress.address, family: vettedAddress.family }]);
+        } else {
+          callback(null, vettedAddress.address, vettedAddress.family);
+        }
+      };
+      dispatcher = new Agent({ connect: { lookup: pinnedLookup } });
+
+      const controller = new AbortController();
+      timeout = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
+
+      const response = await fetch(registration.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Webhook-Signature': `sha256=${signature}`,
+          'X-Webhook-Event': event,
+          'X-Webhook-Attempt': String(attemptNumber + 1),
+        },
+        body: payload,
+        signal: controller.signal,
+        dispatcher,
+      } as RequestInit & { dispatcher: Agent });
+
+      attempt.statusCode = response.status;
+
+      const deliveryAuditPayload = {
+        payloadHash: hashPayload(payload),
+        destination: registration.url,
+        registrationId: registration.id,
+        event,
+        attemptNumber: attemptNumber + 1,
+        statusCode: response.status,
+        result: response.ok ? 'success' : 'failed',
+      };
+      enqueueAudit(
+        'webhook_delivery',
+        deliveryAuditPayload,
+        registration.apiKey,
+        () => integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKey),
+      );
+
+      if (response.ok) {
+        logger.info(
+          { registrationId: registration.id, url: registration.url, event, attempt: attemptNumber + 1 },
+          'webhook delivered',
+        );
+        this.deliveryLog.push(attempt);
+        return;
+      }
+
+      attempt.error = `HTTP ${response.status}`;
+      logger.warn(
+        { registrationId: registration.id, url: registration.url, event, status: response.status, attempt: attemptNumber + 1 },
+        'webhook delivery failed with non-2xx status',
+      );
+    } catch (err) {
+      attempt.error = err instanceof Error ? err.message : 'unknown error';
+      const errorAuditPayload = {
+        payloadHash: hashPayload(payload),
+        destination: registration.url,
+        registrationId: registration.id,
+        event,
+        attemptNumber: attemptNumber + 1,
+        result: 'error',
+        error: attempt.error,
+      };
+      enqueueAudit(
+        'webhook_delivery',
+        errorAuditPayload,
+        registration.apiKey,
+        () => integrityAuditLog.append('webhook_delivery', errorAuditPayload, registration.apiKey),
+      );
+      logger.warn(
+        { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
+        'webhook delivery error',
+      );
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (dispatcher) void dispatcher.destroy();
+    }
+
+    this.deliveryLog.push(attempt);
+  }
+
+  listDeliveryAttempts(): DeliveryAttempt[] {
+    return [...this.deliveryLog];
+  }
+
+  pruneDeliveryLog(maxEntries: number): void {
+    if (this.deliveryLog.length > maxEntries) {
+      this.deliveryLog.splice(0, this.deliveryLog.length - maxEntries);
+    }
+  }
+
+  saveDLQEntry(entry: DLQEntry): void {
+    this.dlq.push(entry);
+  }
+
+  listDLQEntries(): DLQEntry[] {
+    return [...this.dlq];
+  }
+
+  getDLQEntry(id: string): DLQEntry | undefined {
+    return this.dlq.find((e) => e.id === id);
+  }
+
+  deleteDLQEntry(id: string): boolean {
+    const idx = this.dlq.findIndex((e) => e.id === id);
+    if (idx === -1) return false;
+    this.dlq.splice(idx, 1);
+    return true;
+  }
+}
+
+export class WebhookDeliveryService {
+  private store: WebhookStore;
+  private deliveryLogLimit: number;
+
+  constructor(store: WebhookStore = new InMemoryWebhookStore(), deliveryLogLimit = DEFAULT_DELIVERY_LOG_LIMIT) {
+    this.store = store;
+    this.deliveryLogLimit = deliveryLogLimit;
+  }
 
   register(params: { url: string; secret: string; apiKeyId: string; events: string[] }): WebhookRegistration {
     const registration: WebhookRegistration = {
@@ -195,7 +516,7 @@ export class WebhookDeliveryService {
   }
 
   getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[] {
-    return [...this.registrations.values()].filter((r) => r.apiKeyId === apiKeyId);
+    return this.store.listRegistrations().filter((r) => r.apiKeyId === apiKeyId);
   }
 
   /**
@@ -236,6 +557,11 @@ export class WebhookDeliveryService {
     });
   }
 
+  private recordAttempt(attempt: DeliveryAttempt): void {
+    this.store.appendDeliveryAttempt(attempt);
+    this.store.pruneDeliveryLog(this.deliveryLogLimit);
+  }
+
   private async attemptDelivery(
     registration: WebhookRegistration,
     event: string,
@@ -262,94 +588,92 @@ export class WebhookDeliveryService {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
 
-      const response = await fetch(registration.url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Webhook-Signature': `sha256=${signature}`,
-          'X-Webhook-Timestamp': String(timestamp),
-          'X-Webhook-Event': event,
-          'X-Webhook-Attempt': String(attemptNumber + 1),
-        },
-        body: payload,
-        signal: controller.signal,
-        redirect: 'error',
-      });
+      try {
+        const response = await fetch(registration.url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Webhook-Signature': signature,
+            'X-Webhook-Timestamp': String(timestamp),
+            'X-Webhook-Event': event,
+          },
+          body: payload,
+          signal: controller.signal,
+        });
 
-      clearTimeout(timeout);
-      attempt.statusCode = response.status;
+        attempt.statusCode = response.status;
+        this.recordAttempt(attempt);
+
+        if (!response.ok) {
+          throw new Error(`Webhook responded with status ${response.status}`);
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (err) {
+      attempt.error = err instanceof Error ? err.message : 'unknown error';
+      this.recordAttempt(attempt);
 
       const deliveryAuditPayload = {
         payloadHash: hashPayload(payload),
         destination: registration.url,
-        registration,
         registrationId: registration.id,
         event,
-        attemptNumber: attemptNumber + 1,
-        statusCode: response.status,
-        result: response.ok ? 'success' : 'failed',
+        attemptNumber,
+        error: attempt.error,
       };
-      enqueueAudit(
-        'webhook_delivery',
-        deliveryAuditPayload,
-        registration.apiKeyId,
-        () => integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKeyId),
-      );
 
-      if (response.ok) {
-        logger.info(
-          { registrationId: registration.id, url: registration.url, event, attempt: attemptNumber + 1 },
-          'webhook delivered',
-        );
-        this.recordAttempt(attempt);
+      integrityAuditLog(deliveryAuditPayload);
+      enqueueAudit({ type: 'webhook.delivery.failed', ...deliveryAuditPayload });
+
+      if (attemptNumber < RETRY_DELAYS_MS.length) {
+        enqueueWebhookRetry({
+          registrationId: registration.id,
+          event,
+          data,
+          attemptNumber: attemptNumber + 1,
+          delayMs: RETRY_DELAYS_MS[attemptNumber],
+        });
         return;
       }
 
-      attempt.error = `HTTP ${response.status}`;
-      logger.warn(
-        { registrationId: registration.id, url: registration.url, event, status: response.status, attempt: attemptNumber + 1 },
-        'webhook delivery failed with non-2xx status',
-      );
-    } catch (err) {
-      attempt.error = err instanceof Error ? err.message : 'unknown error';
-      const errorAuditPayload = {
-        payloadHash: hashPayload(payload),
-        destination: registration.url,
-        registrationId: registration.id,
+      this.store.addToDLQ({
+        id: crypto.randomUUID(),
+        registration,
+        payload: data,
         event,
-        attemptNumber: attemptNumber + 1,
-        result: 'error',
-        error: attempt.error,
-      };
-      enqueueAudit(
-        'webhook_delivery',
-        errorAuditPayload,
-        registration.apiKeyId,
-        () => integrityAuditLog.append('webhook_delivery', errorAuditPayload, registration.apiKeyId),
-      );
-      logger.warn(
-        { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
-        'webhook delivery error',
+        attempts: this.getAttempts(registration.id),
+        failedAt: Date.now(),
+      });
+
+      logger.error(
+        { registrationId: registration.id, event, error: attempt.error },
+        'webhook delivery moved to DLQ',
       );
     }
 
     this.recordAttempt(attempt);
 
-    if (attemptNumber < RETRY_DELAYS_MS.length) {
-      const delay = RETRY_DELAYS_MS[attemptNumber];
+    if (attemptNumber < WEBHOOK_RETRY_DELAYS_MS.length) {
+      const delay = WEBHOOK_RETRY_DELAYS_MS[attemptNumber];
       logger.info(
         { registrationId: registration.id, event, nextAttemptIn: delay, attempt: attemptNumber + 1 },
         'scheduling webhook retry',
       );
       try {
-        await enqueueWebhookRetry({
-          registrationId: registration.id,
-          event,
-          payload,
-          signature,
-          data,
-          attemptNumber: attemptNumber + 1,
-        });
+        await enqueueWebhookRetry(
+          {
+            registrationId: registration.id,
+            url: registration.url,
+            event,
+            timestamp,
+            payload,
+            signature,
+            data,
+            attemptNumber: attemptNumber + 1,
+          },
+          delay,
+        );
       } catch (err) {
         logger.error(
           { registrationId: registration.id, event, error: err instanceof Error ? err.message : String(err) },
@@ -406,4 +730,4 @@ export class WebhookDeliveryService {
   }
 }
 
-/* … truncated 2102 chars — edit only what you need near the top … */
+export const webhookDeliveryService = new WebhookDeliveryService();
