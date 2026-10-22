@@ -269,6 +269,32 @@ describe('OfflineQueue — onDrained', () => {
   });
 });
 
+describe('OfflineQueue — per-entry events', () => {
+  it('reports dead-lettered entries with their replay error', async () => {
+    const error = new Error('permanent failure');
+    const execute = vi.fn().mockRejectedValue(error);
+    const q = new OfflineQueue(execute, vi.fn(), {
+      healthCheckIntervalMs: 60_000,
+      shouldRetry: () => false,
+    });
+    const handler = vi.fn();
+    q.onEvent(handler);
+    q.setOnline(false);
+    const id = await q.enqueue(POST_ENTRY);
+
+    q.setOnline(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'dead-lettered',
+      error,
+      entry: expect.objectContaining({ id }),
+    }));
+    expect(q.getDeadLetters().map((entry) => entry.id)).toContain(id);
+    q.destroy();
+  });
+});
+
 // ─── OfflineQueue — setOnline ─────────────────────────────────────────────────
 
 describe('OfflineQueue — setOnline', () => {
