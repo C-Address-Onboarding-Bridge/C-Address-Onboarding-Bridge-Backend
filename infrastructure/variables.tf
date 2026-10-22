@@ -33,3 +33,25 @@ variable "redis_node_type" {
   type        = string
   default     = "cache.t3.micro"
 }
+
+variable "db_security_group_id" {
+  description = "VPC security group ID for RDS database access"
+  type        = string
+}
+
+variable "db_subnet_group_name" {
+  description = "DB subnet group name for RDS"
+  type        = string
+}
+
+variable "cdn_api_origin_domain" {
+  description = "API origin domain for CDN distribution"
+  type        = string
+  sensitive   = true
+}
+
+variable "cdn_origin_verify_secret" {
+  description = "Shared secret for CDN origin request verification"
+  type        = string
+  sensitive   = true
+}
