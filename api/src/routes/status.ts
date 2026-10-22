@@ -1,49 +1,86 @@
-import { Router, Request, Response, NextFunction } from 'express';
-import { z } from 'zod';
-import { sorobanService } from '../services/soroban';
-import { explorerService } from '../services/explorer';
-import { buildCacheKey, CACHE_TTL, getOrCompute, cacheDel } from '../services/cache';
+import { Router, Request, Response } from 'express';
+import { sorobanService, SorobanRpcError } from '../services/soroban';
+import { getQueueStats } from '../jobs/queue';
 
-/** Express router for transaction status endpoints. Mounted at `/api/v1/status`. */
-export const statusRouter = Router();
+const router = Router();
 
-export const STATUS_CACHE_NAMESPACE = 'status';
+const TX_HASH_REGEX = /^[0-9a-fA-F]{64}$/;
 
-const statusSchema = z.object({
-  txHash: z.string().regex(/^[a-f0-9]{64}$/, 'invalid transaction hash'),
-});
+interface StatusCacheEntry {
+  data: unknown;
+  expiresAt: number;
+}
 
-statusRouter.get('/:txHash', async (req: Request, res: Response, next: NextFunction) => {
+const STATUS_CACHE_TTL_MS = 30_000;
+const statusCache = new Map<string, StatusCacheEntry>();
+
+function getCachedStatus(txHash: string): unknown | undefined {
+  const entry = statusCache.get(txHash);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= Date.now()) {
+    statusCache.delete(txHash);
+    return undefined;
+  }
+  return entry.data;
+}
+
+function setCachedStatus(txHash: string, data: unknown): void {
+  statusCache.set(txHash, { data, expiresAt: Date.now() + STATUS_CACHE_TTL_MS });
+}
+
+export function invalidateStatusCache(txHash?: string): void {
+  if (txHash) {
+    statusCache.delete(txHash);
+    return;
+  }
+  statusCache.clear();
+}
+
+router.get('/:txHash', async (req: Request, res: Response) => {
+  const { txHash } = req.params;
+
+  if (!TX_HASH_REGEX.test(txHash)) {
+    return res.status(400).json({
+      error: 'Invalid transaction hash',
+      message: 'Transaction hash must be a 64-character hex string',
+    });
+  }
+
+  const cached = getCachedStatus(txHash);
+  if (cached !== undefined) {
+    return res.json(cached);
+  }
+
   try {
-    const { txHash } = statusSchema.parse(req.params);
-    const cacheKey = buildCacheKey(STATUS_CACHE_NAMESPACE, txHash);
-
-    const body = await getOrCompute(
-      cacheKey,
-      CACHE_TTL.status,
-      async () => {
-        req.log?.debug({ txHash }, 'status cache miss');
-        const status = await sorobanService.getTransactionStatus(txHash);
-        return {
-          ...status,
-          explorerUrl: explorerService.txUrl(txHash),
-          explorerUrls: explorerService.txUrlWithFallbacks(txHash),
-        };
-      },
-    );
-
-    res.setHeader('X-Cache', res.getHeader('X-Cache') ?? 'MISS');
-    res.json(body);
-  } catch (err) {
-    next(err);
+    const status = await sorobanService.getTransactionStatus(txHash);
+    setCachedStatus(txHash, status);
+    return res.json(status);
+  } catch (error) {
+    if (error instanceof SorobanRpcError) {
+      return res.status(503).json({
+        error: 'Soroban RPC unavailable',
+        message: error.message,
+      });
+    }
+    throw error;
   }
 });
 
-/**
- * Invalidate the status cache entry for `txHash`.
- * Called by webhook handlers when a transaction status changes.
- */
-export async function invalidateStatusCache(txHash: string): Promise<void> {
-  const cacheKey = buildCacheKey(STATUS_CACHE_NAMESPACE, txHash);
-  await cacheDel(cacheKey);
-}
+router.get('/queues', async (_req: Request, res: Response) => {
+  try {
+    const stats = await getQueueStats();
+    return res.json(stats);
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Failed to fetch queue stats',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+router.get('/health', (_req: Request, res: Response) => {
+  return res.json({ status: 'ok' });
+});
+
+export const statusRouter = router;
+export default router;

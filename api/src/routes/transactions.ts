@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { rbacAuth, requireScopes } from '../middleware/rbacAuth';
+import { requireScopes } from '../middleware/rbacAuth';
 import {
   listTransactions,
   serializeTransactionsCsv,
@@ -12,7 +12,7 @@ export const transactionsRouter = Router();
 
 export const TRANSACTIONS_CACHE_NAMESPACE = 'transactions';
 
-transactionsRouter.get('/', rbacAuth, requireScopes('transactions:read'), async (req: Request, res: Response) => {
+transactionsRouter.get('/', requireScopes('transactions:read'), async (req: Request, res: Response) => {
   const status = typeof req.query.status === 'string' ? (req.query.status as TransactionStatus) : undefined;
   const fromDate = typeof req.query.fromDate === 'string' ? req.query.fromDate : undefined;
   const toDate = typeof req.query.toDate === 'string' ? req.query.toDate : undefined;
@@ -37,7 +37,7 @@ transactionsRouter.get('/', rbacAuth, requireScopes('transactions:read'), async 
 
   // CSV responses are not cached (format-specific, likely one-off exports).
   if (format === 'csv') {
-    const result = listTransactions(params);
+    const result = await listTransactions(params);
     res.type('text/csv').send(serializeTransactionsCsv(result.data));
     return;
   }
@@ -50,7 +50,7 @@ transactionsRouter.get('/', rbacAuth, requireScopes('transactions:read'), async 
     cacheKey,
     CACHE_TTL.transactions,
     async () => {
-      const r = listTransactions(params);
+      const r = await listTransactions(params);
       return { data: r.data, nextCursor: r.nextCursor, hasMore: r.hasMore };
     },
   );

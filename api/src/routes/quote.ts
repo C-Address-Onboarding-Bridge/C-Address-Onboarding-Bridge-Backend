@@ -2,9 +2,9 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
 import { sorobanService } from '../services/soroban';
-import { buildCacheKey, cacheDelPattern } from '../services/cache';
-// import { cacheMiddleware } from '../middleware/cache'; // see TODO on the GET / route
-// import { setFeeRateBps } from '../services/metrics'; // see TODO in GET /
+import { buildCacheKey, cacheDelPattern, CACHE_TTL } from '../services/cache';
+import { cacheMiddleware } from '../middleware/cache';
+import { setFeeRateBps } from '../services/metrics';
 
 /** Express router for quote endpoints. Mounted at `/api/v1/quote`. */
 export const quoteRouter = Router();
@@ -13,23 +13,22 @@ const getQuoteSchema = z.object({
   sourceAsset: z.string().min(1),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
   targetAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid target Stellar address'),
+  sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid source Stellar address').optional(),
+  token: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid token Stellar address').optional(),
 });
 
 quoteRouter.get(
   '/',
-  // TODO(next-bounty): cacheMiddleware() in src/middleware/cache.ts is still a
-  // `throw new Error('Not implemented')` stub. Because it is *called* here while
-  // the router is built, importing this module threw -- which meant src/index.ts
-  // could not load, the API server could not start, and every test that imports
-  // the app failed before running. Commented out so quotes are served uncached;
-  // restore once the middleware is implemented.
-  // cacheMiddleware({
-  //   ttl: CACHE_TTL.quote,
-  //   keyFn: (req) => {
-  //     const params = getQuoteSchema.parse(req.query);
-  //     return buildCacheKey('quote', `${params.sourceAsset}:${params.amount}:${params.targetAddress}`);
-  //   },
-  // }),
+  cacheMiddleware({
+    ttl: CACHE_TTL.quote,
+    keyFn: (req) => {
+      const params = getQuoteSchema.parse(req.query);
+      return buildCacheKey(
+        'quote',
+        `${params.sourceAsset}:${params.amount}:${params.targetAddress}:${params.sourceAddress ?? ''}:${params.token ?? ''}`,
+      );
+    },
+  }),
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const params = getQuoteSchema.parse(_req.query);
@@ -37,11 +36,11 @@ quoteRouter.get(
         params.sourceAsset,
         params.amount,
         params.targetAddress,
+        params.sourceAddress,
+        params.token,
       );
 
-      // TODO(next-bounty): setFeeRateBps() is a stub that throws; calling it here
-      // turned every successful quote into an error.
-      // setFeeRateBps(quote.feeBps);
+      setFeeRateBps(quote.feeBps);
       res.json(quote);
     } catch (err) {
       next(err);

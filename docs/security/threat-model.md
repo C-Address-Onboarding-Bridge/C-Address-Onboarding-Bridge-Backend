@@ -85,6 +85,12 @@ The smart contract is immutable after deployment. The API server acts as a calle
 
 **Assumption**: The contract's `initialize()` function is guarded by the `Version` idempotency check — it can only be called once per deployment. Admin keys are held in hardware or Secrets Manager, not on the API server.
 
+Governance changes that can alter control of the bridge (`RotateAdmins`,
+`SetThreshold`, `Pause`, `Unpause`, fee changes, and fee withdrawals) are
+timelocked. The default execution delay is 720 ledgers (approximately one
+hour at a five-second ledger cadence); deployments may choose a longer delay
+with `initialize_with_delay`.
+
 ---
 
 ## 3. STRIDE Threat Analysis

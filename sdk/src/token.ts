@@ -1,5 +1,6 @@
-import { Token, TokenMetadata } from './types';
-import { ValidationError } from './errors';
+import { Token, TokenMetadata } from './types.js';
+import { ValidationError } from './errors.js';
+import { StrKey } from '@stellar/stellar-sdk';
 
 // ─── Token Type Guards ────────────────────────────────────────────────────────
 
@@ -13,33 +14,77 @@ export function isSacToken(token: Token): token is { type: 'sac'; contractId: st
   return token.type === 'sac';
 }
 
+// ─── Native XLM SAC Contract IDs ──────────────────────────────────────────────
+
+/**
+ * Network-specific Stellar Asset Contract (SAC) contract IDs for native XLM.
+ * These are the canonical C-addresses the bridge API expects when funding with
+ * native XLM on Soroban.
+ */
+export const NATIVE_XLM_CONTRACT_IDS: Record<'testnet' | 'mainnet', string> = {
+  testnet: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+  mainnet: 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+};
+
+/**
+ * Resolves the native XLM SAC contract ID for the given network.
+ * Defaults to testnet when no network is provided.
+ */
+export function getNativeAssetContractId(network: 'testnet' | 'mainnet' = 'testnet'): string {
+  return NATIVE_XLM_CONTRACT_IDS[network];
+}
+
 // ─── Address Validation ───────────────────────────────────────────────────────
 
-/** Returns `true` if the string is a valid SAC token contract address (C-address). */
+/**
+ * Returns `true` if the string is a valid SAC token contract address
+ * (C-address), including its StrKey checksum.
+ */
 export function isSacTokenAddress(address: string): boolean {
-  throw new Error('Not implemented: isSacTokenAddress');
+  return isValidContractStrKey(address);
 }
 
 /** Validates a SAC token address and throws a typed error if invalid. */
 export function validateSacTokenAddress(address: string): void {
-  throw new Error('Not implemented: validateSacTokenAddress');
+  if (!isSacTokenAddress(address)) {
+    throw new ValidationError('Invalid SAC token address', {
+      fields: {
+        contractId: `Must be a valid contract address (C-address), got: ${address}`,
+      },
+    });
+  }
 }
 
 /** Returns `true` if the string is a valid token identifier (either `"native"` or a C-address). */
 export function isValidTokenIdentifier(identifier: string): boolean {
-  throw new Error('Not implemented: isValidTokenIdentifier');
+  return identifier === 'native' || isSacTokenAddress(identifier);
 }
 
 // ─── Token Serialization ────────────────────────────────────────────────────
 
 /** Serializes a Token into the format expected by the bridge API. */
 export function tokenToSourceAsset(token: Token): string {
-  throw new Error('Not implemented: tokenToSourceAsset');
+  if (isNativeToken(token)) {
+    return 'native';
+  }
+  if (isSacToken(token)) {
+    return token.contractId;
+  }
+  throw new Error(`Unknown token type: ${(token as any).type}`);
 }
 
 /** Derives a Token from legacy string parameters. Defaults to native XLM. */
 export function tokenFromLegacy(tokenAddress?: string, sourceAsset?: string): Token {
-  throw new Error('Not implemented: tokenFromLegacy');
+  // Use tokenAddress if provided and valid, fall back to sourceAsset, then native
+  const identifier = tokenAddress || sourceAsset;
+
+  if (!identifier || identifier === 'native') {
+    return { type: 'native' };
+  }
+
+  // Validate and return as SAC token
+  validateSacTokenAddress(identifier);
+  return { type: 'sac', contractId: identifier };
 }
 
 // ─── Amount Formatting / Parsing ──────────────────────────────────────────────
@@ -52,7 +97,14 @@ export function tokenFromLegacy(tokenAddress?: string, sourceAsset?: string): To
  * @returns Human-readable amount (e.g. `"1.000000"`).
  */
 export function formatTokenAmount(amount: string, decimals: number): string {
-  throw new Error('Not implemented: formatTokenAmount');
+  // Handle zero case
+  if (amount === '0') return '0';
+
+  const padded = amount.padStart(decimals + 1, '0');
+  const integerPart = padded.slice(0, -decimals) || '0';
+  const fractionalPart = padded.slice(-decimals);
+
+  return `${integerPart}.${fractionalPart}`;
 }
 
 /**
@@ -61,9 +113,38 @@ export function formatTokenAmount(amount: string, decimals: number): string {
  * @param amount - Human-readable amount (e.g. `"1.5"`).
  * @param decimals - Number of decimal places the token uses.
  * @returns Raw integer amount as a string (e.g. `"1500000"` for 6 decimals).
+ * @throws {ValidationError} If the input format is invalid or has too many decimal places.
  */
 export function parseTokenAmount(amount: string, decimals: number): string {
-  throw new Error('Not implemented: parseTokenAmount');
+  if (typeof amount !== 'string' || !/^-?\d+(\.\d+)?$/.test(amount)) {
+    throw new ValidationError(`Invalid amount format: "${amount}". Must be a decimal number string.`, {
+      fields: { amount: 'Must be a valid decimal number string' },
+    });
+  }
+
+  const isNegative = amount.startsWith('-');
+  const cleanAmount = isNegative ? amount.slice(1) : amount;
+
+  const parts = cleanAmount.split('.');
+  const integerPart = parts[0] || '0';
+  const fractionalPart = parts[1] || '';
+
+  if (fractionalPart.length > decimals) {
+    throw new ValidationError(
+      `Amount "${amount}" has ${fractionalPart.length} decimal places, but token only supports ${decimals}.`,
+      {
+        fields: { amount: `Too many decimal places (maximum: ${decimals})` },
+      },
+    );
+  }
+
+  const paddedFractional = fractionalPart.padEnd(decimals, '0');
+  const combined = (integerPart + paddedFractional).replace(/^0+(?=.)/, '');
+  if (combined === '' || combined === '0') {
+    return '0';
+  }
+
+  return isNegative ? `-${combined}` : combined;
 }
 
 /**
@@ -72,5 +153,9 @@ export function parseTokenAmount(amount: string, decimals: number): string {
  * but should be queried via `getTokenMetadata` for accuracy.
  */
 export function getDefaultDecimals(token: Token): number {
-  throw new Error('Not implemented: getDefaultDecimals');
+  if (isNativeToken(token)) {
+    return 7; // XLM stroops
+  }
+  // SAC tokens default to 6 (USDC-like)
+  return 6;
 }

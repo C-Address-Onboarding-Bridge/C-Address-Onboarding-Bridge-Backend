@@ -12,6 +12,8 @@ const TX_HASH_RE = /^[a-f0-9]{64}$/;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const POLL_INTERVAL_MS = 5_000;
 const STATUS_CACHE_NAMESPACE = 'status';
+const MAX_CONNECTIONS_PER_KEY = 10;
+const MAX_CONNECTIONS_PER_IP = 50;
 
 interface Subscription {
   txHash: string;
@@ -24,7 +26,13 @@ interface ClientState {
   subscriptions: Map<string, Subscription>;
   heartbeatId: NodeJS.Timeout;
   isAlive: boolean;
+  token: string | null;
+  clientIp: string | null;
 }
+
+const connectionsByToken = new Map<string, Set<ClientState>>();
+const connectionsByIp = new Map<string, Set<ClientState>>();
+const sharedPollers = new Map<string, NodeJS.Timeout>();
 
 function send(ws: WebSocket, payload: unknown): void {
   if (ws.readyState === WebSocket.OPEN) {
@@ -41,40 +49,43 @@ function validateToken(token: string | null): boolean {
   return true;
 }
 
-async function pollStatus(client: ClientState, sub: Subscription): Promise<void> {
+async function pollStatusOnce(txHash: string): Promise<void> {
   try {
-    const cacheKey = buildCacheKey(STATUS_CACHE_NAMESPACE, sub.txHash);
-    
-    // Use the shared cache to fetch status (same cache as routes/status.ts)
-    // This prevents N clients from creating N independent RPC polls
+    const cacheKey = buildCacheKey(STATUS_CACHE_NAMESPACE, txHash);
     const status = await getOrCompute(
       cacheKey,
       CACHE_TTL.status,
       async () => {
-        return sorobanService.getTransactionStatus(sub.txHash);
+        return sorobanService.getTransactionStatus(txHash);
       }
     );
-    
+
     const currentStatus = status.status;
+    const allClients = Array.from(connectionsByToken.values()).flatMap((set) => Array.from(set));
 
-    if (currentStatus !== sub.lastStatus) {
-      sub.lastStatus = currentStatus;
-      send(client.ws, {
-        type: 'status_update',
-        txHash: sub.txHash,
-        status: currentStatus,
-        explorerUrl: explorerService.txUrl(sub.txHash),
-        timestamp: Date.now(),
-      });
+    for (const client of allClients) {
+      const sub = client.subscriptions.get(txHash);
+      if (!sub) continue;
 
-      if (currentStatus === 'success' || currentStatus === 'failed') {
-        clearInterval(sub.intervalId);
-        client.subscriptions.delete(sub.txHash);
-        send(client.ws, { type: 'subscription_closed', txHash: sub.txHash, reason: 'terminal_status' });
+      if (currentStatus !== sub.lastStatus) {
+        sub.lastStatus = currentStatus;
+        send(client.ws, {
+          type: 'status_update',
+          txHash,
+          status: currentStatus,
+          explorerUrl: explorerService.txUrl(txHash),
+          timestamp: Date.now(),
+        });
+
+        if (currentStatus === 'success' || currentStatus === 'failed') {
+          clearInterval(sub.intervalId);
+          client.subscriptions.delete(txHash);
+          send(client.ws, { type: 'subscription_closed', txHash, reason: 'terminal_status' });
+        }
       }
     }
   } catch (err) {
-    logger.debug({ err, txHash: sub.txHash }, 'ws poll error');
+    logger.debug({ err, txHash }, 'ws poll error');
   }
 }
 
@@ -97,13 +108,18 @@ function subscribe(client: ClientState, txHash: string, lastKnownStatus: string 
   const sub: Subscription = {
     txHash,
     lastStatus: lastKnownStatus,
-    intervalId: setInterval(() => pollStatus(client, sub), POLL_INTERVAL_MS),
+    intervalId: 0 as unknown as NodeJS.Timeout,
   };
 
   client.subscriptions.set(txHash, sub);
-  send(client.ws, { type: 'subscribed', txHash, timestamp: Date.now() });
 
-  pollStatus(client, sub).catch(() => {});
+  if (!sharedPollers.has(txHash)) {
+    const pollerId = setInterval(() => pollStatusOnce(txHash), POLL_INTERVAL_MS);
+    sharedPollers.set(txHash, pollerId);
+  }
+
+  send(client.ws, { type: 'subscribed', txHash, timestamp: Date.now() });
+  pollStatusOnce(txHash).catch(() => {});
 }
 
 function unsubscribe(client: ClientState, txHash: string): void {
@@ -112,16 +128,51 @@ function unsubscribe(client: ClientState, txHash: string): void {
     send(client.ws, { type: 'error', code: 'not_subscribed', txHash });
     return;
   }
-  clearInterval(sub.intervalId);
   client.subscriptions.delete(txHash);
+
+  const hasOtherSubscribers = Array.from(connectionsByToken.values())
+    .flatMap((set) => Array.from(set))
+    .some((c) => c.subscriptions.has(txHash));
+
+  if (!hasOtherSubscribers) {
+    const pollerId = sharedPollers.get(txHash);
+    if (pollerId) {
+      clearInterval(pollerId);
+      sharedPollers.delete(txHash);
+    }
+  }
+
   send(client.ws, { type: 'unsubscribed', txHash, timestamp: Date.now() });
 }
 
 function cleanup(client: ClientState): void {
   clearInterval(client.heartbeatId);
-  for (const sub of client.subscriptions.values()) {
-    clearInterval(sub.intervalId);
+
+  if (client.token) {
+    const clients = connectionsByToken.get(client.token);
+    if (clients) clients.delete(client);
   }
+
+  if (client.clientIp) {
+    const clients = connectionsByIp.get(client.clientIp);
+    if (clients) clients.delete(client);
+  }
+
+  for (const txHash of client.subscriptions.keys()) {
+    const hasOtherSubscribers = Array.from(connectionsByToken.values())
+      .flatMap((set) => Array.from(set))
+      .filter((c) => c !== client)
+      .some((c) => c.subscriptions.has(txHash));
+
+    if (!hasOtherSubscribers) {
+      const pollerId = sharedPollers.get(txHash);
+      if (pollerId) {
+        clearInterval(pollerId);
+        sharedPollers.delete(txHash);
+      }
+    }
+  }
+
   client.subscriptions.clear();
 }
 
@@ -164,11 +215,16 @@ function handleMessage(client: ClientState, raw: string): void {
 export function createWebSocketServer(): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
 
-  wss.on('connection', (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+    const token = (ws as any).__wsToken || null;
+    const clientIp = req.socket.remoteAddress || req.headers['x-forwarded-for'] || '0.0.0.0';
+
     const client: ClientState = {
       ws,
       subscriptions: new Map(),
       isAlive: true,
+      token,
+      clientIp,
       heartbeatId: setInterval(() => {
         if (!client.isAlive) {
           ws.terminate();
@@ -178,6 +234,16 @@ export function createWebSocketServer(): WebSocketServer {
         ws.ping();
       }, HEARTBEAT_INTERVAL_MS),
     };
+
+    if (token) {
+      const clients = connectionsByToken.get(token) || new Set();
+      clients.add(client);
+      connectionsByToken.set(token, clients);
+    }
+
+    const clients = connectionsByIp.get(clientIp) || new Set();
+    clients.add(client);
+    connectionsByIp.set(clientIp, clients);
 
     send(ws, { type: 'connected', timestamp: Date.now() });
 
@@ -203,8 +269,9 @@ export function createWebSocketServer(): WebSocketServer {
 }
 
 export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket: import('net').Socket, head: Buffer): void {
-  const parsed = parseUrl(req.url ?? '', true);
-  const token = typeof parsed.query.token === 'string' ? parsed.query.token : null;
+  const protocol = req.headers['sec-websocket-protocol'];
+  const token = typeof protocol === 'string' ? protocol : null;
+  const clientIp = req.socket.remoteAddress || req.headers['x-forwarded-for'] || '0.0.0.0';
 
   if (!validateToken(token)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nUnauthorized');
@@ -212,7 +279,24 @@ export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket
     return;
   }
 
+  if (token) {
+    const tokenConnections = connectionsByToken.get(token)?.size ?? 0;
+    if (tokenConnections >= MAX_CONNECTIONS_PER_KEY) {
+      socket.write('HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nToo many connections for this key');
+      socket.destroy();
+      return;
+    }
+  }
+
+  const ipConnections = connectionsByIp.get(clientIp)?.size ?? 0;
+  if (ipConnections >= MAX_CONNECTIONS_PER_IP) {
+    socket.write('HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nToo many connections from this IP');
+    socket.destroy();
+    return;
+  }
+
   wss.handleUpgrade(req, socket, head, (ws) => {
+    (ws as any).__wsToken = token;
     wss.emit('connection', ws, req);
   });
 }

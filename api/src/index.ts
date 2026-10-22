@@ -11,6 +11,7 @@ import { quoteRouter } from './routes/quote';
 import { statusRouter } from './routes/status';
 import { offrampRouter } from './routes/offramp';
 import { cexRouter } from './routes/cex';
+import { tokenRouter } from './routes/token';
 import { moonpayWebhookRouter, transakWebhookRouter } from './routes/webhook';
 import { webhookAdminRouter } from './routes/webhookAdmin';
 import { apiKeysRouter } from './routes/apiKeys';
@@ -19,34 +20,33 @@ import { metricsRouter } from './routes/metrics';
 import { telemetryRouter } from './routes/telemetry';
 import { transactionsRouter } from './routes/transactions';
 import { adminRouter } from './routes/admin';
-import { rbacAuth, seedLegacyKeys } from './middleware/rbacAuth';
+import { rbacAuth, requireScopes, seedLegacyKeys } from './middleware/rbacAuth';
 import { registerWebhookVerifier, moonpayVerifier, transakVerifier } from './middleware/webhookVerification';
 import { compressionMiddleware } from './middleware/compression';
 import { errorHandler } from './middleware/error';
-import { CircuitBreaker } from './circuit-breaker';
+import { circuitBreakers } from './circuit-breaker';
 import { versionCompatibility } from './middleware/versioning';
-import { ipRateLimitMiddleware, applyRateLimitHeaders, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
+import { ipRateLimitMiddleware, tierRateLimitMiddleware, telemetryRateLimit } from './middleware/rateLimit';
 import { correlationMiddleware } from './middleware/correlation';
-// import { setFeeRateBps } from './services/metrics'; // see TODO below
+import { setFeeRateBps, updateCircuitBreakerMetrics } from './services/metrics';
 import { securityMiddleware, contentTypeEnforcement, suspiciousRateLimiting, xssErrorSanitizer } from './middleware/security';
 import { requestTracker } from './middleware/requestTracker';
-// import { loggingMiddleware } from './middleware/logging'; // see TODO below
+import { loggingMiddleware } from './middleware/logging';
+import { DEFAULT_JSON_LIMIT, FUNDING_PATHS, fundingJsonParser } from './middleware/bodyParser';
+import { requestSigningMiddleware } from './middleware/requestSigning';
+import { originVerifyMiddleware } from './middleware/originVerify';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
 import { closePool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
 import { createWebSocketServer, handleUpgrade } from './services/websocket';
+import { integrityAuditLog } from './services/auditLog';
 import { cacheMetricsRouter } from './routes/cacheMetrics';
 
 export { logger } from './logger';
 
-export const circuitBreakers = new Map<string, CircuitBreaker>([
-  ['soroban', new CircuitBreaker('soroban')],
-  ['moonpay', new CircuitBreaker('moonpay')],
-  ['transak', new CircuitBreaker('transak')],
-  ['cex', new CircuitBreaker('cex')],
-]);
+export { circuitBreakers };
 
 registerWebhookVerifier('moonpay', moonpayVerifier, config.moonpay.secretKey);
 registerWebhookVerifier('transak', transakVerifier, config.transak.webhookSecret);
@@ -55,29 +55,42 @@ if (config.apiKeys.length > 0) {
   seedLegacyKeys(config.apiKeys);
 }
 
-// TODO(next-bounty): setFeeRateBps() in services/metrics.ts is a
-// `throw new Error('Not implemented')` stub, and this call runs at import time --
-// so requiring this module threw, the server could not boot, and every test that
-// imports the app failed to load. Restore once the metric is implemented.
-// setFeeRateBps(config.soroban.feeBps);
+setFeeRateBps(config.soroban.feeBps);
 
 const app = express();
 
 app.set('logger', logger);
 
+// Trust the configured reverse proxy so req.ip reflects the real client
+// (X-Forwarded-For) instead of the load balancer. Without this, IP allowlists,
+// IP rate limits, IP bans and webhook failure tracking all key off the proxy.
+app.set('trust proxy', config.trustProxy);
+
 app.use(helmet());
 app.use(
   cors({
-    origin: config.corsOrigins.length > 0 ? config.corsOrigins : '*',
+    // #655: Safe default: no origins allowed when CORS_ORIGINS not set.
+    // Only allow specified origins; never default to '*' (all origins).
+    origin: config.corsOrigins.length > 0 ? config.corsOrigins : false,
     methods: ['GET', 'POST', 'DELETE', 'PATCH'],
   })
 );
+
+// Log the effective CORS policy at startup for debugging and security audits
+if (config.corsOrigins.length === 0) {
+  logger.warn('CORS: No origins configured. Cross-origin requests from browsers will be blocked.');
+} else {
+  logger.info(`CORS: Allowed origins: ${config.corsOrigins.join(', ')}`);
+}
 
 app.use(compressionMiddleware);
 app.use(versionCompatibility);
 app.use(correlationMiddleware);
 app.use(ipRateLimitMiddleware);
-app.use(applyRateLimitHeaders);
+// #809: X-RateLimit-* headers are already emitted by express-rate-limit
+// (standardHeaders: true). applyRateLimitHeaders is a helper, not middleware,
+// so it must not be mounted with app.use (Express would treat its 4-arg
+// signature as an error handler).
 
 // Prometheus instrumentation middleware
 app.use((req, res, next) => {
@@ -89,9 +102,7 @@ app.use((req, res, next) => {
     const labels = { method: req.method, path: route, status: String(res.statusCode) };
     httpRequestCounter.inc(labels);
     httpRequestDuration.observe(labels, (Date.now() - start) / 1000);
-    // TODO(next-bounty): updateCircuitBreakerMetrics() is still a stub that throws.
-    // It runs in every response's 'finish' handler, so it failed every request.
-    // updateCircuitBreakerMetrics(circuitBreakers);
+    updateCircuitBreakerMetrics(circuitBreakers);
   });
   next();
 });
@@ -109,9 +120,11 @@ app.get('/health', async (_req, res) => {
   }
 
   const health = await getHealthStatus();
-  const statusCode = health.status === 'unhealthy' ? 503 : health.status === 'degraded' ? 207 : 200;
+  // #659: Return 200 for degraded (not 207 WebDAV status). Only 503 for unhealthy.
+  const statusCode = health.status === 'unhealthy' ? 503 : 200;
 
   res.status(statusCode).json({
+    status: health.status,
     ...health,
     circuits,
     cache: { redis: isRedisEnabled(), metrics: getCacheMetrics() },
@@ -138,132 +151,74 @@ app.get('/health/live', (_req, res) => {
 app.use(requestTracker);
 
 // PII-masking request/response logger
-// TODO(next-bounty): loggingMiddleware (and the maskBody helper it relies on) is
-// still a stub that throws. Registered globally, it turned every API request into
-// a 500. Commented out until it is implemented -- note this means requests are
-// NOT currently PII-masked in logs, which matters before anything goes live.
-// app.use(loggingMiddleware);
+app.use(loggingMiddleware);
 
 app.use('/api/webhook', express.text({ type: '*/*' }));
-app.use('/api', express.json({ limit: '32kb' }));
+app.use(FUNDING_PATHS, fundingJsonParser);
+app.use('/api', express.json({ limit: DEFAULT_JSON_LIMIT }));
 
+// suspiciousRateLimiting is mounted exactly once here. It only counts requests
+// that actually tripped a detector (see middleware/security.ts), so normal
+// traffic is never throttled.
 app.use('/api', suspiciousRateLimiting);
 app.use('/api', securityMiddleware);
+// Issue #673: Verify request signing headers
+app.use('/api', requestSigningMiddleware);
+// Issue #862: Enforce X-Origin-Verify header from CloudFront
+app.use('/api', originVerifyMiddleware);
 app.use('/api/v1', contentTypeEnforcement);
-app.use('/api', tierRateLimitMiddleware);
 
-app.get('/api/v1/deprecations', (_req, res) => {
-  res.json({
-    version: 'v1',
-    deprecated: true,
-    sunset: '2027-12-31',
-    features: ['legacy quote endpoints', 'legacy funding routing', 'legacy status polling'],
-  });
-});
+// #660: Removed misleading deprecation endpoint — v1 and v2 are identical until one diverges
 
 // OpenAPI spec + Swagger UI interactive docs
 app.use('/api', docsRouter);
 
-app.use('/api/v1/quote', rbacAuth, quoteRouter);
+// Tier rate limiting must run AFTER rbacAuth so req.apiKeyRecord is populated
+// and resolveTier can honor the key's configured tier (e.g. 'high' = 500/window).
+app.use('/api/v1/quote', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, quoteRouter);
 app.use('/api/telemetry', telemetryRateLimit, telemetryRouter);
-app.use('/api/v2/quote', rbacAuth, quoteRouter);
-app.use('/api/v1/fund', rbacAuth, fundingRouter);
-app.use('/api/v2/fund', rbacAuth, fundingRouter);
-app.use('/api/v1/status', rbacAuth, statusRouter);
-app.use('/api/v2/status', rbacAuth, statusRouter);
-app.use('/api/v1/offramp', rbacAuth, offrampRouter);
-app.use('/api/v2/offramp', rbacAuth, offrampRouter);
-app.use('/api/v1/cex', rbacAuth, cexRouter);
-app.use('/api/v2/cex', rbacAuth, cexRouter);
-app.use('/api/quote', rbacAuth, quoteRouter);
-app.use('/api/fund', rbacAuth, fundingRouter);
-app.use('/api/status', rbacAuth, statusRouter);
-app.use('/api/offramp', rbacAuth, offrampRouter);
-app.use('/api/cex', rbacAuth, cexRouter);
-
+app.use('/api/v2/quote', rbacAuth, requireScopes('quote:read'), tierRateLimitMiddleware, quoteRouter);
+app.use('/api/v1/fund', rbacAuth, requireScopes('fund:write'), tierRateLimitMiddleware, fundingRouter);
+app.use('/api/v2/fund', rbacAuth, requireScopes('fund:write'), tierRateLimitMiddleware, fundingRouter);
+app.use('/api/v1/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
+app.use('/api/v2/status', rbacAuth, requireScopes('status:read'), tierRateLimitMiddleware, statusRouter);
+app.use('/api/v1/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
+app.use('/api/v2/offramp', rbacAuth, requireScopes('offramp:write'), tierRateLimitMiddleware, offrampRouter);
+app.use('/api/v1/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
+app.use('/api/v2/cex', rbacAuth, requireScopes('cex:read'), tierRateLimitMiddleware, cexRouter);
+app.use('/api/v1/token', rbacAuth, requireScopes('token:read'), tierRateLimitMiddleware, tokenRouter);
+app.use('/api/v2/token', rbacAuth, requireScopes('token:read'), tierRateLimitMiddleware, tokenRouter);
+app.use('/api/v1/transactions', rbacAuth, requireScopes('transactions:read'), tierRateLimitMiddleware, transactionsRouter);
+app.use('/api/v2/transactions', rbacAuth, requireScopes('transactions:read'), tierRateLimitMiddleware, transactionsRouter);
+app.use('/api/v1/admin', rbacAuth, requireScopes('admin:write'), adminRouter);
+app.use('/api/v1/api-keys', rbacAuth, apiKeysRouter);
+app.use('/api/v1/webhooks', rbacAuth, webhookAdminRouter);
 app.use('/api/webhook/moonpay', moonpayWebhookRouter);
 app.use('/api/webhook/transak', transakWebhookRouter);
-
-app.use('/api/v1/webhooks', rbacAuth, webhookAdminRouter);
-app.use('/api/v1/keys', rbacAuth, apiKeysRouter);
-app.use('/api/v1/transactions', rbacAuth, transactionsRouter);
-app.use('/api/v1/admin', rbacAuth, adminRouter);
-
-// Cache metrics endpoint – dedicated JSON view of cache health
-app.use('/api/v1/cache/metrics', rbacAuth, cacheMetricsRouter);
+app.use('/api/cache-metrics', rbacAuth, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/metrics', rbacAuth, metricsRouter);
+app.use('/metrics', rbacAuth, requireScopes('metrics:read'), metricsRouter);
 
+// Error handler must be the last middleware
 app.use(xssErrorSanitizer);
 app.use(errorHandler);
 
-if (process.env.NODE_ENV !== 'test') {
-  const wss = createWebSocketServer();
+const server = createWebSocketServer(app);
+server.on('upgrade', handleUpgrade);
 
-  const server = app.listen(config.port, config.host, () => {
-    logger.info({ port: config.port, rpcUrls: config.soroban.rpcUrls.length }, 'bridge api server started');
-  });
+const port = config.port;
+server.listen(port, () => {
+  logger.info(`API listening on port ${port}`);
+  integrityAuditLog('server_start', { port });
+});
 
-  // WebSocket upgrade at /ws
-  server.on('upgrade', (req, socket, head) => {
-    const { pathname } = new URL(req.url ?? '/', `http://${req.headers.host}`);
-    if (pathname === '/ws') {
-      handleUpgrade(wss, req, socket as import('net').Socket, head);
-    } else {
-      socket.destroy();
-    }
-  });
+gracefulShutdown.attach(server, async () => {
+  await closePool();
+  await shutdownTracing();
+});
 
-  gracefulShutdown.attach(server, logger);
-
-  // Drain all external-service connection pools on shutdown.
-  // Imported lazily so the RPC pool / keep-alive agents aren't constructed
-  // during this module's early initialization.
-  const drainConnectionPools = async () => {
-    const [{ rpcPool }, { destroyAgents }] = await Promise.all([
-      import('./services/rpcPool'),
-      import('./services/httpAgent'),
-    ]);
-    rpcPool.destroy();
-    destroyAgents();
-    await closePool();
-    logger.info('connection pools drained');
-  };
-
-  if (config.jobs.enabled) {
-    import('./jobs/queue').then(async ({ getAllQueues, scheduleRecurringJobs, closeQueues }) => {
-      const { createBullBoard } = await import('@bull-board/api');
-      const { BullMQAdapter } = await import('@bull-board/api/bullMQAdapter');
-      const { ExpressAdapter } = await import('@bull-board/express');
-
-      const serverAdapter = new ExpressAdapter();
-      serverAdapter.setBasePath('/api/jobs');
-      createBullBoard({ queues: getAllQueues().map((q) => new BullMQAdapter(q)), serverAdapter });
-      app.use('/api/jobs', serverAdapter.getRouter());
-
-      await scheduleRecurringJobs();
-      logger.info('background job queues ready');
-
-      registerSignalHandlers(async () => {
-        await closeQueues();
-        await drainConnectionPools();
-        await shutdownTracing();
-        logger.info('job queues closed');
-      });
-    }).catch((err: Error) => {
-      logger.error({ err }, 'failed to initialize job queues');
-      registerSignalHandlers(async () => {
-        await drainConnectionPools();
-        await shutdownTracing();
-      });
-    });
-  } else {
-    registerSignalHandlers(async () => {
-      await drainConnectionPools();
-      await shutdownTracing();
-    });
-  }
-}
+registerSignalHandlers();
 
 export { app };
+export default app;

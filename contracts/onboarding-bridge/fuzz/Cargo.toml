@@ -6,9 +6,14 @@ publish = false
 
 [workspace]
 
+[lib]
+name = "fuzz_lib"
+path = "src/lib.rs"
+
 [dependencies]
 onboarding-bridge = { path = "..", features = ["testutils"] }
 soroban-sdk = { version = "26.0.1", features = ["testutils"] }
+getrandom = { version = "0.2", features = ["custom"] }
 
 [[bin]]
 name = "fuzz_fee_calculation"
@@ -25,5 +30,17 @@ doc = false
 [[bin]]
 name = "fuzz_admin_ops"
 path = "src/fuzz_admin_ops.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_invariants"
+path = "src/fuzz_invariants.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_upgrade"
+path = "src/fuzz_upgrade.rs"
 test = false
 doc = false
