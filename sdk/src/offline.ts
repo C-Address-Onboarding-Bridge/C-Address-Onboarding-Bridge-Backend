@@ -214,7 +214,11 @@ export class OfflineBridgeClient extends BridgeClient {
 
     this.autoQueue = config.offlineOptions?.autoQueue ?? true;
     this.locale = config.locale;
-    const healthPath = config.offlineOptions?.healthCheckPath ?? '/api/v1/health';
+    // #840 fix: the API serves health at the root (`/health`, `/health/live`,
+    // `/health/ready`), not under `/api/v1`. Defaulting to `/api/v1/health`
+    // always 404'd, so the queue never observed an offline->online transition
+    // and never replayed. Align with BridgeClient.health() which uses `/health`.
+    const healthPath = config.offlineOptions?.healthCheckPath ?? '/health';
     const base = config.baseUrl.replace(/\/+$/, '');
 
     this.offlineQueue = new OfflineQueue(

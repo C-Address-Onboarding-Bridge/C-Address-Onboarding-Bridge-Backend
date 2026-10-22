@@ -7,7 +7,7 @@ import { idempotencyMiddleware } from '../middleware/idempotency';
 import { hashPayload, integrityAuditLog } from '../services/auditLog';
 import { fundEndpointRateLimit, fundAbuseDetectionMiddleware } from '../middleware/rateLimit';
 import { recordFundingMetrics } from '../services/metrics';
-import { XdrValidationError, MAX_XDR_BYTE_LENGTH } from '../services/xdrValidator';
+import { XdrValidationError, checkSize } from '../services/xdrValidator';
 import { enqueueAudit, enqueueFundingMetrics } from '../services/asyncPipeline';
 import { requireScopes } from '../middleware/rbac';
 import { PermissionScope } from '../types/auth';
@@ -41,10 +41,8 @@ function submissionHttpStatus(status: string): number {
 // ── Schemas ────────────────────────────────────────────────────────────────────
 
 const fundSchema = z.object({
-  signedXdr: z
-    .string()
-    .min(1, 'signed transaction XDR is required')
-    .max(MAX_XDR_BYTE_LENGTH, `signedXdr must not exceed ${MAX_XDR_BYTE_LENGTH} characters`),
+  // Size is checked with checkSize() so oversized XDR returns XDR_TOO_LARGE.
+  signedXdr: z.string().min(1, 'signed transaction XDR is required'),
 });
 
 const fundPrepareSchema = z.object({
@@ -64,14 +62,13 @@ const fundDirectSchema = z.object({
 });
 
 const batchFundSchema = z.object({
-  signedXdr: z
-    .string()
-    .min(1, 'signed transaction XDR is required')
-    .max(MAX_XDR_BYTE_LENGTH, `signedXdr must not exceed ${MAX_XDR_BYTE_LENGTH} characters`),
+  // Size is checked with checkSize() so oversized XDR returns XDR_TOO_LARGE.
+  signedXdr: z.string().min(1, 'signed transaction XDR is required'),
   recipients: z.array(
     z.object({
       target: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
       amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
+      tokenAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid token contract address').optional(),
     }),
   ).min(1, 'at least one recipient is required').max(100, 'maximum 100 recipients per batch'),
 });
@@ -89,6 +86,7 @@ fundingRouter.post('/prepare', fundEndpointRateLimit, idempotencyMiddleware, asy
     const prepared = await sorobanService.prepareFundingTransaction(
       body.sourceAddress,
       body.targetAddress,
+      body.tokenAddress,
       body.amount,
       body.memo,
     );
@@ -143,6 +141,7 @@ fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req
   try {
     req.log?.info({ path: req.path }, 'fund transaction submission started');
     const body = fundSchema.parse(req.body);
+    checkSize(body.signedXdr);
     const result = await sorobanService.submitFundingTransaction(body.signedXdr);
 
     const actor = req.apiKeyRecord?.id ?? 'api-key';
@@ -190,11 +189,16 @@ fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req
 //
 // #636: Decode the actual recipients from the signed XDR and cross-check them
 // against the `recipients` body array.  Reject the request when they differ.
+//
+// #833: `batch_fund_c_address` takes parallel vectors
+// (targets, token_addresses, amounts, memos), so the decoder now returns the
+// token per recipient too.  Cross-check it here when the body supplies one.
 
 fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
     req.log?.info({ path: req.path }, 'batch fund transaction submission started');
     const body = batchFundSchema.parse(req.body);
+    checkSize(body.signedXdr);
 
     // #636: decode recipients from the XDR so the audit trail is honest.
     const xdrRecipients = sorobanService.decodeRecipientsFromXdr(body.signedXdr);
@@ -222,7 +226,15 @@ fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async
       if (bodyR.target !== xdrR.target || bodyR.amount !== xdrR.amount) {
         res.status(400).json({
           error: 'recipient_mismatch',
-          message: `Recipient ${i} mismatch: body declares ${bodyR.target}/${bodyR.amount} but signedXdr encodes ${xdrR.target}/${xdrR.amount}.`,
+          message: `Recipient ${i} mismatch: body declares target=${bodyR.target} amount=${bodyR.amount} but signedXdr encodes target=${xdrR.target} amount=${xdrR.amount}.`,
+        });
+        return;
+      }
+      // #833: cross-check the token per recipient when the body supplies one.
+      if (bodyR.tokenAddress !== undefined && bodyR.tokenAddress !== xdrR.tokenAddress) {
+        res.status(400).json({
+          error: 'recipient_mismatch',
+          message: `Recipient ${i} token mismatch: body declares tokenAddress=${bodyR.tokenAddress} but signedXdr encodes tokenAddress=${xdrR.tokenAddress}.`,
         });
         return;
       }
@@ -238,6 +250,7 @@ fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async
         txHash: result.hash,
         status: result.status,
         signedXdrHash: hashPayload(body.signedXdr),
+        recipients: xdrRecipients,
         error: result.error,
         recipientCount: body.recipients.length,
       },
@@ -248,8 +261,8 @@ fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async
           txHash: result.hash,
           status: result.status,
           signedXdrHash: hashPayload(body.signedXdr),
+          recipients: xdrRecipients,
           error: result.error,
-          recipientCount: body.recipients.length,
         },
         actor,
       ),

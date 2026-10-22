@@ -28,43 +28,43 @@ route:
 
   routes:
     # ── Critical alerts → PagerDuty ──────────────────────────
-    - match:
-        severity: critical
+    - matchers:
+        - severity = "critical"
       receiver: pagerduty-critical
       group_wait: 10s
       group_interval: 1m
       repeat_interval: 1h
       continue: true   # also send to Slack
 
-    - match:
-        severity: critical
+    - matchers:
+        - severity = "critical"
       receiver: slack-critical
       group_wait: 10s
       continue: false
 
     # ── Warning alerts → Slack #alerts-warning ───────────────
-    - match:
-        severity: warning
+    - matchers:
+        - severity = "warning"
       receiver: slack-warning
       group_wait: 1m
       repeat_interval: 4h
       continue: true
 
-    - match:
-        severity: warning
+    - matchers:
+        - severity = "warning"
       receiver: email-oncall
       repeat_interval: 12h
       continue: false
 
     # ── Blockchain / Soroban team ─────────────────────────────
-    - match:
-        team: blockchain
+    - matchers:
+        - team = "blockchain"
       receiver: slack-blockchain
       continue: true
 
     # ── Info / low priority → email only ─────────────────────
-    - match:
-        severity: info
+    - matchers:
+        - severity = "info"
       receiver: email-oncall
       repeat_interval: 24h
 
@@ -73,24 +73,24 @@ route:
 # ──────────────────────────────────────────────────────────────
 inhibit_rules:
   # Suppress warning if critical already firing for same service
-  - source_match:
-      severity: critical
-    target_match:
-      severity: warning
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
     equal: ["alertname", "team"]
 
   # Suppress SLO slow burn if fast burn is already firing
-  - source_match:
-      alertname: SLOFastBurn
-    target_match:
-      alertname: SLOSlowBurn
+  - source_matchers:
+      - alertname = "SLOFastBurn"
+    target_matchers:
+      - alertname = "SLOSlowBurn"
     equal: ["job"]
 
   # Suppress latency alert if health endpoint is down
-  - source_match:
-      alertname: HealthEndpointDown
-    target_match_re:
-      alertname: "(HighP99Latency|HighErrorRate)"
+  - source_matchers:
+      - alertname = "HealthEndpointDown"
+    target_matchers:
+      - alertname =~ "(HighP99Latency|HighErrorRate)"
     equal: ["job"]
 
 # ──────────────────────────────────────────────────────────────
