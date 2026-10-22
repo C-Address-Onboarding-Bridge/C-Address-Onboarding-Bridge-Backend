@@ -309,6 +309,23 @@ describe('withSingleFlight (stampede protection)', () => {
     expect(b).toBe('b');
     expect(callCount).toBe(2);
   });
+
+  it('waits and polls for value when Redis lock is not acquired', async () => {
+    // Simulate that another instance already holds the lock
+    mockStore.set('lock:polled-key', { value: '1', expiresAt: Date.now() + 5000 });
+
+    // The other instance will write the cached value after 60ms and release the lock
+    setTimeout(async () => {
+      await swrSet('polled-key', { data: 'from-other-instance' }, 30);
+      mockStore.delete('lock:polled-key');
+    }, 60);
+
+    const compute = vi.fn().mockResolvedValue({ data: 'from-this-instance' });
+    const result = await withSingleFlight('polled-key', compute);
+
+    expect(result).toEqual({ data: 'from-other-instance' });
+    expect(compute).not.toHaveBeenCalled();
+  });
 });
 
 describe('getOrCompute', () => {
@@ -363,6 +380,49 @@ describe('getOrCompute', () => {
     expect(callCount).toBe(1);
     expect(r1).toEqual({ count: 1 });
     expect(r2).toEqual({ count: 1 });
+  });
+
+  it('ensures a miss that overlaps a stale revalidation receives an object, not a JSON string', async () => {
+    // 1. Insert a stale SWR entry
+    const staleEntry = { value: { user: 'alice', version: 1 }, expiresAt: Date.now() - 1000 };
+    mockStore.set('stale-overlap-key', {
+      value: JSON.stringify(staleEntry),
+      expiresAt: Date.now() + 60_000,
+    });
+
+    let resolveRevalidation!: (val: { user: string; version: number }) => void;
+    const revalidationPromise = new Promise<{ user: string; version: number }>((resolve) => {
+      resolveRevalidation = resolve;
+    });
+
+    let computeCount = 0;
+    const compute = vi.fn(() => {
+      computeCount++;
+      return revalidationPromise;
+    });
+
+    // 2. Caller 1 gets stale hit and triggers background revalidation via setImmediate
+    const result1 = await getOrCompute('stale-overlap-key', 30, compute);
+    expect(result1).toEqual({ user: 'alice', version: 1 });
+
+    // Allow setImmediate to run so withSingleFlight revalidation promise is registered in inFlightMap
+    await new Promise((r) => setImmediate(r));
+    expect(compute).toHaveBeenCalledTimes(1);
+
+    // 3. Entry completely expires / gets deleted in the meantime
+    mockStore.delete('stale-overlap-key');
+
+    // 4. Caller 2 has a cache miss while revalidation is in flight and joins withSingleFlight
+    const missPromise = getOrCompute('stale-overlap-key', 30, compute);
+
+    // 5. Complete background revalidation
+    resolveRevalidation({ user: 'alice', version: 2 });
+
+    const result2 = await missPromise;
+    // Must be an object, not stringified JSON!
+    expect(typeof result2).toBe('object');
+    expect(typeof result2).not.toBe('string');
+    expect(result2).toEqual({ user: 'alice', version: 2 });
   });
 });
 

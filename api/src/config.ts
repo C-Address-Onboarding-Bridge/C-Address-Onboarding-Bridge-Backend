@@ -95,17 +95,24 @@ export const config = {
   /** Exchange API credentials for CEX withdrawal routing. Unauthenticated when empty. */
   cex: {
     binance: {
+      baseUrl: process.env.BINANCE_API_BASE_URL || 'https://api.binance.com',
       apiKey: process.env.BINANCE_API_KEY || '',
       apiSecret: process.env.BINANCE_API_SECRET || '',
     },
     coinbase: {
+      baseUrl: process.env.COINBASE_API_BASE_URL || 'https://api.exchange.coinbase.com',
       apiKey: process.env.COINBASE_API_KEY || '',
       apiSecret: process.env.COINBASE_API_SECRET || '',
       passphrase: process.env.COINBASE_API_PASSPHRASE || '',
     },
     kraken: {
+      baseUrl: process.env.KRAKEN_API_BASE_URL || 'https://api.kraken.com',
       apiKey: process.env.KRAKEN_API_KEY || '',
       apiSecret: process.env.KRAKEN_API_SECRET || '',
+    },
+    generic: {
+      baseUrl: process.env.GENERIC_CEX_BASE_URL || '',
+      apiKey: process.env.GENERIC_CEX_API_KEY || '',
     },
   },
   /** Comma-separated list of accepted `X-API-Key` values. Auth is disabled when empty. */

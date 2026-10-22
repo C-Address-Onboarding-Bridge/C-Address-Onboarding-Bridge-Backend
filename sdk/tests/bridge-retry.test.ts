@@ -90,6 +90,7 @@ describe('BridgeClient retry classification', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const pending = quoteCall(client);
+    pending.catch(() => {});
     await vi.runAllTimersAsync();
 
     await expect(pending).resolves.toEqual(quote);
@@ -132,6 +133,7 @@ describe('BridgeClient retry classification', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const pending = quoteCall(client);
+    pending.catch(() => {});
     await vi.runAllTimersAsync();
 
     await expect(pending).resolves.toEqual(quote);

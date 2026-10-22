@@ -57,9 +57,10 @@ export class AuthError extends BridgeError {
     const statusCode = options?.statusCode ?? 401;
     const resolvedMessage =
       message ??
-      (statusCode === 403
-        ? 'Forbidden. You do not have permission to perform this action.'
-        : 'Unauthorized. Check your API key.');
+      translate(
+        options?.locale,
+        statusCode === 403 ? 'error.auth.forbidden' : 'error.auth.unauthorized',
+      );
     super(resolvedMessage, { statusCode, code: options?.code, retryable: false, cause: options?.cause });
     this.name = 'AuthError';
   }
@@ -84,8 +85,10 @@ export class RateLimitError extends BridgeError {
     const resolvedMessage =
       message ??
       (options?.retryAfterMs !== undefined
-        ? `Too many requests. Retry after ${Math.ceil(options.retryAfterMs / 1000)} seconds.`
-        : 'Too many requests. Please slow down.');
+        ? translate(options?.locale, 'error.rate_limit.retry_after', {
+            seconds: Math.ceil(options.retryAfterMs / 1000),
+          })
+        : translate(options?.locale, 'error.rate_limit'));
     super(resolvedMessage, { statusCode: 429, code: options?.code, retryable: true, cause: options?.cause });
     this.name = 'RateLimitError';
     this.retryAfterMs = options?.retryAfterMs;
@@ -120,7 +123,7 @@ export class NotFoundError extends BridgeError {
   override readonly type = 'NotFoundError' as const;
 
   constructor(message?: string, options?: { code?: string; cause?: unknown; locale?: SupportedLocale }) {
-    const resolvedMessage = message ?? 'The requested resource was not found.';
+    const resolvedMessage = message ?? translate(options?.locale, 'error.not_found');
     super(resolvedMessage, { statusCode: 404, code: options?.code, retryable: false, cause: options?.cause });
     this.name = 'NotFoundError';
   }
@@ -132,7 +135,7 @@ export class NetworkError extends BridgeError {
   override readonly type = 'NetworkError' as const;
 
   constructor(message?: string, options?: { code?: string; cause?: unknown; locale?: SupportedLocale }) {
-    const resolvedMessage = message ?? 'A network error occurred. Check your connection and try again.';
+    const resolvedMessage = message ?? translate(options?.locale, 'error.network');
     super(resolvedMessage, { retryable: true, code: options?.code, cause: options?.cause });
     this.name = 'NetworkError';
   }
@@ -166,9 +169,7 @@ export class OfflineError extends BridgeError {
 
   constructor(queued = false, options?: { locale?: SupportedLocale; queueEntryId?: string }) {
     super(
-      queued
-        ? 'You are offline. The request has been queued and will be retried when connectivity is restored.'
-        : 'You are offline. The request could not be queued.',
+      translate(options?.locale, queued ? 'error.offline.queued' : 'error.offline.not_queued'),
       { retryable: false },
     );
     this.name = 'OfflineError';
@@ -182,13 +183,16 @@ export class QueueFullError extends BridgeError {
   readonly maxSize: number;
 
   constructor(maxSize: number, options?: { locale?: SupportedLocale }) {
-    super(`Offline queue is full (max ${maxSize} entries). The request was dropped.`, { retryable: false });
+    super(
+      translate(options?.locale, 'error.queue_full', { max: maxSize }),
+      { retryable: false },
+    );
     this.name = 'QueueFullError';
     this.maxSize = maxSize;
   }
 }
 
-// ─── Factory: parse HTTP response into typed error ────────────────────────────
+// ─── HTTP status mapping ───────────────────────────────────────────────────────
 
 /** A single zod issue as serialized by the API's error handler. */
 interface ErrorDetail {

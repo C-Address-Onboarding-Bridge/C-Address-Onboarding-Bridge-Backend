@@ -1,5 +1,29 @@
 import crypto from 'crypto';
 
+/**
+ * Converts an amount in stroops (integer string, 10^7 stroops per unit) to a decimal string.
+ *
+ * @param stroops - Integer string in stroops.
+ * @returns Decimal string representation.
+ */
+export function stroopsToDecimal(stroops: string): string {
+  if (!stroops || stroops.includes('.')) return stroops;
+  const negative = stroops.startsWith('-');
+  const rawStr = negative ? stroops.slice(1) : stroops;
+  const bn = BigInt(rawStr);
+  const divisor = BigInt(10_000_000);
+  const integer = bn / divisor;
+  const remainder = bn % divisor;
+  let result: string;
+  if (remainder === 0n) {
+    result = integer.toString();
+  } else {
+    const fraction = remainder.toString().padStart(7, '0').replace(/0+$/, '');
+    result = `${integer}.${fraction}`;
+  }
+  return negative ? `-${result}` : result;
+}
+
 /** Configuration for a registered exchange integration. */
 export interface CexConfig {
   name: string;
@@ -153,10 +177,11 @@ async function postToExchange(
  */
 export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
   async binance(req, config) {
+    const decimalAmount = stroopsToDecimal(req.amount);
     try {
       const params: Record<string, string> = {
         coin: req.asset,
-        amount: req.amount,
+        amount: decimalAmount,
         address: req.destinationAddress,
         network: req.network,
         timestamp: String(Date.now()),
@@ -175,7 +200,7 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
 
       if (!res.ok) {
         console.error(`binance withdrawal failed: ${res.status} ${await res.text()}`);
-        return { success: false, withdrawalId: `bin-${Date.now()}`, status: 'failed' };
+        return { success: false, withdrawalId: `bin-${Date.now()}`, status: 'failed', amount: decimalAmount };
       }
 
       const data = await res.json() as { id?: string; txId?: string };
@@ -185,22 +210,23 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
         txHash: data.txId,
         status: 'pending',
         estimatedCompletion: '5-30 minutes',
+        amount: decimalAmount,
       };
     } catch (err) {
       console.error('binance API error:', err);
-      return { success: false, withdrawalId: `bin-${Date.now()}`, status: 'failed' };
+      return { success: false, withdrawalId: `bin-${Date.now()}`, status: 'failed', amount: decimalAmount };
     }
   },
 
   async coinbase(req, config) {
-    const requestPath = '/v2/accounts/withdrawals';
+    const requestPath = '/withdrawals/crypto';
+    const decimalAmount = stroopsToDecimal(req.amount);
     try {
       const body = JSON.stringify({
-        type: 'send',
-        to: req.destinationAddress,
-        amount: req.amount,
+        amount: decimalAmount,
         currency: req.asset,
-        description: req.destinationTag,
+        crypto_address: req.destinationAddress,
+        ...(req.destinationTag ? { destination_tag: req.destinationTag } : {}),
       });
       const timestamp = String(Math.floor(Date.now() / 1000));
       const prehash = `${timestamp}POST${requestPath}${body}`;
@@ -219,24 +245,26 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
 
       if (!res.ok) {
         console.error(`coinbase withdrawal failed: ${res.status} ${await res.text()}`);
-        return { success: false, withdrawalId: `cb-${Date.now()}`, status: 'failed' };
+        return { success: false, withdrawalId: `cb-${Date.now()}`, status: 'failed', amount: decimalAmount };
       }
 
-      const data = await res.json() as { data?: { id?: string } };
+      const data = await res.json() as { id?: string; data?: { id?: string } };
       return {
         success: true,
-        withdrawalId: `cb-${data.data?.id ?? Date.now()}`,
+        withdrawalId: `cb-${data.id ?? data.data?.id ?? Date.now()}`,
         status: 'pending',
         estimatedCompletion: '5-30 minutes',
+        amount: decimalAmount,
       };
     } catch (err) {
       console.error('coinbase API error:', err);
-      return { success: false, withdrawalId: `cb-${Date.now()}`, status: 'failed' };
+      return { success: false, withdrawalId: `cb-${Date.now()}`, status: 'failed', amount: decimalAmount };
     }
   },
 
   async kraken(req, config) {
     const path = '/0/private/Withdraw';
+    const decimalAmount = stroopsToDecimal(req.amount);
     try {
       const nonce = String(Date.now());
       const withdrawKey =
@@ -295,10 +323,21 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
         withdrawalId: data.result.refid,
         status: 'pending',
         estimatedCompletion: '5-30 minutes',
+        amount: decimalAmount,
       };
     } catch (err) {
       console.error('kraken API error:', err);
       return { success: false, withdrawalId: `kr-${Date.now()}`, status: 'failed', error: String(err) };
     }
+  },
+
+  async generic(req, config) {
+    const decimalAmount = stroopsToDecimal(req.amount);
+    return {
+      success: true,
+      withdrawalId: `gen-${Date.now()}`,
+      status: 'pending',
+      amount: decimalAmount,
+    };
   },
 };

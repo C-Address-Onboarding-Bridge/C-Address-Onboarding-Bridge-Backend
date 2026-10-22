@@ -265,14 +265,12 @@ export class CexRoutingService {
   }
 
   private async handleCoinbase(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    const requestPath = '/v2/accounts/withdrawals';
+    const requestPath = '/withdrawals/crypto';
     const body = JSON.stringify({
-      type: 'crypto',
-      to: req.targetCAddress,
       amount: toWholeUnits(req.amount, req.sourceAsset),
       currency: req.sourceAsset.toUpperCase(),
-      network: req.targetNetwork,
-      destination_tag: req.memo,
+      crypto_address: req.targetCAddress,
+      ...(req.memo ? { destination_tag: req.memo } : {}),
     });
 
     try {
@@ -288,11 +286,11 @@ export class CexRoutingService {
         throw new Error(`coinbase withdrawal failed (${res.status}): ${text}`);
       }
 
-      const data = (await res.json()) as { data?: { id?: string } };
+      const data = (await res.json()) as { id?: string; data?: { id?: string } };
       return {
         status: 'pending',
-        withdrawalId: data.data?.id || `coinbase-${Date.now()}`,
-        exchangeTxId: data.data?.id,
+        withdrawalId: data.id || data.data?.id || `coinbase-${Date.now()}`,
+        exchangeTxId: data.id || data.data?.id,
       };
     } catch (err) {
       return {
@@ -376,3 +374,5 @@ export class CexRoutingService {
     }
   }
 }
+
+export const cexService = new CexRoutingService();

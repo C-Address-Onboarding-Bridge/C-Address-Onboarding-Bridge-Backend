@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 // @ts-nocheck
 /**
  * TODO(next-bounty): typechecking is off for this file only.
