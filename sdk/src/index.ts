@@ -1,12 +1,13 @@
-export { BridgeClient, type BridgeClientConfig } from './bridge';
+export { BridgeClient, type BridgeClientConfig } from './bridge.js';
+export { SDK_VERSION } from './version.js';
 export type {
   BridgeStatus,
   RequestParams,
   RequestValue,
   FundingPrepareResult,
   RequestSigningConfig,
-} from './types';
-export * from './types';
+} from './types.js';
+export * from './types.js';
 export {
   isNativeToken,
   isSacToken,
@@ -18,9 +19,9 @@ export {
   formatTokenAmount,
   parseTokenAmount,
   getDefaultDecimals,
-} from './token';
-export * as utils from './utils';
-export { PaginationHelper, paginateAll, collectAllPages } from './pagination';
+} from './token.js';
+export * as utils from './utils.js';
+export { PaginationHelper, paginateAll, collectAllPages } from './pagination.js';
 export {
   BridgeError,
   AuthError,
@@ -41,25 +42,17 @@ export {
   isTimeoutError,
   isNotFoundError,
   isBridgeError,
-} from './errors';
-export { BridgeEventEmitter } from './events';
-export { OfflineQueue, OfflineBridgeClient } from './offline';
-// TODO(next-bounty): `translate`, `t`, `getCatalog`, `CATALOGS` and
-// DEFAULT_LOCALE are not exported by ./i18n -- the translation runtime was
-// never written (see the note at the top of errors.ts). The catalogs and
-// metadata below are real and still exported. Restore these five once the
-// runtime exists.
-export {
-  // translate,
-  // t,
-  // getCatalog,
-  // CATALOGS,
-  // DEFAULT_LOCALE,
+  translate,
+  MESSAGE_CATALOGS,
   SUPPORTED_LOCALES,
-  LOCALE_METADATA,
   type SupportedLocale,
-  type LocaleMetadata,
   type MessageKey,
   type MessageParams,
+} from './errors.js';
+export { BridgeEventEmitter } from './events.js';
+export { OfflineQueue, OfflineBridgeClient } from './offline.js';
+export {
+  LOCALE_METADATA,
+  type LocaleMetadata,
   type MessageCatalog,
-} from './i18n';
+} from './i18n.js';

@@ -72,47 +72,47 @@ describe('PII masking', () => {
   });
 
   describe('maskBody', () => {
-    it.skip('masks known sensitive fields', () => {
+    it('masks known sensitive fields', () => {
       const body = { apiKey: 'secret-api-key-1234', name: 'test' };
       const result = maskBody(body) as Record<string, unknown>;
       expect(result['apiKey']).toBe('***1234');
       expect(result['name']).toBe('test');
     });
 
-    it.skip('masks email field', () => {
+    it('masks email field', () => {
       const body = { email: 'user@example.com', amount: '1000' };
       const result = maskBody(body) as Record<string, unknown>;
       expect((result['email'] as string).startsWith('***')).toBe(true);
       expect(result['amount']).toBe('1000');
     });
 
-    it.skip('masks password field', () => {
+    it('masks password field', () => {
       const body = { password: 'super-secret-password' };
       const result = maskBody(body) as Record<string, unknown>;
       expect((result['password'] as string).startsWith('***')).toBe(true);
     });
 
-    it.skip('masks walletAddress field', () => {
+    it('masks walletAddress field', () => {
       const body = { walletAddress: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW' };
       const result = maskBody(body) as Record<string, unknown>;
       expect((result['walletAddress'] as string).startsWith('***')).toBe(true);
     });
 
-    it.skip('does not mutate primitive values', () => {
+    it('does not mutate primitive values', () => {
       expect(maskBody(null)).toBe(null);
       expect(maskBody(undefined)).toBe(undefined);
       expect(maskBody(42)).toBe(42);
       expect(maskBody('plain string')).toBe('plain string');
     });
 
-    it.skip('handles nested objects', () => {
+    it('handles nested objects', () => {
       const body = { user: { email: 'user@example.com', name: 'Alice' } };
       const result = maskBody(body) as Record<string, Record<string, unknown>>;
       expect((result['user']['email'] as string).startsWith('***')).toBe(true);
       expect(result['user']['name']).toBe('Alice');
     });
 
-    it.skip('handles arrays', () => {
+    it('handles arrays', () => {
       const body = [{ apiKey: 'secret1234' }, { apiKey: 'other5678' }];
       const result = maskBody(body) as Array<Record<string, unknown>>;
       expect((result[0]['apiKey'] as string).startsWith('***')).toBe(true);

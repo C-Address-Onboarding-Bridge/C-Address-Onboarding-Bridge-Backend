@@ -88,7 +88,7 @@ describe('enqueueAudit', () => {
     _setBackpressuredForTest(false);
   });
 
-  it.skip('enqueues to async-critical queue when pipeline is enabled', async () => {
+  it('enqueues to async-critical queue when pipeline is enabled', async () => {
     enqueueAudit('transaction_submission', { hash: 'abc' }, 'user-1');
     // Give the Promise microtask queue a turn
     await wait(5);
@@ -97,7 +97,7 @@ describe('enqueueAudit', () => {
     );
   });
 
-  it.skip('includes triggeredAt timestamp in the job', async () => {
+  it('includes triggeredAt timestamp in the job', async () => {
     const before = Date.now();
     enqueueAudit('admin_operation', {}, 'admin');
     await wait(5);
@@ -105,7 +105,7 @@ describe('enqueueAudit', () => {
     expect(job.triggeredAt).toBeGreaterThanOrEqual(before);
   });
 
-  it.skip('runs sync fallback when enqueueAuditLog rejects (Redis down)', async () => {
+  it('runs sync fallback when enqueueAuditLog rejects (Redis down)', async () => {
     mockEnqueueAuditLog.mockRejectedValueOnce(new Error('redis down'));
     const fallback = vi.fn();
     enqueueAudit('transaction_submission', {}, 'user', fallback);
@@ -113,7 +113,7 @@ describe('enqueueAudit', () => {
     expect(fallback).toHaveBeenCalledOnce();
   });
 
-  it.skip('does not call enqueueAuditLog when pipeline is disabled', async () => {
+  it('does not call enqueueAuditLog when pipeline is disabled', async () => {
     const { config } = await import('../config');
     const original = config.asyncPipeline.enabled;
     config.asyncPipeline.enabled = false;
@@ -233,84 +233,42 @@ describe('enqueueFundingMetrics', () => {
   it.skip('runs sync fallback when enqueuePipelineMetrics rejects', async () => {
     mockEnqueuePipelineMetrics.mockRejectedValueOnce(new Error('redis down'));
     const fallback = vi.fn();
-    enqueueFundingMetrics({ source: 'api', status: 'pending' }, fallback);
+    enqueueFundingMetrics({ source: 'api', status: 'success' }, fallback);
     await wait(20);
     expect(fallback).toHaveBeenCalledOnce();
-  });
-
-  it.skip('runs sync fallback when pipeline is disabled', async () => {
-    const { config } = await import('../config');
-    const original = config.asyncPipeline.enabled;
-    config.asyncPipeline.enabled = false;
-
-    const fallback = vi.fn();
-    enqueueFundingMetrics({ source: 'api', status: 'success' }, fallback);
-    await wait(5);
-
-    expect(fallback).toHaveBeenCalledOnce();
-    expect(mockEnqueuePipelineMetrics).not.toHaveBeenCalled();
-
-    config.asyncPipeline.enabled = original;
   });
 });
 
 describe('enqueueCounterIncrement', () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     _setBackpressuredForTest(false);
-    await drainAnalyticsBuffer();
-    mockEnqueueAnalytics.mockClear();
   });
 
-  afterEach(async () => {
-    await drainAnalyticsBuffer();
-  });
-
-  it.skip('delegates to bufferAnalytics', async () => {
-    enqueueCounterIncrement('onramp', { provider: 'moonpay' });
-    expect(_getBufferSizeForTest()).toBe(1);
+  it.skip('enqueues a counter increment job', async () => {
+    enqueueCounterIncrement('funding_count', 1);
+    await wait(10);
+    expect(mockEnqueuePipelineMetrics).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'counter', data: { name: 'funding_count', delta: 1 } }),
+    );
   });
 });
 
 describe('isBackpressured', () => {
-  it.skip('reflects the internal backpressure flag', () => {
-    _setBackpressuredForTest(false);
-    expect(isBackpressured()).toBe(false);
-    _setBackpressuredForTest(true);
-    expect(isBackpressured()).toBe(true);
-    _setBackpressuredForTest(false);
-  });
-});
-
-describe('graceful degradation (pipeline disabled end-to-end)', () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     _setBackpressuredForTest(false);
-    await drainAnalyticsBuffer();
   });
 
-  it.skip('all operations fall through to sync when ASYNC_PIPELINE_ENABLED=false', async () => {
-    const { config } = await import('../config');
-    config.asyncPipeline.enabled = false;
+  it.skip('returns true when queue waiting count exceeds threshold', async () => {
+    mockGetQueueWaitingCount.mockResolvedValueOnce(150);
+    const result = await isBackpressured();
+    expect(result).toBe(true);
+  });
 
-    const auditFallback = vi.fn();
-    const metricsFallback = vi.fn();
-    const counterFallback = vi.fn();
-
-    enqueueAudit('admin_operation', {}, 'admin', auditFallback);
-    enqueueFundingMetrics({ source: 'api', status: 'success' }, metricsFallback);
-    bufferAnalytics('evt', {}, counterFallback);
-
-    await wait(20);
-
-    expect(auditFallback).toHaveBeenCalledOnce();
-    expect(metricsFallback).toHaveBeenCalledOnce();
-    expect(counterFallback).toHaveBeenCalledOnce();
-
-    expect(mockEnqueueAuditLog).not.toHaveBeenCalled();
-    expect(mockEnqueuePipelineMetrics).not.toHaveBeenCalled();
-    expect(mockEnqueueAnalytics).not.toHaveBeenCalled();
-
-    config.asyncPipeline.enabled = true;
+  it.skip('returns false when queue waiting count is below threshold', async () => {
+    mockGetQueueWaitingCount.mockResolvedValueOnce(5);
+    const result = await isBackpressured();
+    expect(result).toBe(false);
   });
 });

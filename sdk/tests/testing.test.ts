@@ -10,7 +10,11 @@ import {
   MOCK_TOKEN_ADDRESS,
   MOCK_TX_HASH,
   MOCK_QUOTE_PARAMS,
+  MOCK_SAC_TOKEN,
+  MOCK_TOKEN_METADATA,
 } from '../src/testing';
+import { isCAddress, isGAddress } from '../src/utils';
+import { isSacTokenAddress, validateSacTokenAddress } from '../src/token';
 
 /**
  * TODO(next-bounty): the tests marked `.skip` in this file assert behaviour that
@@ -30,6 +34,37 @@ function makeClient(overrides?: ConstructorParameters<typeof BridgeClient>[0]): 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
 describe('fixtures', () => {
+  describe('mock addresses validity (#879)', () => {
+    it('passes isCAddress for MOCK_C_ADDRESS', () => {
+      expect(MOCK_C_ADDRESS).toHaveLength(56);
+      expect(isCAddress(MOCK_C_ADDRESS)).toBe(true);
+    });
+
+    it('passes isGAddress for MOCK_G_ADDRESS', () => {
+      expect(MOCK_G_ADDRESS).toHaveLength(56);
+      expect(isGAddress(MOCK_G_ADDRESS)).toBe(true);
+    });
+
+    it('passes isSacTokenAddress and validateSacTokenAddress for MOCK_TOKEN_ADDRESS', () => {
+      expect(MOCK_TOKEN_ADDRESS).toHaveLength(56);
+      expect(isSacTokenAddress(MOCK_TOKEN_ADDRESS)).toBe(true);
+      expect(() => validateSacTokenAddress(MOCK_TOKEN_ADDRESS)).not.toThrow();
+    });
+
+    it('produces valid token contract address in fixtures.token() and MOCK_SAC_TOKEN', () => {
+      const t = fixtures.token();
+      expect(t.type).toBe('sac');
+      expect(isSacTokenAddress(t.contractId)).toBe(true);
+      expect(isSacTokenAddress(MOCK_SAC_TOKEN.contractId)).toBe(true);
+    });
+
+    it('has a valid StrKey issuer in MOCK_TOKEN_METADATA and fixtures.tokenMetadata()', () => {
+      expect(isGAddress(MOCK_TOKEN_METADATA.issuer)).toBe(true);
+      const meta = fixtures.tokenMetadata();
+      expect(isGAddress(meta.issuer)).toBe(true);
+    });
+  });
+
   it('returns a valid Quote with defaults', () => {
     const q = fixtures.quote();
     expect(q.feeBps).toBe(100);

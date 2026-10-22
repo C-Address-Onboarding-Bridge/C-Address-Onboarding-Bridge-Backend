@@ -20,22 +20,24 @@ import {
   Token,
   TokenMetadata,
   TokenMetadataParams,
-} from "./types";
-import { tokenToSourceAsset, tokenFromLegacy, getDefaultDecimals, isSacTokenAddress, isSacToken, validateSacTokenAddress } from "./token";
-import { SimpleCache } from "./cache";
-import { TelemetryClient } from "./telemetry";
+} from "./types.js";
+import { tokenToSourceAsset, tokenFromLegacy, getDefaultDecimals, isSacTokenAddress, isSacToken, validateSacTokenAddress } from "./token.js";
+import { generateIdempotencyKey } from "./utils.js";
+import { SimpleCache } from "./cache.js";
+import { TelemetryClient } from "./telemetry.js";
 import {
   parseHttpError,
   NetworkError,
   TimeoutError,
   BridgeError,
+  ServerError,
   ValidationError,
-} from "./errors";
+} from "./errors.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
-export type { BridgeClientConfig } from "./types";
-import type { BridgeClientConfig } from "./types";
+export type { BridgeClientConfig } from "./types.js";
+import type { BridgeClientConfig } from "./types.js";
 
 // ─── HMAC-SHA256 signing helpers ───────────────────────────────────────────────
 
@@ -92,6 +94,21 @@ export class BridgeClient {
       jitterMs: config.retry?.jitterMs ?? 50,
       logger: config.retry?.logger ?? console,
     };
+  }
+
+  /**
+   * Stop the client's background work and release its resources.
+   *
+   * Today that is the telemetry flush timer (flushed one final time so queued
+   * events are not lost). Subclasses that start timers, such as
+   * `OfflineBridgeClient`, extend this to stop their own.
+   *
+   * In Node this also means the process can exit; every SDK timer is
+   * `unref()`'d, but a browser client needs `destroy()` to stop its interval.
+   * Idempotent.
+   */
+  destroy(): void {
+    this.telemetry.destroy();
   }
 
   protected shouldRetry(err: unknown): boolean {
@@ -171,17 +188,9 @@ export class BridgeClient {
       method === "POST" &&
       BridgeClient.NON_IDEMPOTENT_POST_PATHS.has(path);
 
-    // TODO(next-bounty): BridgeClient.generateIdempotencyKey() was never
-    // implemented. An identical module-level helper exists in offline.ts, but
-    // offline.ts imports bridge.ts, so importing it back would be circular --
-    // the fix is to move that helper into utils.ts and call it from both.
-    //
-    // Until then only an explicitly supplied key is sent, so auto-generated
-    // idempotency keys are NOT attached to the non-idempotent POSTs listed in
-    // NON_IDEMPOTENT_POST_PATHS. Nothing is deployed yet; this must be wired up
-    // before anything goes live, or a retried withdrawal could double-execute.
-    void isNonIdempotentPost;
-    const resolvedIdempotencyKey = idempotencyKey;
+    const resolvedIdempotencyKey = isNonIdempotentPost
+      ? idempotencyKey ?? generateIdempotencyKey()
+      : idempotencyKey;
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -189,7 +198,8 @@ export class BridgeClient {
     };
     if (this.apiKey) headers["X-API-Key"] = this.apiKey;
     if (resolvedIdempotencyKey) {
-      headers["Idempotency-Key"] = resolvedIdempotencyKey;
+      // Issue #671: Use x-idempotency-key (lowercase) to match API middleware expectations
+      headers["x-idempotency-key"] = resolvedIdempotencyKey;
     }
 
     let attempt = 0;
@@ -235,7 +245,14 @@ export class BridgeClient {
           throw bridgeErr;
         }
 
-        return res.json() as Promise<T>;
+        try {
+          return (await res.json()) as T;
+        } catch (parseErr) {
+          throw new ServerError(
+            `${method} ${path} returned a non-JSON response (status ${res.status})`,
+            { statusCode: res.status, retryable: false, cause: parseErr },
+          );
+        }
       } catch (error) {
         // Re-wrap abort as TimeoutError
         if (
@@ -435,6 +452,7 @@ export class BridgeClient {
       { signedXdr: params.signedXdr },
       undefined,
       { timeout: this.fundSubmissionTimeout, ...options },
+      options?.idempotencyKey,
     );
   }
 

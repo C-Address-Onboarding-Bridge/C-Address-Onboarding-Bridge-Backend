@@ -41,5 +41,6 @@ export async function processMetrics(job: Job<MetricsData>): Promise<void> {
 }
 
 export function getMetrics(): MetricsSnapshot[] {
-  return metricsStore;
+  // Return a copy so callers cannot mutate the stored snapshot history.
+  return [...metricsStore];
 }
