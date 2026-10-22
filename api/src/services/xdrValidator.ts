@@ -24,6 +24,7 @@ import {
   Transaction,
   FeeBumpTransaction,
   TransactionBuilder,
+  Keypair,
   StrKey,
   xdr,
 } from '@stellar/stellar-sdk';
@@ -51,6 +52,11 @@ export const MAX_FEE_STROOPS = 10_000_000;
  *  Transactions timestamped more than 1 hour in the future are suspicious. */
 export const MAX_FUTURE_TIME_MS = 60 * 60 * 1000;
 
+/** How far into the future (ms) a transaction's minTime may be set. A transaction
+ *  that is not yet valid will be rejected by the network with `txTOO_EARLY`, so we
+ *  reject it up front. A small tolerance absorbs clock skew between us and the client. */
+export const MAX_MIN_TIME_SKEW_MS = 30 * 1000;
+
 /** How long we retain seen transaction hashes for duplicate detection. */
 const SEEN_HASH_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
@@ -77,6 +83,7 @@ export type XdrValidationCode =
   | 'FEE_TOO_LOW'
   | 'FEE_TOO_HIGH'
   | 'TRANSACTION_EXPIRED'
+  | 'TRANSACTION_NOT_YET_VALID'
   | 'TRANSACTION_TOO_FAR_FUTURE'
   | 'INVALID_SOURCE_ACCOUNT'
   | 'NO_INVOKE_HOST_FUNCTION'
@@ -162,7 +169,7 @@ function isValidStellarAddress(addr: string): boolean {
 
 // ── Rule implementations ──────────────────────────────────────────────────────
 
-function checkSize(xdrString: string, maxByteLength: number): void {
+export function checkSize(xdrString: string, maxByteLength: number = MAX_XDR_BYTE_LENGTH): void {
   // Buffer.byteLength on a base64 string gives the decoded size ×0.75, but we
   // want to bound the raw string length too — a 64 KB base64 string decodes to
   // ~48 KB of binary, which is already far beyond any legitimate transaction.
@@ -196,6 +203,13 @@ function decodeBase64(xdrString: string): Buffer {
  * fee-bump envelopes — making the `instanceof FeeBumpTransaction` branch dead
  * code and rejecting every fee-bump transaction with `XDR_PARSE_FAILED`.
  *
+ * `TransactionBuilder.fromXDR` accepts a base64 string or a decoded
+ * `xdr.TransactionEnvelope` — NOT a raw `Buffer`. Passing a Buffer makes the
+ * SDK treat it as an envelope object and fail with
+ * `envelope.switch is not a function`, rejecting every XDR as
+ * `XDR_PARSE_FAILED`. We therefore decode the buffer into an
+ * `xdr.TransactionEnvelope` and hand that to the builder.
+ *
  * For fee bumps we validate the fee source address and unwrap the inner
  * transaction so the remaining rules run against the transaction that actually
  * carries the operations.
@@ -206,7 +220,8 @@ function parseEnvelope(
 ): Transaction {
   let parsed: Transaction | FeeBumpTransaction;
   try {
-    parsed = TransactionBuilder.fromXDR(rawBuf, networkPassphrase);
+    const envelope = xdr.TransactionEnvelope.fromXDR(rawBuf);
+    parsed = TransactionBuilder.fromXDR(envelope, networkPassphrase);
   } catch (err) {
     throw new XdrValidationError(
       'XDR_PARSE_FAILED',
@@ -334,9 +349,20 @@ function checkOperations(
       `Function "${fnName}" is not in the allowlist [${allowedFunctions.join(', ')}]`,
     );
   }
+
+  if (contractId) {
+    const contractAddr = invokeContract.contractAddress();
+    const contractStr = StrKey.encodeContract(contractAddr.contractId());
+    if (contractStr !== contractId) {
+      throw new XdrValidationError(
+        'WRONG_CONTRACT',
+        `Transaction targets contract ${contractStr} but expected ${contractId}`,
+      );
+    }
+  }
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 
 /**
  * Validates a base64-encoded signed Soroban transaction envelope.

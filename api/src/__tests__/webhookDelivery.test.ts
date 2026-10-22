@@ -10,6 +10,7 @@ vi.mock('../index', () => ({
 
 vi.mock('../jobs/queue', () => ({
   enqueueWebhookRetry: vi.fn().mockResolvedValue(undefined),
+  WEBHOOK_RETRY_DELAYS_MS: [10_000, 60_000, 300_000],
   enqueueAuditLog: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -148,9 +149,11 @@ describe('WebhookDeliveryService', () => {
       expect(enqueueMock).toHaveBeenCalledWith(
         expect.objectContaining({
           registrationId: reg.id,
+          url: 'https://example.com/hook',
           event: 'tx.failed',
           attemptNumber: 1,
-        })
+        }),
+        10_000,
       );
     });
 
@@ -218,4 +221,10 @@ describe('WebhookDeliveryService', () => {
   describe('getStats', () => {
     it('returns correct stats', () => {
       service.register({ url: 'https://a.com', secret: 'secretvalue12345', apiKey: 'k', events: ['*'] });
-      service.register({ url: 'https://b.com', secret: 'secretvalue12345', apiKey: 'k',
+      service.register({ url: 'https://b.com', secret: 'secretvalue12345', apiKey: 'k', events: ['*'] });
+      const stats = service.getStats();
+      expect(stats.registered).toBe(2);
+      expect(stats.dlqSize).toBe(0);
+    });
+  });
+});

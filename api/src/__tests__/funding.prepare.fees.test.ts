@@ -16,6 +16,7 @@ vi.mock('../services/soroban', () => ({
       transactionEnvelopeXdr: 'AAAAAgAAAABDrzABL2F/tOvT8T8V++T8KqP1V8DWaFmDVvQJTJTN6w==',
     }),
     submitFundingTransaction: vi.fn(),
+    submitValidatedXdr: vi.fn(),
   },
 }));
 
@@ -121,5 +122,77 @@ describe('POST /api/v1/fund/prepare - Fee Information', () => {
     expect(res.body).toHaveProperty('feeBps');
     expect(res.body).toHaveProperty('feeAmount');
     expect(res.body).toHaveProperty('netAmount');
+  });
+});
+
+describe('POST /api/v1/fund - transaction status mapping', () => {
+  const validFundRequest = {
+    sourceAddress: 'GAHFGQNZXHJJRVCCPQO5J3BSFLSPOZG2JMQVNF5XVLNGSYXHFUQ2EXFD',
+    targetAddress: 'CAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+    tokenAddress: 'CAKMW7CKBZATWFMKM3LZNGXSDX5KQFMYSVQP2GGKWSJQGBGZVYBZKX4',
+    amount: '1000000',
+    signedXdr: 'AAAAAgAAAABDrzABL2F/tOvT8T8V++T8KqP1V8DWaFmDVvQJTJTN6w==',
+  };
+
+  it('returns 201 when the transaction is pending', async () => {
+    const { sorobanService } = await import('../services/soroban');
+    vi.mocked(sorobanService.submitValidatedXdr).mockResolvedValueOnce({
+      status: 'pending',
+      hash: 'deadbeef',
+    } as any);
+
+    const res = await request(app)
+      .post('/api/v1/fund')
+      .set('X-API-Key', 'test-api-key-123')
+      .send(validFundRequest);
+
+    expect(res.status).toBe(201);
+  });
+
+  it('returns 201 when the transaction succeeded', async () => {
+    const { sorobanService } = await import('../services/soroban');
+    vi.mocked(sorobanService.submitValidatedXdr).mockResolvedValueOnce({
+      status: 'success',
+      hash: 'deadbeef',
+    } as any);
+
+    const res = await request(app)
+      .post('/api/v1/fund')
+      .set('X-API-Key', 'test-api-key-123')
+      .send(validFundRequest);
+
+    expect(res.status).toBe(201);
+  });
+
+  it('returns 422 when the transaction failed', async () => {
+    const { sorobanService } = await import('../services/soroban');
+    vi.mocked(sorobanService.submitValidatedXdr).mockResolvedValueOnce({
+      status: 'failed',
+      hash: 'deadbeef',
+      error: 'tx rejected by RPC',
+    } as any);
+
+    const res = await request(app)
+      .post('/api/v1/fund')
+      .set('X-API-Key', 'test-api-key-123')
+      .send(validFundRequest);
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('tx rejected by RPC');
+  });
+
+  it('returns 410 when the transaction expired', async () => {
+    const { sorobanService } = await import('../services/soroban');
+    vi.mocked(sorobanService.submitValidatedXdr).mockResolvedValueOnce({
+      status: 'expired',
+      hash: 'deadbeef',
+    } as any);
+
+    const res = await request(app)
+      .post('/api/v1/fund')
+      .set('X-API-Key', 'test-api-key-123')
+      .send(validFundRequest);
+
+    expect(res.status).toBe(410);
   });
 });
