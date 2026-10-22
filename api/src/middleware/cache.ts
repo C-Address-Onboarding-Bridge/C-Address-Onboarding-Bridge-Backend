@@ -82,22 +82,22 @@ export function cacheMiddleware(opts: CacheMiddlewareOptions): RequestHandler {
       return;
     }
 
-    let entry: unknown;
+    let cached: { value: CachedResponse; stale: boolean } | null;
     try {
-      entry = await swrGet(cacheKey);
+      cached = await swrGet(cacheKey);
     } catch {
       // Cache read failure should never break the request.
       next();
       return;
     }
 
-    if (isCachedResponse(entry)) {
-      const age = Math.max(0, Math.floor((Date.now() - entry.cachedAt) / 1000));
-      const isStale = age >= ttl;
+    if (cached) {
+      const entry = cached.value;
+      const isStale = cached.stale;
 
       res.setHeader('X-Cache', isStale ? 'STALE' : 'HIT');
       res.setHeader('Cache-Control', `public, max-age=${ttl}`);
-      res.setHeader('Age', String(age));
+      res.setHeader('Age', String(isStale ? ttl : 0));
       if (entry.headers) {
         for (const [name, value] of Object.entries(entry.headers)) {
           res.setHeader(name, value);

@@ -21,8 +21,53 @@ function checkWindow(
   store: Map<string, WindowEntry>,
   key: string,
   limit: number,
-  windowMs: number
-): { allowed: boolean; remaining: number; resetAt: number } {
+  remaining: number,
+  resetMs: number
+): void {
+  res.set('X-RateLimit-Limit', String(limit));
+  res.set('X-RateLimit-Remaining', String(Math.max(0, remaining)));
+  res.set('X-RateLimit-Reset', String(Math.ceil(resetMs / 1000)));
+
+  const status = res.statusCode;
+  if (status === 429 || status === 503) {
+    res.set('Retry-After', String(Math.ceil(resetMs / 1000)));
+  }
+}
+
+/**
+ * Express middleware wrapper around {@link applyRateLimitHeaders}.
+ *
+ * `applyRateLimitHeaders` takes `(res, limit, remaining, resetMs)` and is a
+ * plain helper, not middleware. Mounting it directly with `app.use` made
+ * Express treat it as a four-argument error handler, so it never ran on normal
+ * requests and threw `res.set is not a function` when an error propagated.
+ *
+ * This wrapper has the real `(req, res, next)` signature and only sets the
+ * headers when the limiter has recorded values on the response. The
+ * `X-RateLimit-*` headers are already emitted by `express-rate-limit`
+ * (`standardHeaders: true`), so this is a no-op unless values are present.
+ */
+export function rateLimitHeadersMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const limit = Number(res.getHeader('X-RateLimit-Limit'));
+  const remaining = Number(res.getHeader('X-RateLimit-Remaining'));
+  const reset = Number(res.getHeader('X-RateLimit-Reset'));
+
+  if (Number.isFinite(limit) && Number.isFinite(remaining) && Number.isFinite(reset)) {
+    applyRateLimitHeaders(res, limit, remaining, reset * 1000);
+  }
+
+  next();
+}
+
+/**
+ * Track request cost for an API key. Returns false when the cost limit is
+ * exceeded (and fires an abuse alert).
+ */
+export function trackRequestCost(apiKeyId: string, cost: number): boolean {
   const now = Date.now();
   let entry = store.get(key);
 

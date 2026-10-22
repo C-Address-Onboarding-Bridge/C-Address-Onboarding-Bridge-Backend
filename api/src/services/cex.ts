@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { config } from '../config';
+import { getCircuitBreaker } from '../circuit-breaker';
 
 /** Request parameters for routing a CEX withdrawal to a C-address. */
 export interface CexWithdrawalRequest {
@@ -147,20 +148,24 @@ export class CexRoutingService {
     headers: Record<string, string>,
     body: string,
   ): Promise<Response> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    // Network errors and 5xx responses count towards the breaker; 4xx do not.
+    return getCircuitBreaker('cex').execute(async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
 
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body,
-        signal: controller.signal,
-      });
-      return res;
-    } finally {
-      clearTimeout(timeout);
-    }
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body,
+          signal: controller.signal,
+        });
+        if (res.status >= 500) throw new Error(`exchange request failed (${res.status})`);
+        return res;
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
   }
 
   /** Binance: query-string params signed with HMAC-SHA256, key sent via `X-MBX-APIKEY`. */
