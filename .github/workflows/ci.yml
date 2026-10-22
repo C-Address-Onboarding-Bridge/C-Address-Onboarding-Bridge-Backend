@@ -32,7 +32,11 @@ jobs:
 
       - name: Clippy
         working-directory: contracts/onboarding-bridge
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Clippy (fuzz crate)
+        working-directory: contracts/onboarding-bridge/fuzz
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
         working-directory: contracts/onboarding-bridge
@@ -143,6 +147,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Check package exports and types
+        run: npm run check:exports
 
   e2e:
     name: E2E Tests

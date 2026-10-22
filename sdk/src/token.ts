@@ -88,13 +88,38 @@ export function formatTokenAmount(amount: string, decimals: number): string {
  * @param amount - Human-readable amount (e.g. `"1.5"`).
  * @param decimals - Number of decimal places the token uses.
  * @returns Raw integer amount as a string (e.g. `"1500000"` for 6 decimals).
+ * @throws {ValidationError} If the input format is invalid or has too many decimal places.
  */
 export function parseTokenAmount(amount: string, decimals: number): string {
-  const parts = amount.split('.');
-  const integerPart = parts[0] || '0';
-  const fractionalPart = (parts[1] || '').padEnd(decimals, '0').slice(0, decimals);
+  if (typeof amount !== 'string' || !/^-?\d+(\.\d+)?$/.test(amount)) {
+    throw new ValidationError(`Invalid amount format: "${amount}". Must be a decimal number string.`, {
+      fields: { amount: 'Must be a valid decimal number string' },
+    });
+  }
 
-  return (integerPart + fractionalPart).replace(/^0+(?=.)/, '');
+  const isNegative = amount.startsWith('-');
+  const cleanAmount = isNegative ? amount.slice(1) : amount;
+
+  const parts = cleanAmount.split('.');
+  const integerPart = parts[0] || '0';
+  const fractionalPart = parts[1] || '';
+
+  if (fractionalPart.length > decimals) {
+    throw new ValidationError(
+      `Amount "${amount}" has ${fractionalPart.length} decimal places, but token only supports ${decimals}.`,
+      {
+        fields: { amount: `Too many decimal places (maximum: ${decimals})` },
+      },
+    );
+  }
+
+  const paddedFractional = fractionalPart.padEnd(decimals, '0');
+  const combined = (integerPart + paddedFractional).replace(/^0+(?=.)/, '');
+  if (combined === '' || combined === '0') {
+    return '0';
+  }
+
+  return isNegative ? `-${combined}` : combined;
 }
 
 /**

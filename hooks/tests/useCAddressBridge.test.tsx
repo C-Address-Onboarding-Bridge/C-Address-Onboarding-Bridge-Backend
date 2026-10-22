@@ -36,3 +36,38 @@ describe('useCAddressBridge', () => {
     expect(result.current).not.toBe(first);
   });
 });
+
+describe('useCAddressBridge memoisation (#680)', () => {
+  it('creates a new client when a function-valued option changes', () => {
+    const { result, rerender } = renderHook(
+      (props: { logger: Pick<Console, 'debug'> }) =>
+        useCAddressBridge({ baseUrl: BASE_URL, retry: { logger: props.logger } }),
+      { initialProps: { logger: { debug: () => {} } } },
+    );
+
+    const first = result.current;
+    rerender({ logger: { debug: () => {} } });
+
+    expect(result.current).not.toBe(first);
+  });
+
+  it('keeps the client when the same callback is passed again', () => {
+    const logger = { debug: () => {} };
+    const { result, rerender } = renderHook(() =>
+      useCAddressBridge({ baseUrl: BASE_URL, retry: { logger } }),
+    );
+
+    const first = result.current;
+    rerender();
+
+    expect(result.current).toBe(first);
+  });
+
+  it('does not throw on non-JSON-serialisable values such as BigInt', () => {
+    const config = { baseUrl: BASE_URL, extra: BigInt(1) } as unknown as Parameters<typeof useCAddressBridge>[0];
+
+    const { result } = renderHook(() => useCAddressBridge(config));
+
+    expect(result.current).toBeDefined();
+  });
+});

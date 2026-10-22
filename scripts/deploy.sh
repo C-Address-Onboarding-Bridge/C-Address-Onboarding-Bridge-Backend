@@ -5,7 +5,9 @@
 set -euo pipefail
 
 # ── defaults ─────────────────────────────────────────────────────────────────
-NETWORK="${NETWORK:-testnet}"
+# NOTE: NETWORK is intentionally NOT defaulted here. It is resolved after the
+# ENVIRONMENT block so that ENVIRONMENT=production can default to mainnet.
+NETWORK="${NETWORK:-}"
 ENVIRONMENT="${ENVIRONMENT:-}"   # dev | staging | production (optional, sets env-specific defaults)
 DRY_RUN=false
 SKIP_BUILD=false
@@ -54,6 +56,17 @@ case "${ENVIRONMENT}" in
     exit 1
     ;;
 esac
+
+# ── resolve network default (after ENVIRONMENT block) ────────────────────────
+# Only default NETWORK here so production resolves to mainnet unless --network
+# (or NETWORK env) was explicitly given.
+NETWORK="${NETWORK:-testnet}"
+
+# Production must never deploy to a non-mainnet network.
+if [[ "${ENVIRONMENT}" == "production" && "$NETWORK" != "mainnet" ]]; then
+  echo "ERROR: ENVIRONMENT=production requires network 'mainnet', got '$NETWORK'." >&2
+  exit 1
+fi
 
 # ── network config ───────────────────────────────────────────────────────────
 case "$NETWORK" in
@@ -211,48 +224,6 @@ rollback() {
     [[ -z "$prev_id" ]] && err "No contractId in $prev_artifact"
     log "Previous contract ID: $prev_id — update your service to point to this ID."
     # Swap current ↔ prev artifacts so status is accurate
-    cp "${ARTIFACTS_DIR}/deployment-${env}.json" "${ARTIFACTS_DIR}/deployment-${env}.rolledback.json" 2>/dev/null || true
-    cp "$prev_artifact" "${ARTIFACTS_DIR}/deployment-${env}.json"
-    log "Rollback artifact swapped. CONTRACT_ID=$prev_id"
-    return
-  fi
+    cp "${ARTIFACTS_DIR}/deployment-${env}.json" "${ARTIFACTS_DIR}/deployment-${env}.rolle
 
-  err "No rollback script or previous artifact found for '$env'. Manual rollback required."
-}
-
-# ── main ──────────────────────────────────────────────────────────────────────
-main() {
-  local env_label="${ENVIRONMENT:-$NETWORK}"
-  log "Starting deployment: environment=${env_label} network=${NETWORK} dry_run=${DRY_RUN} rollback=${ROLLBACK}"
-
-  if $ROLLBACK; then
-    rollback
-    exit 0
-  fi
-
-  if $DRY_RUN; then
-    log "DRY RUN — validating environment only"
-    build_contract
-    log "DRY RUN complete. No contract was deployed."
-    exit 0
-  fi
-
-  # Preserve current artifact as previous before overwriting
-  local artifact_env="${ENVIRONMENT:-${NETWORK}}"
-  local current="${ARTIFACTS_DIR}/deployment-${artifact_env}.json"
-  if [[ -f "$current" ]]; then
-    cp "$current" "${ARTIFACTS_DIR}/deployment-${artifact_env}.prev.json"
-  fi
-
-  check_existing
-  build_contract
-  deploy_contract
-  initialize_contract
-  verify_on_explorer
-  save_artifacts
-
-  log "Deployment complete."
-  log "CONTRACT_ID=$CONTRACT_ID"
-}
-
-main
+/* … truncated 1198 chars — edit only what you need near the top … */

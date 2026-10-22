@@ -81,6 +81,61 @@ export const circuitBreakerState = new Gauge({
   registers: [register],
 });
 
+// --- Rate limiting metrics ---
+
+/** Total number of requests rejected by the HTTP rate limiter. */
+export const httpRateLimitHits = new Counter({
+  name: 'http_rate_limit_hits_total',
+  help: 'Total number of HTTP requests rejected by the rate limiter',
+  labelNames: ['route'],
+  registers: [register],
+});
+
+// --- Soroban RPC metrics ---
+
+/** Total number of Soroban RPC calls, by method and outcome. */
+export const sorobanRpcCalls = new Counter({
+  name: 'soroban_rpc_calls_total',
+  help: 'Total number of Soroban RPC calls',
+  labelNames: ['method', 'status'],
+  registers: [register],
+});
+
+/** Total number of Soroban RPC errors, by method. */
+export const sorobanRpcErrors = new Counter({
+  name: 'soroban_rpc_errors_total',
+  help: 'Total number of Soroban RPC errors',
+  labelNames: ['method'],
+  registers: [register],
+});
+
+/** Duration of Soroban RPC calls in seconds. */
+export const sorobanRpcDuration = new Histogram({
+  name: 'soroban_rpc_duration_seconds',
+  help: 'Soroban RPC call duration in seconds',
+  labelNames: ['method'],
+  buckets: [0.005, 0.01, 0.05, 0.1, 0.5, 1, 5],
+  registers: [register],
+});
+
+/**
+ * Record a single Soroban RPC call.
+ *
+ * @param method RPC method name (e.g. `getLedgerEntries`).
+ * @param durationSeconds Wall-clock duration of the call in seconds.
+ * @param success Whether the call completed without error.
+ */
+export function recordSorobanRpcCall(method: string, durationSeconds: number, success: boolean): void {
+  const status = success ? 'success' : 'error';
+  sorobanRpcCalls.inc({ method, status });
+  if (!success) {
+    sorobanRpcErrors.inc({ method });
+  }
+  if (Number.isFinite(durationSeconds) && durationSeconds >= 0) {
+    sorobanRpcDuration.observe({ method }, durationSeconds);
+  }
+}
+
 // --- Business KPI metrics ---
 
 export const fundingCount = new Counter({
@@ -259,21 +314,5 @@ export const asyncPipelineFailureCounter = new Counter({
   name: 'async_pipeline_failures_total',
   help: 'Total number of async pipeline job failures',
   labelNames: ['queue', 'job'],
-  registers: [register],
-});
-
-/** Total jobs enqueued — differentiates critical vs best-effort traffic. */
-export const asyncPipelineEnqueueCounter = new Counter({
-  name: 'async_pipeline_enqueued_total',
-  help: 'Total jobs enqueued to the async pipeline',
-  labelNames: ['queue', 'job'],
-  registers: [register],
-});
-
-/** Jobs dropped due to backpressure (best-effort queue over threshold). */
-export const asyncPipelineDroppedCounter = new Counter({
-  name: 'async_pipeline_dropped_total',
-  help: 'Jobs dropped because the pipeline was backpressured',
-  labelNames: ['job'],
   registers: [register],
 });
