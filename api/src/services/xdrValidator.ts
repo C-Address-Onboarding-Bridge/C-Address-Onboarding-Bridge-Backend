@@ -24,6 +24,7 @@ import {
   Transaction,
   FeeBumpTransaction,
   TransactionBuilder,
+  Keypair,
   StrKey,
   xdr,
 } from '@stellar/stellar-sdk';
@@ -168,7 +169,7 @@ function isValidStellarAddress(addr: string): boolean {
 
 // ── Rule implementations ──────────────────────────────────────────────────────
 
-function checkSize(xdrString: string, maxByteLength: number): void {
+export function checkSize(xdrString: string, maxByteLength: number = MAX_XDR_BYTE_LENGTH): void {
   // Buffer.byteLength on a base64 string gives the decoded size ×0.75, but we
   // want to bound the raw string length too — a 64 KB base64 string decodes to
   // ~48 KB of binary, which is already far beyond any legitimate transaction.
@@ -202,6 +203,13 @@ function decodeBase64(xdrString: string): Buffer {
  * fee-bump envelopes — making the `instanceof FeeBumpTransaction` branch dead
  * code and rejecting every fee-bump transaction with `XDR_PARSE_FAILED`.
  *
+ * `TransactionBuilder.fromXDR` accepts a base64 string or a decoded
+ * `xdr.TransactionEnvelope` — NOT a raw `Buffer`. Passing a Buffer makes the
+ * SDK treat it as an envelope object and fail with
+ * `envelope.switch is not a function`, rejecting every XDR as
+ * `XDR_PARSE_FAILED`. We therefore decode the buffer into an
+ * `xdr.TransactionEnvelope` and hand that to the builder.
+ *
  * For fee bumps we validate the fee source address and unwrap the inner
  * transaction so the remaining rules run against the transaction that actually
  * carries the operations.
@@ -212,11 +220,12 @@ function parseEnvelope(
 ): Transaction {
   let parsed: Transaction | FeeBumpTransaction;
   try {
-    parsed = TransactionBuilder.fromXDR(rawBuf, networkPassphrase);
+    const envelope = xdr.TransactionEnvelope.fromXDR(rawBuf);
+    parsed = TransactionBuilder.fromXDR(envelope, networkPassphrase);
   } catch (err) {
     throw new XdrValidationError(
       'XDR_PARSE_FAILED',
-      `Failed to parse XDR envelope: ${(err as Error).message}`,
+      `Could not parse XDR envelope: ${(err as Error).message}`,
     );
   }
 
@@ -234,11 +243,11 @@ function parseEnvelope(
   return parsed;
 }
 
-function checkNetwork(tx: Transaction, networkPassphrase: string): void {
-  if (tx.networkPassphrase !== networkPassphrase) {
+function checkNetwork(tx: Transaction, expectedPassphrase: string): void {
+  if (tx.networkPassphrase !== expectedPassphrase) {
     throw new XdrValidationError(
       'WRONG_NETWORK',
-      `Transaction was built for network "${tx.networkPassphrase}", expected "${networkPassphrase}"`,
+      `Transaction was built for network "${tx.networkPassphrase}" but this server expects "${expectedPassphrase}"`,
     );
   }
 }
@@ -259,31 +268,24 @@ function checkFee(tx: Transaction): void {
   }
 }
 
-function checkTimeBounds(tx: Transaction, now: number): void {
-  const timeBounds = tx.timeBounds;
-  if (!timeBounds) {
-    return;
-  }
+function checkTimeBounds(tx: Transaction): void {
+  const now = Date.now();
+  const { timeBounds } = tx;
+  if (!timeBounds) return;
 
   const minTime = Number(timeBounds.minTime) * 1000;
-  if (minTime !== 0 && minTime > now + MAX_MIN_TIME_SKEW_MS) {
-    throw new XdrValidationError(
-      'TRANSACTION_NOT_YET_VALID',
-      `Transaction minTime ${minTime} is more than ${MAX_MIN_TIME_SKEW_MS}ms in the future (now ${now})`,
-    );
-  }
-
   const maxTime = Number(timeBounds.maxTime) * 1000;
+
   if (maxTime !== 0 && maxTime < now) {
     throw new XdrValidationError(
       'TRANSACTION_EXPIRED',
-      `Transaction maxTime ${maxTime} has already passed (now ${now})`,
+      `Transaction expired at ${new Date(maxTime).toISOString()}`,
     );
   }
-  if (maxTime !== 0 && maxTime > now + MAX_FUTURE_TIME_MS) {
+  if (minTime !== 0 && minTime > now + MAX_FUTURE_TIME_MS) {
     throw new XdrValidationError(
       'TRANSACTION_TOO_FAR_FUTURE',
-      `Transaction maxTime ${maxTime} is more than ${MAX_FUTURE_TIME_MS}ms in the future (now ${now})`,
+      `Transaction minTime ${new Date(minTime).toISOString()} is too far in the future`,
     );
   }
 }
@@ -298,7 +300,7 @@ function checkSourceAccount(tx: Transaction): void {
   }
 }
 
-function checkOperationType(tx: Transaction): void {
+function checkOperations(tx: Transaction, contractId: string | undefined, allowedFunctions: readonly string[]): void {
   const ops = tx.operations;
   if (ops.length !== 1) {
     throw new XdrValidationError(
@@ -306,86 +308,90 @@ function checkOperationType(tx: Transaction): void {
       `Expected exactly 1 operation, found ${ops.length}`,
     );
   }
+
   const op = ops[0];
   if (op.type !== 'invokeHostFunction') {
     throw new XdrValidationError(
       'NO_INVOKE_HOST_FUNCTION',
-      `Expected an invokeHostFunction operation, found "${op.type}"`,
+      `Expected invokeHostFunction operation, found ${op.type}`,
     );
   }
-}
 
-function checkHostFunction(tx: Transaction, contractId: string | undefined): void {
-  const op = tx.operations[0];
-  if (op.type !== 'invokeHostFunction') {
-    return;
-  }
   const hostFn = op.func;
   if (hostFn.switch().name !== 'hostFunctionTypeInvokeContract') {
     throw new XdrValidationError(
       'UNSUPPORTED_HOST_FUNCTION',
-      `Only invokeContract host functions are supported, found "${hostFn.switch().name}"`,
+      `Expected invokeContract host function, found ${hostFn.switch().name}`,
     );
   }
-  if (contractId) {
-    const invokeArgs = hostFn.invokeContract();
-    const contractAddress = StrKey.encodeContract(invokeArgs.contractAddress().contractId());
-    if (contractAddress !== contractId) {
-      throw new XdrValidationError(
-        'WRONG_CONTRACT',
-        `Transaction targets contract ${contractAddress}, expected ${contractId}`,
-      );
-    }
-  }
-}
 
-function checkFunctionName(tx: Transaction, allowedFunctions: readonly string[]): void {
-  const op = tx.operations[0];
-  if (op.type !== 'invokeHostFunction') {
-    return;
-  }
-  const hostFn = op.func;
-  if (hostFn.switch().name !== 'hostFunctionTypeInvokeContract') {
-    return;
-  }
-  const fnName = hostFn.invokeContract().functionName().toString();
+  const invokeContract = hostFn.invokeContract();
+  const fnName = invokeContract.functionName().toString();
   if (!allowedFunctions.includes(fnName)) {
     throw new XdrValidationError(
       'FUNCTION_NOT_ALLOWED',
       `Function "${fnName}" is not in the allowlist [${allowedFunctions.join(', ')}]`,
     );
   }
+
+  if (contractId) {
+    const contractAddr = invokeContract.contractAddress();
+    const contractStr = StrKey.encodeContract(contractAddr.contractId());
+    if (contractStr !== contractId) {
+      throw new XdrValidationError(
+        'WRONG_CONTRACT',
+        `Transaction targets contract ${contractStr} but expected ${contractId}`,
+      );
+    }
+  }
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Validates a base64-encoded signed transaction envelope.
+ *
+ * @throws {XdrValidationError} on the first rule that fails.
+ */
 export function validateXdr(
   xdrString: string,
   options: XdrValidationOptions = {},
 ): XdrValidationResult {
-  const networkPassphrase = options.networkPassphrase ?? config.stellar.networkPassphrase;
+  const networkPassphrase = options.networkPassphrase ?? config.STELLAR_NETWORK_PASSPHRASE;
   const contractId = options.skipContractCheck
     ? undefined
-    : options.contractId ?? config.stellar.contractId;
+    : options.contractId ?? config.BRIDGE_CONTRACT_ID;
   const maxByteLength = options.maxByteLength ?? MAX_XDR_BYTE_LENGTH;
   const allowedFunctions =
     options.allowedFunctions ??
     (options.endpoint ? ALLOWED_FUNCTIONS_BY_ENDPOINT[options.endpoint] : undefined) ??
     DEFAULT_ALLOWED_FUNCTIONS;
 
-  const now = Date.now();
-
+  // 1. Size guard
   checkSize(xdrString, maxByteLength);
-  const rawBuf = decodeBase64(xdrString);
-  const tx = parseEnvelope(rawBuf, networkPassphrase);
-  checkNetwork(tx, networkPassphrase);
-  checkFee(tx);
-  checkTimeBounds(tx, now);
-  checkSourceAccount(tx);
-  checkOperationType(tx);
-  checkHostFunction(tx, contractId);
-  checkFunctionName(tx, allowedFunctions);
 
+  // 2. Base64 decode
+  const rawBuf = decodeBase64(xdrString);
+
+  // 3. XDR parse
+  const tx = parseEnvelope(rawBuf, networkPassphrase);
+
+  // 4. Network passphrase
+  checkNetwork(tx, networkPassphrase);
+
+  // 5. Fee range
+  checkFee(tx);
+
+  // 6. Time bounds
+  checkTimeBounds(tx);
+
+  // 7. Source account
+  checkSourceAccount(tx);
+
+  // 8–10. Operations, host function, contract, function name
+  checkOperations(tx, contractId, allowedFunctions);
+
+  // 11. Duplicate hash — pure read; recording happens after RPC acceptance.
   const txHash = tx.hash().toString('hex');
   if (hasSeenHash(txHash)) {
     throw new XdrValidationError(
