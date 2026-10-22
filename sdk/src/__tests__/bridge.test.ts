@@ -1,32 +1,51 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { BridgeClient } from "../bridge";
-import type { BridgeConfig } from "../types";
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Bridge } from '../bridge';
 
-const config: BridgeConfig = {
-  baseUrl: "https://example.test",
-  maxRetries: 3,
-};
+describe('Bridge signing retries', () => {
+  const signingSecret = 'test-secret';
 
-describe("BridgeClient.shouldRetry", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("does not retry non-BridgeError errors and rethrows the original error", async () => {
-    const typeError = new TypeError("invalid json");
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.reject(typeError),
+  it('regenerates X-Nonce on each retry attempt', async () => {
+    const nonces: string[] = [];
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const headers = init.headers as Record<string, string>;
+      nonces.push(headers['X-Nonce']);
+      if (nonces.length === 1) {
+        return new Response(JSON.stringify({ error: 'unavailable' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
 
-    const client = new BridgeClient(config);
+    const bridge = new Bridge({
+      baseUrl: 'https://example.test',
+      signingSecret,
+      maxRetries: 3,
+      baseDelayMs: 1,
+    });
 
-    await expect(
-      client.request({ path: "/api/v1/quote", method: "GET" }),
-    ).rejects.toBe(typeError);
+    const promise = bridge.request<{ ok: boolean }>('/v1/transfer', { amount: 1 });
+    await vi.runAllTimersAsync();
+    const result = await promise;
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ ok: true });
+    expect(nonces).toHaveLength(2);
+    expect(nonces[0]).toBeTruthy();
+    expect(nonces[1]).toBeTruthy();
+    expect(nonces[0]).not.toBe(nonces[1]);
   });
 });
