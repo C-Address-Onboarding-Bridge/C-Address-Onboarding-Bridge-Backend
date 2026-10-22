@@ -56,10 +56,21 @@ type JsonSpy = ReturnType<typeof vi.fn>;
 
 function makeMockRes(): { res: Response; jsonSpy: JsonSpy; setHeaderSpy: JsonSpy; statusCode: number } {
   let statusCode = 200;
-  const jsonSpy = vi.fn().mockReturnThis();
-  const setHeaderSpy = vi.fn();
+  let sent = false;
+  let res!: Response;
+  const jsonSpy = vi.fn(() => {
+    sent = true;
+    return res;
+  });
+  const setHeaderSpy = vi.fn(() => {
+    if (sent) {
+      throw Object.assign(new Error('Cannot set headers after they are sent'), {
+        code: 'ERR_HTTP_HEADERS_SENT',
+      });
+    }
+  });
 
-  const res = {
+  res = {
     get statusCode() { return statusCode; },
     set statusCode(v: number) { statusCode = v; },
     json: jsonSpy,
@@ -71,6 +82,8 @@ function makeMockRes(): { res: Response; jsonSpy: JsonSpy; setHeaderSpy: JsonSpy
   return { res, jsonSpy, setHeaderSpy, statusCode: 200 };
 }
 
+const testRevalidate = async () => ({ fresh: true });
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('cacheMiddleware', () => {
@@ -80,7 +93,7 @@ describe('cacheMiddleware', () => {
   });
 
   it('calls next() on cache miss', async () => {
-    const middleware = cacheMiddleware({ ttl: 30, key: () => 'miss-key' });
+    const middleware = cacheMiddleware({ ttl: 30, key: () => 'miss-key', revalidate: testRevalidate });
     const req = makeMockReq();
     const { res } = makeMockRes();
     const next: NextFunction = vi.fn();
@@ -91,7 +104,7 @@ describe('cacheMiddleware', () => {
   });
 
   it('sets X-Cache: MISS on cache miss', async () => {
-    const middleware = cacheMiddleware({ ttl: 30, key: () => 'miss-key-2' });
+    const middleware = cacheMiddleware({ ttl: 30, key: () => 'miss-key-2', revalidate: testRevalidate });
     const req = makeMockReq();
     const { res, setHeaderSpy } = makeMockRes();
     const next: NextFunction = vi.fn();
@@ -103,9 +116,9 @@ describe('cacheMiddleware', () => {
 
   it('returns cached value and sets X-Cache: HIT on fresh hit', async () => {
     const key = 'hit-key';
-    mockSwrStore.set(key, { value: { data: 'cached' }, expiresAt: Date.now() + 30_000 });
+    mockSwrStore.set(key, { value: { status: 200, body: { data: 'cached' }, cachedAt: Date.now() }, expiresAt: Date.now() + 30_000 });
 
-    const middleware = cacheMiddleware({ ttl: 30, key: () => key });
+    const middleware = cacheMiddleware({ ttl: 30, key: () => key, revalidate: testRevalidate });
     const req = makeMockReq();
     const { res, jsonSpy, setHeaderSpy } = makeMockRes();
     const next: NextFunction = vi.fn();
@@ -120,9 +133,9 @@ describe('cacheMiddleware', () => {
   it('returns stale value and sets X-Cache: STALE on stale hit', async () => {
     const key = 'stale-key';
     // Stale: expiresAt in the past
-    mockSwrStore.set(key, { value: { data: 'old' }, expiresAt: Date.now() - 1000 });
+    mockSwrStore.set(key, { value: { status: 200, body: { data: 'old' }, cachedAt: Date.now() - 60_000 }, expiresAt: Date.now() - 1000 });
 
-    const middleware = cacheMiddleware({ ttl: 30, key: () => key });
+    const middleware = cacheMiddleware({ ttl: 30, key: () => key, revalidate: testRevalidate });
     const req = makeMockReq();
     const { res, jsonSpy, setHeaderSpy } = makeMockRes();
     const next: NextFunction = vi.fn();
@@ -138,7 +151,7 @@ describe('cacheMiddleware', () => {
     const { swrSet } = await import('../services/cache');
     const key = 'intercept-key';
 
-    const middleware = cacheMiddleware({ ttl: 30, key: () => key });
+    const middleware = cacheMiddleware({ ttl: 30, key: () => key, revalidate: testRevalidate });
     const req = makeMockReq();
     const { res } = makeMockRes();
     const next: NextFunction = vi.fn((err?: unknown) => {
@@ -149,14 +162,18 @@ describe('cacheMiddleware', () => {
 
     await middleware(req, res, next);
 
-    expect(swrSet).toHaveBeenCalledWith(key, { fresh: true }, 30);
+    expect(swrSet).toHaveBeenCalledWith(
+      key,
+      expect.objectContaining({ status: 200, body: { fresh: true } }),
+      30,
+    );
   });
 
   it('sets Cache-Control header on hit', async () => {
     const key = 'cache-control-key';
     mockSwrStore.set(key, { value: { x: 1 }, expiresAt: Date.now() + 30_000 });
 
-    const middleware = cacheMiddleware({ ttl: 30, key: () => key });
+    const middleware = cacheMiddleware({ ttl: 30, key: () => key, revalidate: testRevalidate });
     const req = makeMockReq();
     const { res, setHeaderSpy } = makeMockRes();
     const next: NextFunction = vi.fn();
@@ -167,7 +184,7 @@ describe('cacheMiddleware', () => {
   });
 
   it('uses default keyFn when no key/keyFn provided', async () => {
-    const middleware = cacheMiddleware({ ttl: 10 });
+    const middleware = cacheMiddleware({ ttl: 10, revalidate: testRevalidate });
     const req = makeMockReq({ params: { id: '1' }, query: { foo: 'bar' } });
     const { res } = makeMockRes();
     const next: NextFunction = vi.fn();
@@ -180,7 +197,7 @@ describe('cacheMiddleware', () => {
     const { isRedisEnabled } = await import('../services/cache');
     vi.mocked(isRedisEnabled).mockReturnValueOnce(false);
 
-    const middleware = cacheMiddleware({ ttl: 30, key: () => 'any' });
+    const middleware = cacheMiddleware({ ttl: 30, key: () => 'any', revalidate: testRevalidate });
     const req = makeMockReq();
     const { res } = makeMockRes();
     const next: NextFunction = vi.fn();
@@ -193,7 +210,7 @@ describe('cacheMiddleware', () => {
     const { swrSet } = await import('../services/cache');
     const key = 'error-key';
 
-    const middleware = cacheMiddleware({ ttl: 30, key: () => key });
+    const middleware = cacheMiddleware({ ttl: 30, key: () => key, revalidate: testRevalidate });
     const req = makeMockReq();
     const { res } = makeMockRes();
     (res as unknown as { statusCode: number }).statusCode = 500;
@@ -209,12 +226,15 @@ describe('cacheMiddleware', () => {
 
   it('triggers background revalidation on stale hit', async () => {
     const { withSingleFlight } = await import('../services/cache');
+    const { swrSet } = await import('../services/cache');
     const key = 'stale-revalidate-key';
     // Stale: expiresAt in the past
-    mockSwrStore.set(key, { value: { data: 'old' }, expiresAt: Date.now() - 1000 });
+    mockSwrStore.set(key, { value: { status: 200, body: { data: 'old' }, cachedAt: Date.now() - 60_000 }, expiresAt: Date.now() - 1000 });
 
-    const middleware = cacheMiddleware({ ttl: 30, key: () => key });
-    const req = makeMockReq();
+    const recompute = vi.fn(async () => ({ data: 'fresh' }));
+    const middleware = cacheMiddleware({ ttl: 30, key: () => key, revalidate: recompute });
+    const rateLimitMiddleware = vi.fn();
+    const req = makeMockReq({ app: { _router: { stack: [{ handle: rateLimitMiddleware }] } } as any });
     const { res, jsonSpy, setHeaderSpy } = makeMockRes();
     const next: NextFunction = vi.fn();
 
@@ -223,19 +243,26 @@ describe('cacheMiddleware', () => {
     // Verify stale response is served
     expect(setHeaderSpy).toHaveBeenCalledWith('X-Cache', 'STALE');
     expect(jsonSpy).toHaveBeenCalledWith({ data: 'old' });
+    const headerCallsAfterResponse = setHeaderSpy.mock.calls.length;
 
-    // Verify background revalidation was triggered via withSingleFlight
-    // The callback should be invoked to trigger revalidation
-    expect(withSingleFlight).toHaveBeenCalled();
+    // Revalidation computes directly and does not replay router middleware.
+    await vi.waitFor(() => expect(recompute).toHaveBeenCalledOnce());
+    expect(withSingleFlight).toHaveBeenCalledOnce();
+    expect(rateLimitMiddleware).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+    expect(setHeaderSpy).toHaveBeenCalledTimes(headerCallsAfterResponse);
+    await vi.waitFor(() => {
+      expect(swrSet).toHaveBeenCalledWith(key, expect.objectContaining({ body: { data: 'fresh' } }), 30);
+    });
   });
 
   it('does not share cache between different keys', async () => {
     const keyA = 'key-a';
     const keyB = 'key-b';
-    mockSwrStore.set(keyA, { value: { data: 'a' }, expiresAt: Date.now() + 30_000 });
+    mockSwrStore.set(keyA, { value: { status: 200, body: { data: 'a' }, cachedAt: Date.now() }, expiresAt: Date.now() + 30_000 });
 
-    const middlewareA = cacheMiddleware({ ttl: 30, key: () => keyA });
-    const middlewareB = cacheMiddleware({ ttl: 30, key: () => keyB });
+    const middlewareA = cacheMiddleware({ ttl: 30, key: () => keyA, revalidate: testRevalidate });
+    const middlewareB = cacheMiddleware({ ttl: 30, key: () => keyB, revalidate: testRevalidate });
 
     const req = makeMockReq();
     const { res: resA, jsonSpy: jsonSpyA } = makeMockRes();

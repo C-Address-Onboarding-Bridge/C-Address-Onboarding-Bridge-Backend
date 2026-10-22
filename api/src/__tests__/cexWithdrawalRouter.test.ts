@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 // @ts-nocheck
 /**
  * TODO(next-bounty): typechecking is off for this file only.
@@ -12,15 +13,30 @@
  * (e.g. `makeApiKeyRecord(overrides)`) rather than widening the production
  * types to match the mocks -- then delete this banner.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
   WithdrawalRouter,
   createCexWithdrawalMemo,
   parseCexWithdrawalMemo,
+  createKrakenApiSignature,
   defaultCexHandlers,
   WithdrawalRequest,
 } from '../../../cex/withdrawal-router';
+
+describe('Kraken API signing', () => {
+  it('matches Kraken’s published TradeBalance API-Sign example', () => {
+    const apiSecret = 'FRs+gtq09rR7OFtKj9BGhyOGS3u5vtY/EdiIBO9kD8NFtRX7w7LeJDSrX6cq1D8zmQmGkWFjksuhBvKOAWJohQ==';
+    const signature = createKrakenApiSignature(
+      '/0/private/TradeBalance',
+      '1540973848000',
+      'nonce=1540973848000&asset=xbt',
+      apiSecret,
+    );
+
+    expect(signature).toBe('RdQzoXRC83TPmbERpFj0XFVArq0Hfadm0eLolmXTuN2R24hzIqtAnF/f7vSfW1tGt7xQOn8bjm+Ht+X0KrMwlA==');
+  });
+});
 
 const request: WithdrawalRequest = {
   destinationAddress: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
@@ -135,5 +151,46 @@ describe('CEX withdrawal amount units (#609)', () => {
   it('converts stroop amounts to whole units for the generic handler', async () => {
     const result = await defaultCexHandlers.generic(request, cexConfig);
     expect(result.amount).toBe('1');
+  });
+});
+
+describe('routeCexWithdrawal retry safety (#834)', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('does not retry POST /api/v1/cex/route on a 502 and surfaces withdrawalId', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      headers: { get: () => 'application/json' },
+      json: async () => ({ status: 'failed', withdrawalId: 'wd-123', error: 'exchange error' }),
+      text: async () => JSON.stringify({ status: 'failed', withdrawalId: 'wd-123', error: 'exchange error' }),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { routeCexWithdrawal } = await import('../../bridge');
+
+    let caught: any;
+    try {
+      await routeCexWithdrawal({
+        exchange: 'binance',
+        destinationAddress: request.destinationAddress,
+        asset: request.asset,
+        amount: request.amount,
+        network: request.network,
+      } as any);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(caught).toBeDefined();
+    expect(caught.withdrawalId).toBe('wd-123');
+    expect(caught.status).toBe('failed');
   });
 });

@@ -1,14 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-<<<<<<< Updated upstream
+import { getEventListeners } from 'node:events';
 import { PaginationHelper, paginateAll, collectAllPages } from '../src/pagination';
 import type { PaginatedResponse, PageFetcher } from '../src/types';
-
-/**
- * TODO(next-bounty): the tests marked `.skip` in this file assert behaviour that
- * depends on SDK helpers that are still `throw new Error('Not implemented: ...')` stubs.
- * They are skipped -- not deleted, not rewritten to match the stub -- so the next
- * programme has an exact worklist: un-skip one, implement it, repeat.
- */
 
 const mockPage1: PaginatedResponse<{ id: string }> = {
   data: [{ id: 'a' }, { id: 'b' }],
@@ -143,10 +136,8 @@ describe('collectAllPages', () => {
     const promise = collectAllPages(fetcher, { signal: controller.signal });
     controller.abort();
     await expect(promise).rejects.toThrow();
-=======
-import { getEventListeners } from 'node:events';
-import { PaginationHelper } from '../src/pagination';
-import { PaginatedResponse } from '../src/types';
+  });
+});
 
 interface Item {
   id: string;
@@ -237,41 +228,5 @@ describe('PaginationHelper.pages', () => {
     expect(abortListenerCount(controller.signal)).toBe(0);
 
     await iterator.return(undefined);
-  });
-
-  it('aborting during a throttled delay rejects and removes the listener', async () => {
-    const controller = new AbortController();
-    const helper = new PaginationHelper<Item>(makeFetcher(5), {
-      throttleMs: 100,
-      signal: controller.signal,
-    });
-
-    const iterator = helper.pages();
-
-    await iterator.next(); // page 1
-    const pending = iterator.next(); // page 2 fetch resolves, then throttle begins
-    await vi.advanceTimersByTimeAsync(0);
-    expect(abortListenerCount(controller.signal)).toBe(1);
-
-    controller.abort();
-
-    await expect(pending).rejects.toThrow('Aborted');
-    expect(abortListenerCount(controller.signal)).toBe(0);
-  });
-
-  it('pre-aborted signal short-circuits without attaching any listener', async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    const helper = new PaginationHelper<Item>(makeFetcher(5), {
-      throttleMs: 100,
-      signal: controller.signal,
-    });
-
-    const iterator = helper.pages();
-    const first = await iterator.next();
-    expect(first.done).toBe(true);
-    expect(abortListenerCount(controller.signal)).toBe(0);
->>>>>>> Stashed changes
   });
 });

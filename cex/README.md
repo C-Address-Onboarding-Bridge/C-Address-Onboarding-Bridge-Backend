@@ -68,3 +68,26 @@ const result = await bridgeClient.routeCexWithdrawal({
   targetNetwork: 'stellar',
 });
 ```
+
+### Exchange Credentials Configuration
+
+#### Coinbase Exchange
+
+The Coinbase integration targets the Coinbase Exchange API endpoint `POST /withdrawals/crypto`.
+
+Required credentials in `CexConfig`:
+- `apiKey`: Coinbase Exchange API key (`CB-ACCESS-KEY`)
+- `apiSecret`: Base64-encoded Coinbase Exchange API secret used for HMAC-SHA256 signing (`CB-ACCESS-SIGN`)
+- `apiPassphrase`: Passphrase created alongside the API key (`CB-ACCESS-PASSPHRASE`)
+- `apiBaseUrl`: Coinbase Exchange API base URL (e.g. `https://api.exchange.coinbase.com`)
+
+Payload format sent to `POST /withdrawals/crypto`:
+```json
+{
+  "amount": "1",
+  "currency": "XLM",
+  "crypto_address": "G...",
+  "destination_tag": "12345"
+}
+```
+*Note*: The Stellar memo is forwarded in the `destination_tag` field, and stroops are converted to decimal units before posting.

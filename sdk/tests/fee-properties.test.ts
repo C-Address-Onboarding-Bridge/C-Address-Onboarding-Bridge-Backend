@@ -2,13 +2,6 @@ import { describe, it } from 'vitest';
 import * as fc from 'fast-check';
 import { calculateFee, calculateReceiveAmount, formatTokenAmount, parseTokenAmount } from '../src/utils';
 
-/**
- * TODO(next-bounty): the tests marked `.skip` in this file assert behaviour that
- * depends on SDK helpers that are still `throw new Error('Not implemented: ...')` stubs.
- * They are skipped -- not deleted, not rewritten to match the stub -- so the next
- * programme has an exact worklist: un-skip one, implement it, repeat.
- */
-
 // Arbitrary for valid bigint amounts (0 to MAX_I128)
 const MAX_I128 = (BigInt(1) << BigInt(127)) - BigInt(1);
 const amountArb = fc.bigInt({ min: BigInt(0), max: MAX_I128 });
@@ -17,7 +10,7 @@ const amountArb = fc.bigInt({ min: BigInt(0), max: MAX_I128 });
 const feeBpsArb = fc.integer({ min: 0, max: 10000 });
 
 describe('Fee calculation properties', () => {
-  it.skip('zero fee rate produces zero fee', () => {
+  it('zero fee rate produces zero fee', () => {
     fc.assert(
       fc.property(amountArb, (amount) => {
         return calculateFee(amount, 0) === BigInt(0);
@@ -25,7 +18,7 @@ describe('Fee calculation properties', () => {
     );
   });
 
-  it.skip('max fee rate (10000 bps) produces fee equal to full amount', () => {
+  it('max fee rate (10000 bps) produces fee equal to full amount', () => {
     fc.assert(
       fc.property(amountArb, (amount) => {
         return calculateFee(amount, 10000) === amount;
@@ -33,7 +26,7 @@ describe('Fee calculation properties', () => {
     );
   });
 
-  it.skip('fee is monotonically non-decreasing as amount increases', () => {
+  it('fee is monotonically non-decreasing as amount increases', () => {
     fc.assert(
       fc.property(amountArb, amountArb, feeBpsArb, (a, b, bps) => {
         const lo = a < b ? a : b;
@@ -43,7 +36,7 @@ describe('Fee calculation properties', () => {
     );
   });
 
-  it.skip('fee is monotonically non-decreasing as fee rate increases', () => {
+  it('fee is monotonically non-decreasing as fee rate increases', () => {
     fc.assert(
       fc.property(
         amountArb,
@@ -56,7 +49,7 @@ describe('Fee calculation properties', () => {
     );
   });
 
-  it.skip('fee never exceeds amount (net receive is non-negative)', () => {
+  it('fee never exceeds amount (net receive is non-negative)', () => {
     fc.assert(
       fc.property(amountArb, feeBpsArb, (amount, bps) => {
         const fee = calculateFee(amount, bps);
@@ -65,7 +58,7 @@ describe('Fee calculation properties', () => {
     );
   });
 
-  it.skip('receive amount plus fee equals original amount', () => {
+  it('receive amount plus fee equals original amount', () => {
     fc.assert(
       fc.property(amountArb, feeBpsArb, (amount, bps) => {
         const fee = calculateFee(amount, bps);
@@ -75,7 +68,7 @@ describe('Fee calculation properties', () => {
     );
   });
 
-  it.skip('zero amount always produces zero fee and zero receive', () => {
+  it('zero amount always produces zero fee and zero receive', () => {
     fc.assert(
       fc.property(feeBpsArb, (bps) => {
         return calculateFee(BigInt(0), bps) === BigInt(0) && calculateReceiveAmount(BigInt(0), bps) === BigInt(0);
@@ -83,7 +76,7 @@ describe('Fee calculation properties', () => {
     );
   });
 
-  it.skip('integer overflow never occurs for any valid input', () => {
+  it('integer overflow never occurs for any valid input', () => {
     fc.assert(
       fc.property(amountArb, feeBpsArb, (amount, bps) => {
         let threw = false;
@@ -100,7 +93,7 @@ describe('Fee calculation properties', () => {
     );
   });
 
-  it.skip('fee at zero amount with any rate is zero', () => {
+  it('fee at zero amount with any rate is zero', () => {
     fc.assert(
       fc.property(feeBpsArb, (bps) => calculateFee(BigInt(0), bps) === BigInt(0)),
     );
@@ -111,7 +104,7 @@ describe('Fee calculation properties', () => {
 describe('Token amount formatting properties', () => {
   const decimalArb = fc.integer({ min: 0, max: 18 });
 
-  it.skip('parseTokenAmount is inverse of formatTokenAmount for non-negative amounts', () => {
+  it('parseTokenAmount is inverse of formatTokenAmount for non-negative amounts', () => {
     fc.assert(
       fc.property(
         fc.bigInt({ min: BigInt(0), max: BigInt('999999999999999999') }),
@@ -126,7 +119,7 @@ describe('Token amount formatting properties', () => {
     );
   });
 
-    it.skip('formatTokenAmount always produces a string with exactly N fractional digits', () => {
+    it('formatTokenAmount always produces a string with exactly N fractional digits', () => {
     fc.assert(
       fc.property(
         fc.string({ minLength: 1, maxLength: 20 }).map(s => s.replace(/[^0-9]/g, '') || '0'),
@@ -143,7 +136,7 @@ describe('Token amount formatting properties', () => {
     );
   });
 
-    it.skip('parseTokenAmount always produces a valid integer string', () => {
+    it('parseTokenAmount always produces a valid integer string', () => {
     fc.assert(
       fc.property(
         fc.float({ min: 0, max: Math.fround(1e12), noNaN: true }).map(n => n.toFixed(6)),

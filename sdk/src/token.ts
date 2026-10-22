@@ -1,6 +1,6 @@
-import { Token, TokenMetadata } from './types';
-import { ValidationError } from './errors';
-import { StrKey } from 'stellar-sdk';
+import { Token, TokenMetadata } from './types.js';
+import { ValidationError } from './errors.js';
+import { StrKey } from '@stellar/stellar-sdk';
 
 // ─── Token Type Guards ────────────────────────────────────────────────────────
 
@@ -14,18 +14,43 @@ export function isSacToken(token: Token): token is { type: 'sac'; contractId: st
   return token.type === 'sac';
 }
 
+// ─── Native XLM SAC Contract IDs ──────────────────────────────────────────────
+
+/**
+ * Network-specific Stellar Asset Contract (SAC) contract IDs for native XLM.
+ * These are the canonical C-addresses the bridge API expects when funding with
+ * native XLM on Soroban.
+ */
+export const NATIVE_XLM_CONTRACT_IDS: Record<'testnet' | 'mainnet', string> = {
+  testnet: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+  mainnet: 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+};
+
+/**
+ * Resolves the native XLM SAC contract ID for the given network.
+ * Defaults to testnet when no network is provided.
+ */
+export function getNativeAssetContractId(network: 'testnet' | 'mainnet' = 'testnet'): string {
+  return NATIVE_XLM_CONTRACT_IDS[network];
+}
+
 // ─── Address Validation ───────────────────────────────────────────────────────
 
-/** Returns `true` if the string is a valid SAC token contract address (C-address). */
+/**
+ * Returns `true` if the string is a valid SAC token contract address
+ * (C-address), including its StrKey checksum.
+ */
 export function isSacTokenAddress(address: string): boolean {
-  return StrKey.isValidContract(address);
+  return isValidContractStrKey(address);
 }
 
 /** Validates a SAC token address and throws a typed error if invalid. */
 export function validateSacTokenAddress(address: string): void {
   if (!isSacTokenAddress(address)) {
     throw new ValidationError('Invalid SAC token address', {
-      contractId: `Must be a valid contract address (C-address), got: ${address}`,
+      fields: {
+        contractId: `Must be a valid contract address (C-address), got: ${address}`,
+      },
     });
   }
 }
@@ -72,14 +97,24 @@ export function tokenFromLegacy(tokenAddress?: string, sourceAsset?: string): To
  * @returns Human-readable amount (e.g. `"1.000000"`).
  */
 export function formatTokenAmount(amount: string, decimals: number): string {
-  // Handle zero case
-  if (amount === '0') return '0';
+  if (!/^-?\d+$/.test(amount)) {
+    throw new TypeError('amount must be an integer string');
+  }
+  if (!Number.isInteger(decimals) || decimals < 0) {
+    throw new RangeError('decimals must be a non-negative integer');
+  }
 
-  const padded = amount.padStart(decimals + 1, '0');
-  const integerPart = padded.slice(0, -decimals) || '0';
+  const negative = amount.startsWith('-');
+  const digits = (negative ? amount.slice(1) : amount).replace(/^0+(?=\d)/, '');
+  if (decimals === 0) {
+    return `${negative ? '-' : ''}${digits}`;
+  }
+
+  const padded = digits.padStart(decimals + 1, '0');
+  const integerPart = padded.slice(0, -decimals);
   const fractionalPart = padded.slice(-decimals);
 
-  return `${integerPart}.${fractionalPart}`;
+  return `${negative ? '-' : ''}${integerPart}.${fractionalPart}`;
 }
 
 /**
@@ -88,13 +123,38 @@ export function formatTokenAmount(amount: string, decimals: number): string {
  * @param amount - Human-readable amount (e.g. `"1.5"`).
  * @param decimals - Number of decimal places the token uses.
  * @returns Raw integer amount as a string (e.g. `"1500000"` for 6 decimals).
+ * @throws {ValidationError} If the input format is invalid or has too many decimal places.
  */
 export function parseTokenAmount(amount: string, decimals: number): string {
-  const parts = amount.split('.');
-  const integerPart = parts[0] || '0';
-  const fractionalPart = (parts[1] || '').padEnd(decimals, '0').slice(0, decimals);
+  if (typeof amount !== 'string' || !/^-?\d+(\.\d+)?$/.test(amount)) {
+    throw new ValidationError(`Invalid amount format: "${amount}". Must be a decimal number string.`, {
+      fields: { amount: 'Must be a valid decimal number string' },
+    });
+  }
 
-  return (integerPart + fractionalPart).replace(/^0+(?=.)/, '');
+  const isNegative = amount.startsWith('-');
+  const cleanAmount = isNegative ? amount.slice(1) : amount;
+
+  const parts = cleanAmount.split('.');
+  const integerPart = parts[0] || '0';
+  const fractionalPart = parts[1] || '';
+
+  if (fractionalPart.length > decimals) {
+    throw new ValidationError(
+      `Amount "${amount}" has ${fractionalPart.length} decimal places, but token only supports ${decimals}.`,
+      {
+        fields: { amount: `Too many decimal places (maximum: ${decimals})` },
+      },
+    );
+  }
+
+  const paddedFractional = fractionalPart.padEnd(decimals, '0');
+  const combined = (integerPart + paddedFractional).replace(/^0+(?=.)/, '');
+  if (combined === '' || combined === '0') {
+    return '0';
+  }
+
+  return isNegative ? `-${combined}` : combined;
 }
 
 /**

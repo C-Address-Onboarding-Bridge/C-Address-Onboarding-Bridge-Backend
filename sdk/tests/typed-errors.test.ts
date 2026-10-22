@@ -21,13 +21,6 @@ import {
   isTimeoutError,
 } from '../src/errors';
 
-/**
- * TODO(next-bounty): the tests marked `.skip` in this file assert behaviour that
- * depends on SDK helpers that are still `throw new Error('Not implemented: ...')` stubs.
- * They are skipped -- not deleted, not rewritten to match the stub -- so the next
- * programme has an exact worklist: un-skip one, implement it, repeat.
- */
-
 // ─── parseHttpError factory ───────────────────────────────────────────────────
 
 describe('parseHttpError', () => {
@@ -85,7 +78,7 @@ describe('parseHttpError', () => {
     expect(err.statusCode).toBe(503);
   });
 
-  it.skip('uses fallback message when body has none', () => {
+  it('uses fallback message when body has none', () => {
     const err = parseHttpError(500, {});
     expect(err.message).toContain('500');
   });
@@ -106,7 +99,7 @@ describe('parseHttpError', () => {
 // ─── Type guards ──────────────────────────────────────────────────────────────
 
 describe('type guard helpers', () => {
-  it.skip('isBridgeError narrows correctly', () => {
+  it('isBridgeError narrows correctly', () => {
     expect(isBridgeError(new BridgeError('x'))).toBe(true);
     expect(isBridgeError(new Error('x'))).toBe(false);
     expect(isBridgeError(null)).toBe(false);
@@ -117,32 +110,32 @@ describe('type guard helpers', () => {
     expect(isAuthError(new ServerError('x'))).toBe(false);
   });
 
-  it.skip('isValidationError narrows correctly', () => {
+  it('isValidationError narrows correctly', () => {
     expect(isValidationError(new ValidationError('x'))).toBe(true);
     expect(isValidationError(new AuthError())).toBe(false);
   });
 
-  it.skip('isRateLimitError narrows correctly', () => {
+  it('isRateLimitError narrows correctly', () => {
     expect(isRateLimitError(new RateLimitError())).toBe(true);
     expect(isRateLimitError(new NotFoundError())).toBe(false);
   });
 
-  it.skip('isServerError narrows correctly', () => {
+  it('isServerError narrows correctly', () => {
     expect(isServerError(new ServerError('x'))).toBe(true);
     expect(isServerError(new ValidationError('x'))).toBe(false);
   });
 
-  it.skip('isNetworkError narrows correctly', () => {
+  it('isNetworkError narrows correctly', () => {
     expect(isNetworkError(new NetworkError())).toBe(true);
     expect(isNetworkError(new ServerError('x'))).toBe(false);
   });
 
-  it.skip('isTimeoutError narrows correctly', () => {
+  it('isTimeoutError narrows correctly', () => {
     expect(isTimeoutError(new TimeoutError('op', 5000))).toBe(true);
     expect(isTimeoutError(new NetworkError())).toBe(false);
   });
 
-  it.skip('isNotFoundError narrows correctly', () => {
+  it('isNotFoundError narrows correctly', () => {
     expect(isNotFoundError(new NotFoundError())).toBe(true);
     expect(isNotFoundError(new AuthError())).toBe(false);
   });
@@ -205,31 +198,31 @@ describe('BridgeClient emits typed errors from HTTP responses', () => {
       .rejects.toSatisfy(isAuthError);
   });
 
-  it.skip('throws ValidationError on 400', async () => {
+  it('throws ValidationError on 400', async () => {
     mockFetch(400, { message: 'Invalid amount' });
     await expect(client.getQuote({ sourceAsset: 'XLM', amount: '-1', targetAddress: 'C' + 'A'.repeat(55) }))
       .rejects.toSatisfy(isValidationError);
   });
 
-  it.skip('throws RateLimitError on 429', async () => {
+  it('throws RateLimitError on 429', async () => {
     mockFetch(429, { message: 'Too many requests' });
     await expect(client.health())
       .rejects.toSatisfy(isRateLimitError);
   });
 
-  it.skip('throws NotFoundError on 404', async () => {
+  it('throws NotFoundError on 404', async () => {
     mockFetch(404, { message: 'Not found' });
     await expect(client.getStatus('deadbeef'))
       .rejects.toSatisfy(isNotFoundError);
   });
 
-  it.skip('throws ServerError on 500', async () => {
+  it('throws ServerError on 500', async () => {
     mockFetch(500, { message: 'Internal server error' });
     await expect(client.health())
       .rejects.toSatisfy(isServerError);
   });
 
-  it.skip('throws NetworkError on fetch TypeError', async () => {
+  it('throws NetworkError on fetch TypeError', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     await expect(client.health())
       .rejects.toSatisfy(isNetworkError);

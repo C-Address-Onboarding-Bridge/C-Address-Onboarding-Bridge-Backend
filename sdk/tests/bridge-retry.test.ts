@@ -56,13 +56,17 @@ describe('BridgeClient retry classification', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const pending = quoteCall(client);
-    // If retries were attempted, their setTimeout delays would fire here.
-    await vi.runAllTimersAsync();
-
-    const err = await pending.then(
+    // Attach the rejection handler before advancing timers: the request settles
+    // inside runAllTimersAsync, and an unhandled rejection at that point fails
+    // the whole vitest run.
+    const settled = pending.then(
       () => { throw new Error('expected rejection'); },
       (e: unknown) => e,
     );
+    // If retries were attempted, their setTimeout delays would fire here.
+    await vi.runAllTimersAsync();
+
+    const err = await settled;
 
     expect(err).toBeInstanceOf(ServerError);
     expect(isServerError(err)).toBe(true);
@@ -86,6 +90,7 @@ describe('BridgeClient retry classification', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const pending = quoteCall(client);
+    pending.catch(() => {});
     await vi.runAllTimersAsync();
 
     await expect(pending).resolves.toEqual(quote);
@@ -103,9 +108,10 @@ describe('BridgeClient retry classification', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const pending = quoteCall(client);
+    const rejection = expect(pending).rejects.toBeInstanceOf(ValidationError);
     await vi.runAllTimersAsync();
 
-    await expect(pending).rejects.toBeInstanceOf(ValidationError);
+    await rejection;
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -127,6 +133,7 @@ describe('BridgeClient retry classification', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const pending = quoteCall(client);
+    pending.catch(() => {});
     await vi.runAllTimersAsync();
 
     await expect(pending).resolves.toEqual(quote);
@@ -142,11 +149,12 @@ describe('BridgeClient retry classification', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const pending = quoteCall(client);
+    const rejection = expect(pending).rejects.toThrow(/timed out/i);
     await vi.runAllTimersAsync();
 
     // The catch-path re-wraps abort as TimeoutError; the key assertion is that
     // no retry occurred.
-    await expect(pending).rejects.toThrow(/timed out/i);
+    await rejection;
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

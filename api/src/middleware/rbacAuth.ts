@@ -10,6 +10,7 @@ export type PermissionScope =
   | 'status:read'
   | 'offramp:write'
   | 'cex:read'
+  | 'cex:withdraw'
   | 'transactions:read'
   | 'admin:keys'
   | 'metrics:read';
