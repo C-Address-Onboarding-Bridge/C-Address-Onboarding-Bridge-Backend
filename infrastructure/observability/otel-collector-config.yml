@@ -10,20 +10,21 @@ processors:
   batch:
     timeout: 5s
     send_batch_size: 1024
-  probabilistic_sampler:
-    sampling_percentage: 10
+  # Sampling is applied once, at the API (OTEL_TRACE_SAMPLE_RATIO, default 0.1).
+  # Do not sample again here, otherwise the effective ratio is squared
+  # (0.1 * 0.1 = ~1% of traces reaching Jaeger).
 
 exporters:
   otlp/jaeger:
     endpoint: jaeger:4317
     tls:
       insecure: true
-  logging:
-    loglevel: warn
+  debug:
+    verbosity: basic
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [probabilistic_sampler, batch]
-      exporters: [otlp/jaeger, logging]
+      processors: [batch]
+      exporters: [otlp/jaeger, debug]

@@ -1,4 +1,4 @@
-import type { MessageCatalog } from './types';
+import type { MessageCatalog } from './types.js';
 
 /** Portuguese (pt) translation catalog. */
 export const pt: MessageCatalog = {

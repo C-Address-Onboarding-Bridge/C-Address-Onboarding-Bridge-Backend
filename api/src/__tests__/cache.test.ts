@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Readable } from 'stream';
 
 process.env.NODE_ENV = 'test';
 
@@ -47,6 +48,21 @@ const redisMethods = {
   del: vi.fn(async (...keys: string[]) => {
     for (const k of keys) mockStore.delete(k);
     return keys.length;
+  }),
+  unlink: vi.fn(async (...keys: string[]) => {
+    for (const k of keys) mockStore.delete(k);
+    return keys.length;
+  }),
+  scanStream: vi.fn((options?: { match?: string; count?: number }) => {
+    const pattern = options?.match ?? '*';
+    const re = new RegExp('^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+    const matched = [...mockStore.keys()].filter((k) => re.test(k));
+    const batchSize = options?.count ?? 500;
+    const batches: string[][] = [];
+    for (let i = 0; i < matched.length; i += batchSize) {
+      batches.push(matched.slice(i, i + batchSize));
+    }
+    return Readable.from(batches);
   }),
   keys: vi.fn(async (pattern: string) => {
     const re = new RegExp('^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
@@ -168,14 +184,38 @@ describe('cacheDel', () => {
 describe('cacheDelPattern', () => {
   beforeEach(clearStore);
 
-  it('deletes all keys matching a glob pattern', async () => {
+  it('deletes all keys matching a glob pattern using scanStream and unlink', async () => {
+    redisMethods.scanStream.mockClear();
+    redisMethods.unlink.mockClear();
+
     await cacheSet('quote:XLM:1', 'a', 60);
     await cacheSet('quote:XLM:2', 'b', 60);
     await cacheSet('status:abc', 'c', 60);
+
     await cacheDelPattern('quote:*');
+
+    expect(redisMethods.scanStream).toHaveBeenCalledWith({ match: 'quote:*', count: 500 });
+    expect(redisMethods.unlink).toHaveBeenCalledWith('quote:XLM:1', 'quote:XLM:2');
     expect(await cacheGet('quote:XLM:1')).toBeNull();
     expect(await cacheGet('quote:XLM:2')).toBeNull();
     expect(await cacheGet('status:abc')).toBe('c');
+  });
+
+  it('unlinks keys in batches of 500 when keyspace is large', async () => {
+    redisMethods.unlink.mockClear();
+
+    // Populate 1200 matching keys
+    for (let i = 0; i < 1200; i++) {
+      mockStore.set(`bulk:${i}`, { value: `val-${i}`, expiresAt: Date.now() + 60000 });
+    }
+
+    await cacheDelPattern('bulk:*');
+
+    expect(redisMethods.unlink).toHaveBeenCalled();
+    for (const call of redisMethods.unlink.mock.calls) {
+      expect(call.length).toBeLessThanOrEqual(500);
+    }
+    expect(mockStore.size).toBe(0);
   });
 });
 
@@ -269,6 +309,23 @@ describe('withSingleFlight (stampede protection)', () => {
     expect(b).toBe('b');
     expect(callCount).toBe(2);
   });
+
+  it('waits and polls for value when Redis lock is not acquired', async () => {
+    // Simulate that another instance already holds the lock
+    mockStore.set('lock:polled-key', { value: '1', expiresAt: Date.now() + 5000 });
+
+    // The other instance will write the cached value after 60ms and release the lock
+    setTimeout(async () => {
+      await swrSet('polled-key', { data: 'from-other-instance' }, 30);
+      mockStore.delete('lock:polled-key');
+    }, 60);
+
+    const compute = vi.fn().mockResolvedValue({ data: 'from-this-instance' });
+    const result = await withSingleFlight('polled-key', compute);
+
+    expect(result).toEqual({ data: 'from-other-instance' });
+    expect(compute).not.toHaveBeenCalled();
+  });
 });
 
 describe('getOrCompute', () => {
@@ -323,6 +380,49 @@ describe('getOrCompute', () => {
     expect(callCount).toBe(1);
     expect(r1).toEqual({ count: 1 });
     expect(r2).toEqual({ count: 1 });
+  });
+
+  it('ensures a miss that overlaps a stale revalidation receives an object, not a JSON string', async () => {
+    // 1. Insert a stale SWR entry
+    const staleEntry = { value: { user: 'alice', version: 1 }, expiresAt: Date.now() - 1000 };
+    mockStore.set('stale-overlap-key', {
+      value: JSON.stringify(staleEntry),
+      expiresAt: Date.now() + 60_000,
+    });
+
+    let resolveRevalidation!: (val: { user: string; version: number }) => void;
+    const revalidationPromise = new Promise<{ user: string; version: number }>((resolve) => {
+      resolveRevalidation = resolve;
+    });
+
+    let computeCount = 0;
+    const compute = vi.fn(() => {
+      computeCount++;
+      return revalidationPromise;
+    });
+
+    // 2. Caller 1 gets stale hit and triggers background revalidation via setImmediate
+    const result1 = await getOrCompute('stale-overlap-key', 30, compute);
+    expect(result1).toEqual({ user: 'alice', version: 1 });
+
+    // Allow setImmediate to run so withSingleFlight revalidation promise is registered in inFlightMap
+    await new Promise((r) => setImmediate(r));
+    expect(compute).toHaveBeenCalledTimes(1);
+
+    // 3. Entry completely expires / gets deleted in the meantime
+    mockStore.delete('stale-overlap-key');
+
+    // 4. Caller 2 has a cache miss while revalidation is in flight and joins withSingleFlight
+    const missPromise = getOrCompute('stale-overlap-key', 30, compute);
+
+    // 5. Complete background revalidation
+    resolveRevalidation({ user: 'alice', version: 2 });
+
+    const result2 = await missPromise;
+    // Must be an object, not stringified JSON!
+    expect(typeof result2).toBe('object');
+    expect(typeof result2).not.toBe('string');
+    expect(result2).toEqual({ user: 'alice', version: 2 });
   });
 });
 

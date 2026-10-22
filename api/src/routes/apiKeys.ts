@@ -19,6 +19,7 @@ const PERMISSION_SCOPES: PermissionScope[] = [
   'status:read',
   'offramp:write',
   'cex:read',
+  'cex:withdraw',
   'admin:keys',
   'transactions:read',
 ];

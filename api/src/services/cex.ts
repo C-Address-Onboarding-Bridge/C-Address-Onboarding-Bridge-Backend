@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { config } from '../config';
+import { getCircuitBreaker } from '../circuit-breaker';
 
 /** Request parameters for routing a CEX withdrawal to a C-address. */
 export interface CexWithdrawalRequest {
@@ -147,20 +148,24 @@ export class CexRoutingService {
     headers: Record<string, string>,
     body: string,
   ): Promise<Response> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    // Network errors and 5xx responses count towards the breaker; 4xx do not.
+    return getCircuitBreaker('cex').execute(async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
 
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body,
-        signal: controller.signal,
-      });
-      return res;
-    } finally {
-      clearTimeout(timeout);
-    }
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body,
+          signal: controller.signal,
+        });
+        if (res.status >= 500) throw new Error(`exchange request failed (${res.status})`);
+        return res;
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
   }
 
   /** Binance: query-string params signed with HMAC-SHA256, key sent via `X-MBX-APIKEY`. */
@@ -260,14 +265,12 @@ export class CexRoutingService {
   }
 
   private async handleCoinbase(req: CexWithdrawalRequest): Promise<CexWithdrawalResponse> {
-    const requestPath = '/v2/accounts/withdrawals';
+    const requestPath = '/withdrawals/crypto';
     const body = JSON.stringify({
-      type: 'crypto',
-      to: req.targetCAddress,
       amount: toWholeUnits(req.amount, req.sourceAsset),
       currency: req.sourceAsset.toUpperCase(),
-      network: req.targetNetwork,
-      destination_tag: req.memo,
+      crypto_address: req.targetCAddress,
+      ...(req.memo ? { destination_tag: req.memo } : {}),
     });
 
     try {
@@ -283,11 +286,11 @@ export class CexRoutingService {
         throw new Error(`coinbase withdrawal failed (${res.status}): ${text}`);
       }
 
-      const data = (await res.json()) as { data?: { id?: string } };
+      const data = (await res.json()) as { id?: string; data?: { id?: string } };
       return {
         status: 'pending',
-        withdrawalId: data.data?.id || `coinbase-${Date.now()}`,
-        exchangeTxId: data.data?.id,
+        withdrawalId: data.id || data.data?.id || `coinbase-${Date.now()}`,
+        exchangeTxId: data.id || data.data?.id,
       };
     } catch (err) {
       return {
@@ -371,3 +374,5 @@ export class CexRoutingService {
     }
   }
 }
+
+export const cexService = new CexRoutingService();

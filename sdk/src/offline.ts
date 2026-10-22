@@ -1,7 +1,8 @@
-import { QueueEntry, OfflineQueueOptions, StorageAdapter, RequestOptions, HttpMethod } from './types';
-import { BridgeClient, BridgeClientConfig } from './bridge';
-import { OfflineError, QueueFullError, TimeoutError } from './errors';
-import type { SupportedLocale } from './i18n/types';
+import { QueueEntry, OfflineQueueEvent, OfflineQueueOptions, StorageAdapter, RequestOptions, HttpMethod } from './types.js';
+import { BridgeClient, BridgeClientConfig } from './bridge.js';
+import { OfflineError, QueueFullError, TimeoutError, NetworkError } from './errors.js';
+import type { SupportedLocale } from './i18n/types.js';
+import { unrefTimer } from './utils.js';
 
 const QUEUE_STORAGE_KEY = 'bridge_sdk_offline_queue';
 
@@ -19,6 +20,7 @@ const NON_IDEMPOTENT_POST_PATHS: ReadonlySet<string> = new Set([
 ]);
 
 type DrainHandler = (count: number, at: string) => void;
+type QueueEventHandler = (event: OfflineQueueEvent) => void;
 
 export class OfflineQueue {
   private queue: QueueEntry[] = [];
@@ -30,6 +32,7 @@ export class OfflineQueue {
   private serverOnline = true;
   private replaying = false;
   private readonly drainHandlers: DrainHandler[] = [];
+  private readonly eventHandlers: QueueEventHandler[] = [];
   private readonly deadLetters: QueueEntry[] = [];
 
   /**
@@ -60,16 +63,17 @@ export class OfflineQueue {
     this.healthTimer = setInterval(async () => {
       try {
         const online = await this.checkHealth();
-        if (!this.serverOnline && online) {
-          this.serverOnline = true;
+        this.serverOnline = online;
+        if (online && this.queue.length > 0) {
           await this.replay();
-        } else if (this.serverOnline && !online) {
-          this.serverOnline = false;
         }
       } catch {
         if (this.serverOnline) this.serverOnline = false;
       }
     }, intervalMs);
+    // The health poll is background housekeeping: it must not keep a Node
+    // process (or a test runner, or an SSR request) alive on its own.
+    unrefTimer(this.healthTimer);
   }
 
   async enqueue(entry: Omit<QueueEntry, 'id' | 'timestamp' | 'retryCount'>): Promise<string> {
@@ -85,6 +89,9 @@ export class OfflineQueue {
     // #262 fix: generate a stable idempotency key once at enqueue time for
     // non-idempotent POST operations. The same key is sent on every replay so
     // the server can deduplicate submissions caused by connection failures.
+    // #846 fix: when the caller already supplied the key used on the failed
+    // attempt, reuse it verbatim so a replay cannot duplicate a submission
+    // that may have reached the server.
     const idempotencyKey =
       entry.method === 'POST' && NON_IDEMPOTENT_POST_PATHS.has(entry.path)
         ? entry.idempotencyKey ?? generateIdempotencyKey()
@@ -97,6 +104,7 @@ export class OfflineQueue {
       retryCount: 0,
       idempotencyKey,
     };
+    this.serverOnline = false;
     this.queue.push(item);
     await this.persistToStorage();
     return id;
@@ -123,6 +131,11 @@ export class OfflineQueue {
     this.drainHandlers.push(handler);
   }
 
+  /** Register a callback for each replayed or dead-lettered entry. */
+  onEvent(handler: QueueEventHandler): void {
+    this.eventHandlers.push(handler);
+  }
+
   /** Manually signal connectivity state; triggers replay when transitioning online. */
   setOnline(online: boolean): void {
     const wasOffline = !this.serverOnline;
@@ -131,37 +144,52 @@ export class OfflineQueue {
   }
 
   destroy(): void {
-    if (this.healthTimer !== undefined) clearInterval(this.healthTimer);
+    if (this.healthTimer !== undefined) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = undefined;
+    }
   }
 
   private async replay(): Promise<void> {
     if (this.replaying || this.queue.length === 0) return;
     this.replaying = true;
 
-    const remaining: QueueEntry[] = [];
     let processedCount = 0;
 
-    for (const entry of this.queue) {
-      try {
-        await this.executeEntry(entry);
-        processedCount++;
-      } catch (err) {
-        if (!this.shouldRetry(err)) {
-          this.deadLetters.push(entry);
-          continue;
-        }
-        entry.retryCount++;
-        if (entry.retryCount >= this.maxRetries) {
-          this.deadLetters.push(entry);
-          continue;
-        }
-        remaining.push(entry);
-      }
-    }
+    try {
+      // #849 fix: iterate a snapshot and remove each processed entry by id
+      // instead of reassigning this.queue. Entries enqueued (or cleared) while
+      // the replay is awaiting executeEntry() are preserved.
+      const snapshot = [...this.queue];
 
-    this.queue = remaining;
-    await this.persistToStorage();
-    this.replaying = false;
+      for (const entry of snapshot) {
+        try {
+          await this.executeEntry(entry);
+          processedCount++;
+          this.removeById(entry.id);
+        } catch (err) {
+          if (!this.shouldRetry(err)) {
+            this.deadLetters.push(entry);
+            this.removeById(entry.id);
+            continue;
+          }
+          entry.retryCount++;
+          if (entry.retryCount >= this.maxRetries) {
+            this.deadLetters.push(entry);
+            this.removeById(entry.id);
+            continue;
+          }
+          // Keep the entry queued for a later replay; retryCount is persisted
+          // below via persistToStorage().
+        }
+      }
+
+      await this.persistToStorage();
+    } finally {
+      // #849 fix: always reset the replaying flag, even if executeEntry()
+      // throws something shouldRetry() does not handle.
+      this.replaying = false;
+    }
 
     if (processedCount > 0) {
       const at = new Date().toISOString();
@@ -171,6 +199,12 @@ export class OfflineQueue {
         } catch {}
       }
     }
+  }
+
+  /** Removes a single entry from the queue by id, preserving all others. */
+  private removeById(id: string): void {
+    const idx = this.queue.findIndex((e) => e.id === id);
+    if (idx !== -1) this.queue.splice(idx, 1);
   }
 
   private async loadFromStorage(): Promise<void> {
@@ -199,10 +233,18 @@ export class OfflineQueue {
       await this.storage.set(QUEUE_STORAGE_KEY, JSON.stringify(this.queue));
     } catch {}
   }
+
+  private emitQueueEvent(event: OfflineQueueEvent): void {
+    for (const handler of this.eventHandlers) {
+      try {
+        handler(event);
+      } catch {}
+    }
+  }
 }
 
 // Import shared idempotency key generator from utils
-import { generateIdempotencyKey } from './utils';
+import { generateIdempotencyKey } from './utils.js';
 
 export class OfflineBridgeClient extends BridgeClient {
   readonly offlineQueue: OfflineQueue;
@@ -214,7 +256,11 @@ export class OfflineBridgeClient extends BridgeClient {
 
     this.autoQueue = config.offlineOptions?.autoQueue ?? true;
     this.locale = config.locale;
-    const healthPath = config.offlineOptions?.healthCheckPath ?? '/api/v1/health';
+    // #840 fix: the API serves health at the root (`/health`, `/health/live`,
+    // `/health/ready`), not under `/api/v1`. Defaulting to `/api/v1/health`
+    // always 404'd, so the queue never observed an offline->online transition
+    // and never replayed. Align with BridgeClient.health() which uses `/health`.
+    const healthPath = config.offlineOptions?.healthCheckPath ?? '/health';
     const base = config.baseUrl.replace(/\/+$/, '');
 
     this.offlineQueue = new OfflineQueue(
@@ -242,50 +288,53 @@ export class OfflineBridgeClient extends BridgeClient {
       return await super.request<T>(method, path, body, params, options, idempotencyKey);
     } catch (err) {
       if (this.autoQueue && this.isNetworkError(err)) {
-        await this.offlineQueue.enqueue({ method, path, body, params });
-        throw new OfflineError(true, { locale: this.locale });
+        const id = await this.offlineQueue.enqueue({
+          method,
+          path,
+          body,
+          params,
+          idempotencyKey,
+        });
+        throw new OfflineError(id, { locale: this.locale });
       }
       throw err;
     }
   }
 
-  /** Inspect all pending queued requests. */
-  getQueuedRequests(): QueueEntry[] {
-    return this.offlineQueue.getQueue();
+  private async executeQueueEntry(entry: QueueEntry): Promise<unknown> {
+    return super.request(
+      entry.method,
+      entry.path,
+      entry.body,
+      entry.params,
+      undefined,
+      entry.idempotencyKey,
+    );
   }
 
-  /** Discard all pending queued requests. */
-  async clearQueue(): Promise<void> {
-    return this.offlineQueue.clearQueue();
-  }
-
-  /** Register a callback that fires when the queue is fully drained after reconnection. */
-  onQueueDrained(handler: (count: number, at: string) => void): void {
-    this.offlineQueue.onDrained(handler);
-  }
-
-  destroy(): void {
-    this.offlineQueue.destroy();
+  private shouldRetry(err: unknown): boolean {
+    return this.isNetworkError(err);
   }
 
   private isNetworkError(err: unknown): boolean {
     if (err instanceof TimeoutError) return false;
+    // #843 fix: by the time super.request() rejects, a fetch TypeError has
+    // already been wrapped into a NetworkError (a BridgeError). Check the
+    // type directly so Node/undici ("fetch failed") and Safari ("Load failed")
+    // are recognised, not just Chrome/Firefox message text.
+    if (err instanceof NetworkError) return true;
     if (err instanceof TypeError) return true;
     if (err instanceof Error) {
       const msg = err.message.toLowerCase();
       return (
         msg.includes('failed to fetch') ||
+        msg.includes('fetch failed') ||
+        msg.includes('load failed') ||
         msg.includes('network') ||
         msg.includes('econnrefused') ||
         msg.includes('enotfound')
       );
     }
     return false;
-  }
-
-  private async executeQueueEntry(entry: QueueEntry): Promise<unknown> {
-    // #262 fix: forward the stored idempotency key so the replayed request
-    // carries the same key as the original submission attempt.
-    return super.request(entry.method, entry.path, entry.body, entry.params, undefined, entry.idempotencyKey);
   }
 }

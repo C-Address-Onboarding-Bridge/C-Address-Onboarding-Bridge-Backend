@@ -74,7 +74,7 @@ function getClient(): Redis | null {
  * Tracks in-flight computations so that concurrent requests for the same key
  * all await the same Promise rather than each independently querying upstream.
  */
-const inFlightMap = new Map<string, Promise<string | null>>();
+const inFlightMap = new Map<string, Promise<unknown>>();
 
 // ─── Metrics helpers ──────────────────────────────────────────────────────────
 
@@ -179,14 +179,36 @@ export async function cacheDel(key: string): Promise<void> {
   }
 }
 
+export async function cacheSetNX(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+  const redis = getClient();
+  if (!redis) return true; // No Redis → allow the request through.
+
+  try {
+    const result = await redis.set(key, value, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
+  } catch {
+    return false; // On error, do not reserve the lock.
+  }
+}
+
 export async function cacheDelPattern(pattern: string): Promise<void> {
   const redis = getClient();
   if (!redis) return;
 
   try {
-    const keys = await redis.keys(pattern);
-    if (keys.length > 0) {
-      await redis.del(...keys);
+    const stream = redis.scanStream({ match: pattern, count: 500 });
+    for await (const keys of stream as AsyncIterable<string[]>) {
+      if (keys.length > 0) {
+        const BATCH_SIZE = 500;
+        for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+          const batch = keys.slice(i, i + BATCH_SIZE);
+          if (typeof (redis as any).unlink === 'function') {
+            await (redis as any).unlink(...batch);
+          } else {
+            await redis.del(...batch);
+          }
+        }
+      }
     }
   } catch {
     // Gracefully degrade.
@@ -314,16 +336,51 @@ export async function withSingleFlight<T>(
 
   const promise = (async () => {
     // Layer 2: acquire Redis lock (best-effort; falls through if Redis unavailable)
-    await acquireRedisLock(lockKey, lockTtlMs);
+    const acquired = await acquireRedisLock(lockKey, lockTtlMs);
     try {
+      if (!acquired) {
+        // Another instance holds the lock; poll for the cached result
+        const pollIntervalMs = 50;
+        const deadline = Date.now() + lockTtlMs;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, pollIntervalMs));
+          const cached = await swrGet<T>(key);
+          if (cached !== null) {
+            return cached.value;
+          }
+          const raw = await cacheGet(key);
+          if (raw !== null) {
+            try {
+              return JSON.parse(raw) as T;
+            } catch {
+              return raw as unknown as T;
+            }
+          }
+          const redis = getClient();
+          if (redis) {
+            try {
+              const lockVal = await redis.get(lockKey);
+              if (!lockVal) {
+                const retryCached = await swrGet<T>(key);
+                if (retryCached !== null) return retryCached.value;
+                break;
+              }
+            } catch {
+              break;
+            }
+          }
+        }
+      }
       return await fn();
     } finally {
       inFlightMap.delete(key);
-      void releaseRedisLock(lockKey);
+      if (acquired) {
+        void releaseRedisLock(lockKey);
+      }
     }
   })();
 
-  inFlightMap.set(key, promise as Promise<string | null>);
+  inFlightMap.set(key, promise);
   return promise;
 }
 
@@ -359,7 +416,7 @@ export async function getOrCompute<T>(
       withSingleFlight(key, async () => {
         const fresh = await compute();
         await swrSet(key, fresh, ttlSeconds);
-        return JSON.stringify(fresh);
+        return fresh;
       }).catch(() => {
         // Background revalidation errors don't affect the caller.
       });

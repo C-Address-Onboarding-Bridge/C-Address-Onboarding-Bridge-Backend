@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { C_ADDRESS_REGEX } from '../utils/constants';
-import { cexService } from '../services/cex';
+import { cexService, CexWithdrawalForbiddenError } from '../services/cex';
 import { exchangeRoutingCount } from '../services/metrics';
 
 /** Express router for CEX withdrawal routing. Mounted at `/api/v1/cex`. */
@@ -17,6 +17,20 @@ export const cexRouter = Router();
 export const CEX_WITHDRAW_SCOPE = 'cex:withdraw';
 
 /**
+ * Header the SDK sends to advertise that it will only retry this request when
+ * the server confirms it honours `x-idempotency-key`. The route echoes this
+ * header back on every response so the SDK can decide whether a retry is safe.
+ */
+export const IDEMPOTENCY_KEY_HEADER = 'x-idempotency-key';
+
+/**
+ * Header the route sets to confirm that a request carrying
+ * `x-idempotency-key` was de-duplicated server-side. The SDK only retries
+ * `POST /cex/route` when this header is present and truthy.
+ */
+export const IDEMPOTENCY_HONOURED_HEADER = 'x-idempotency-honoured';
+
+/**
  * Extract the scopes granted to the authenticated caller. The auth middleware
  * attaches the resolved API key (with its scopes) to `req.apiKey`; we also
  * accept `req.auth`/`req.scopes` shapes so the check works regardless of which
@@ -24,12 +38,19 @@ export const CEX_WITHDRAW_SCOPE = 'cex:withdraw';
  * never satisfy this check.
  */
 function getCallerScopes(req: Request): string[] {
+  if (req.resolvedScopes && Array.isArray(req.resolvedScopes)) {
+    return req.resolvedScopes;
+  }
   const anyReq = req as Request & {
     apiKey?: { scopes?: unknown };
     auth?: { scopes?: unknown };
     scopes?: unknown;
   };
-  const raw = anyReq.apiKey?.scopes ?? anyReq.auth?.scopes ?? anyReq.scopes;
+  const raw =
+    req.apiKeyRecord?.scopes ??
+    anyReq.apiKey?.scopes ??
+    anyReq.auth?.scopes ??
+    anyReq.scopes;
   if (Array.isArray(raw)) {
     return raw.filter((s): s is string => typeof s === 'string');
   }
@@ -88,6 +109,7 @@ function buildIdempotencyKey(req: Request, body: z.infer<typeof routeSchema>): s
     auth?: { apiKeyId?: unknown; id?: unknown };
   };
   const caller =
+    req.apiKeyRecord?.id ??
     anyReq.apiKey?.id ??
     anyReq.apiKey?.key ??
     anyReq.auth?.apiKeyId ??
@@ -103,28 +125,52 @@ function buildIdempotencyKey(req: Request, body: z.infer<typeof routeSchema>): s
   ].join(':');
 }
 
+/**
+ * Advertise whether this route honours the caller-supplied idempotency key.
+ *
+ * The route only coalesces requests that are in flight at the same moment; it
+ * does NOT persist results, so a retry after the exchange call has settled
+ * would re-execute the withdrawal. We therefore only confirm idempotency when
+ * the caller actually supplied a key AND the request was coalesced with an
+ * already in-flight identical request. In every other case the SDK must not
+ * retry, so we explicitly signal `false`.
+ */
+function setIdempotencyHonoured(res: Response, honoured: boolean): void {
+  res.setHeader(IDEMPOTENCY_HONOURED_HEADER, honoured ? 'true' : 'false');
+}
+
 cexRouter.post('/route', requireCexWithdrawScope, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = routeSchema.parse(req.body);
 
     const idempotencyKey = buildIdempotencyKey(req, body);
+    const callerSuppliedKey = typeof req.headers[IDEMPOTENCY_KEY_HEADER] === 'string';
 
     // De-duplicate only concurrent identical requests from the same caller.
     // The entry is removed once the exchange call settles, so a later
     // legitimate withdrawal with the same parameters is always re-executed.
     let pending = inFlightWithdrawals.get(idempotencyKey);
+    const coalesced = pending !== undefined;
     if (!pending) {
-      pending = cexService.routeWithdrawal(body);
+      const scopes = getCallerScopes(req);
+      pending = cexService.routeWithdrawal(body, scopes);
       inFlightWithdrawals.set(idempotencyKey, pending);
       pending.finally(() => {
         inFlightWithdrawals.delete(idempotencyKey);
       });
     }
 
+    // Only confirm idempotency when the caller supplied a key and the request
+    // was coalesced with an in-flight identical request. Otherwise a retry
+    // would re-execute the withdrawal, so the SDK must not retry.
+    setIdempotencyHonoured(res, callerSuppliedKey && coalesced);
+
     const result = await pending;
 
     // routeWithdrawal can resolve with {status: 'failed', ...} when the exchange API fails.
     // Surface that as a 502 so callers don't treat a failed withdrawal as created.
+    // The body (including withdrawalId when present) is preserved so callers can
+    // reconcile a partially-processed withdrawal instead of blindly retrying.
     if (result.status === 'failed') {
       exchangeRoutingCount.inc({ exchange: body.exchange, status: 'failed' });
       res.status(502).json(result);
@@ -134,6 +180,13 @@ cexRouter.post('/route', requireCexWithdrawScope, async (req: Request, res: Resp
     exchangeRoutingCount.inc({ exchange: body.exchange, status: 'success' });
     res.status(201).json(result);
   } catch (err) {
+    if (err instanceof CexWithdrawalForbiddenError) {
+      res.status(403).json({
+        error: 'forbidden',
+        message: err.message,
+      });
+      return;
+    }
     const exchange = (req.body as { exchange?: string })?.exchange ?? 'unknown';
     exchangeRoutingCount.inc({ exchange, status: 'failed' });
     next(err);
