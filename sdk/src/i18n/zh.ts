@@ -1,4 +1,4 @@
-import type { MessageCatalog } from './types';
+import type { MessageCatalog } from './types.js';
 
 /** Simplified Chinese (zh) translation catalog. */
 export const zh: MessageCatalog = {

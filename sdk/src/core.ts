@@ -1,4 +1,4 @@
-export { BridgeClient, type BridgeClientConfig } from './bridge';
+export { BridgeClient, type BridgeClientConfig } from './bridge.js';
 export type {
   BridgeStatus,
   RequestParams,
@@ -21,8 +21,8 @@ export type {
   Token,
   TokenMetadata,
   TokenMetadataParams,
-} from './types';
-export * as utils from './utils';
+} from './types.js';
+export * as utils from './utils.js';
 export {
   BridgeError,
   AuthError,
@@ -43,7 +43,7 @@ export {
   isTimeoutError,
   isNotFoundError,
   isBridgeError,
-} from './errors';
+} from './errors.js';
 export {
   isNativeToken,
   isSacToken,
@@ -55,4 +55,4 @@ export {
   formatTokenAmount,
   parseTokenAmount,
   getDefaultDecimals,
-} from './token';
+} from './token.js';
