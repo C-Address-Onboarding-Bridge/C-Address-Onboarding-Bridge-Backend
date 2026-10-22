@@ -39,7 +39,7 @@ const prepared = await client.prepareFundingTransaction({
   amount: '10000000',
 });
 
-// 3. Sign prepared.instruction with the user's wallet, then submit it
+// 3. Sign prepared.unsignedXdr with the user's wallet, then submit it
 const result = await client.submitSignedXdr({ signedXdr: '...' });
 
 console.log(result.status); // 'pending' | 'success' | 'failed'

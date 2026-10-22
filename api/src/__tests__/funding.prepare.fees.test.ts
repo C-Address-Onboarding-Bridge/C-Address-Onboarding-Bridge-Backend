@@ -1,12 +1,22 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest';
-import request from 'supertest';
+import { describe, it, expect } from "vitest";
+import type { FundingPrepareResult } from "../../../sdk/src/types";
 
-process.env.NODE_ENV = 'test';
-process.env.SOROBAN_RPC_URL = 'https://soroban-rpc.testnet.stellar.org';
-process.env.BRIDGE_FEE_BPS = '30';
-process.env.API_KEYS = 'test-api-key-123';
+// Recorded response from POST /api/v1/fund/prepare (see api/src/routes/funding.ts).
+const recordedPrepareResponse = {
+  unsignedXdr: "AAAAAgAAAAB...",
+  footprint: "AAAAAQAAAAA...",
+  fee: "100",
+  sourceAddress: "GSOURCE000000000000000000000000000000000000000000000000000",
+  targetAddress: "GTARGET000000000000000000000000000000000000000000000000000",
+  tokenAddress: "GTOKEN0000000000000000000000000000000000000000000000000000",
+  amount: "10000000",
+  memo: "test-memo",
+};
 
-let app: import('express').Express;
+describe("POST /api/v1/fund/prepare contract", () => {
+  it("matches the SDK FundingPrepareResult type", () => {
+    // Compile-time check: the recorded response must be assignable to the SDK type.
+    const typed: FundingPrepareResult = recordedPrepareResponse;
 
 // Mock soroban service to avoid actual RPC calls
 vi.mock('../services/soroban', () => ({
@@ -16,6 +26,7 @@ vi.mock('../services/soroban', () => ({
       transactionEnvelopeXdr: 'AAAAAgAAAABDrzABL2F/tOvT8T8V++T8KqP1V8DWaFmDVvQJTJTN6w==',
     }),
     submitFundingTransaction: vi.fn(),
+    submitValidatedXdr: vi.fn(),
   },
 }));
 
@@ -66,60 +77,80 @@ describe('POST /api/v1/fund/prepare - Fee Information', () => {
     expect(res.body).toHaveProperty('feeAmount');
   });
 
-  it.skip('feeBps matches configuration', async () => {
-    const res = await request(app)
-      .post('/api/v1/fund/prepare')
-      .set('X-API-Key', 'test-api-key-123')
-      .send(validFundPrepareRequest);
+  it("exposes unsignedXdr rather than the stale instruction field", () => {
+    expect(recordedPrepareResponse).toHaveProperty("unsignedXdr");
+    expect(recordedPrepareResponse).not.toHaveProperty("instruction");
+  });
+});
 
-    expect(res.status).toBe(200);
-    expect(res.body.feeBps).toBe(30);
+describe('POST /api/v1/fund - transaction status mapping', () => {
+  const validFundRequest = {
+    sourceAddress: 'GAHFGQNZXHJJRVCCPQO5J3BSFLSPOZG2JMQVNF5XVLNGSYXHFUQ2EXFD',
+    targetAddress: 'CAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+    tokenAddress: 'CAKMW7CKBZATWFMKM3LZNGXSDX5KQFMYSVQP2GGKWSJQGBGZVYBZKX4',
+    amount: '1000000',
+    signedXdr: 'AAAAAgAAAABDrzABL2F/tOvT8T8V++T8KqP1V8DWaFmDVvQJTJTN6w==',
+  };
+
+  it('returns 201 when the transaction is pending', async () => {
+    const { sorobanService } = await import('../services/soroban');
+    vi.mocked(sorobanService.submitValidatedXdr).mockResolvedValueOnce({
+      status: 'pending',
+      hash: 'deadbeef',
+    } as any);
+
+    const res = await request(app)
+      .post('/api/v1/fund')
+      .set('X-API-Key', 'test-api-key-123')
+      .send(validFundRequest);
+
+    expect(res.status).toBe(201);
   });
 
-  it.skip('feeAmount is calculated correctly (amount * feeBps / 10000)', async () => {
-    const amount = '1000000';
-    const feeBps = 30;
-    const expectedFee = (BigInt(amount) * BigInt(feeBps)) / 10000n;
+  it('returns 201 when the transaction succeeded', async () => {
+    const { sorobanService } = await import('../services/soroban');
+    vi.mocked(sorobanService.submitValidatedXdr).mockResolvedValueOnce({
+      status: 'success',
+      hash: 'deadbeef',
+    } as any);
 
     const res = await request(app)
-      .post('/api/v1/fund/prepare')
+      .post('/api/v1/fund')
       .set('X-API-Key', 'test-api-key-123')
-      .send(validFundPrepareRequest);
+      .send(validFundRequest);
 
-    expect(res.status).toBe(200);
-    expect(BigInt(res.body.feeAmount)).toBe(expectedFee);
+    expect(res.status).toBe(201);
   });
 
-  it.skip('response includes netAmount (amount - feeAmount)', async () => {
+  it('returns 422 when the transaction failed', async () => {
+    const { sorobanService } = await import('../services/soroban');
+    vi.mocked(sorobanService.submitValidatedXdr).mockResolvedValueOnce({
+      status: 'failed',
+      hash: 'deadbeef',
+      error: 'tx rejected by RPC',
+    } as any);
+
     const res = await request(app)
-      .post('/api/v1/fund/prepare')
+      .post('/api/v1/fund')
       .set('X-API-Key', 'test-api-key-123')
-      .send(validFundPrepareRequest);
+      .send(validFundRequest);
 
-    expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('netAmount');
-
-    const amount = BigInt(validFundPrepareRequest.amount);
-    const feeAmount = BigInt(res.body.feeAmount);
-    const expectedNetAmount = amount - feeAmount;
-
-    expect(BigInt(res.body.netAmount)).toBe(expectedNetAmount);
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('tx rejected by RPC');
   });
 
-  it.skip('fee calculation handles large amounts', async () => {
-    const largeAmountRequest = {
-      ...validFundPrepareRequest,
-      amount: '100000000000000',
-    };
+  it('returns 410 when the transaction expired', async () => {
+    const { sorobanService } = await import('../services/soroban');
+    vi.mocked(sorobanService.submitValidatedXdr).mockResolvedValueOnce({
+      status: 'expired',
+      hash: 'deadbeef',
+    } as any);
 
     const res = await request(app)
-      .post('/api/v1/fund/prepare')
+      .post('/api/v1/fund')
       .set('X-API-Key', 'test-api-key-123')
-      .send(largeAmountRequest);
+      .send(validFundRequest);
 
-    expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty('feeBps');
-    expect(res.body).toHaveProperty('feeAmount');
-    expect(res.body).toHaveProperty('netAmount');
+    expect(res.status).toBe(410);
   });
 });

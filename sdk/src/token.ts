@@ -1,61 +1,6 @@
 import { Token, TokenMetadata } from './types';
 import { ValidationError } from './errors';
-
-// ─── StrKey Contract Address Validation ──────────────────────────────────────
-// Local implementation of the StrKey contract-address check (base32 decode +
-// CRC16-XModem checksum) so we don't pull the full Stellar SDK into bundles.
-
-const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-const CONTRACT_VERSION_BYTE = 6 << 3; // 'C' prefix, version byte 0x30
-const CONTRACT_PAYLOAD_LENGTH = 32;
-
-function base32Decode(input: string): Uint8Array | null {
-  let bits = 0;
-  let value = 0;
-  const output: number[] = [];
-
-  for (let i = 0; i < input.length; i++) {
-    const idx = BASE32_ALPHABET.indexOf(input[i]);
-    if (idx === -1) return null;
-    value = (value << 5) | idx;
-    bits += 5;
-    if (bits >= 8) {
-      bits -= 8;
-      output.push((value >>> bits) & 0xff);
-    }
-  }
-
-  return new Uint8Array(output);
-}
-
-function crc16XModem(data: Uint8Array): number {
-  let crc = 0x0000;
-  for (let i = 0; i < data.length; i++) {
-    crc ^= data[i] << 8;
-    for (let j = 0; j < 8; j++) {
-      crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
-      crc &= 0xffff;
-    }
-  }
-  return crc;
-}
-
-function isValidContractStrKey(address: string): boolean {
-  if (typeof address !== 'string' || address.length !== 56) return false;
-  if (address[0] !== 'C') return false;
-
-  const decoded = base32Decode(address);
-  if (!decoded) return false;
-
-  // version byte + 32-byte payload + 2-byte checksum
-  if (decoded.length !== 1 + CONTRACT_PAYLOAD_LENGTH + 2) return false;
-  if (decoded[0] !== CONTRACT_VERSION_BYTE) return false;
-
-  const payload = decoded.subarray(0, decoded.length - 2);
-  const checksum = (decoded[decoded.length - 2] << 8) | decoded[decoded.length - 1];
-
-  return crc16XModem(payload) === checksum;
-}
+import { StrKey } from '@stellar/stellar-sdk';
 
 // ─── Token Type Guards ────────────────────────────────────────────────────────
 
@@ -67,6 +12,26 @@ export function isNativeToken(token: Token): token is { type: 'native' } {
 /** Returns `true` if the token is a SAC (Stellar Asset Converter) token. */
 export function isSacToken(token: Token): token is { type: 'sac'; contractId: string } {
   return token.type === 'sac';
+}
+
+// ─── Native XLM SAC Contract IDs ──────────────────────────────────────────────
+
+/**
+ * Network-specific Stellar Asset Contract (SAC) contract IDs for native XLM.
+ * These are the canonical C-addresses the bridge API expects when funding with
+ * native XLM on Soroban.
+ */
+export const NATIVE_XLM_CONTRACT_IDS: Record<'testnet' | 'mainnet', string> = {
+  testnet: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+  mainnet: 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+};
+
+/**
+ * Resolves the native XLM SAC contract ID for the given network.
+ * Defaults to testnet when no network is provided.
+ */
+export function getNativeAssetContractId(network: 'testnet' | 'mainnet' = 'testnet'): string {
+  return NATIVE_XLM_CONTRACT_IDS[network];
 }
 
 // ─── Address Validation ───────────────────────────────────────────────────────
@@ -143,13 +108,38 @@ export function formatTokenAmount(amount: string, decimals: number): string {
  * @param amount - Human-readable amount (e.g. `"1.5"`).
  * @param decimals - Number of decimal places the token uses.
  * @returns Raw integer amount as a string (e.g. `"1500000"` for 6 decimals).
+ * @throws {ValidationError} If the input format is invalid or has too many decimal places.
  */
 export function parseTokenAmount(amount: string, decimals: number): string {
-  const parts = amount.split('.');
-  const integerPart = parts[0] || '0';
-  const fractionalPart = (parts[1] || '').padEnd(decimals, '0').slice(0, decimals);
+  if (typeof amount !== 'string' || !/^-?\d+(\.\d+)?$/.test(amount)) {
+    throw new ValidationError(`Invalid amount format: "${amount}". Must be a decimal number string.`, {
+      fields: { amount: 'Must be a valid decimal number string' },
+    });
+  }
 
-  return (integerPart + fractionalPart).replace(/^0+(?=.)/, '');
+  const isNegative = amount.startsWith('-');
+  const cleanAmount = isNegative ? amount.slice(1) : amount;
+
+  const parts = cleanAmount.split('.');
+  const integerPart = parts[0] || '0';
+  const fractionalPart = parts[1] || '';
+
+  if (fractionalPart.length > decimals) {
+    throw new ValidationError(
+      `Amount "${amount}" has ${fractionalPart.length} decimal places, but token only supports ${decimals}.`,
+      {
+        fields: { amount: `Too many decimal places (maximum: ${decimals})` },
+      },
+    );
+  }
+
+  const paddedFractional = fractionalPart.padEnd(decimals, '0');
+  const combined = (integerPart + paddedFractional).replace(/^0+(?=.)/, '');
+  if (combined === '' || combined === '0') {
+    return '0';
+  }
+
+  return isNegative ? `-${combined}` : combined;
 }
 
 /**

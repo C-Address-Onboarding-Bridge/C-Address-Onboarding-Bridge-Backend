@@ -4,7 +4,7 @@ import net from 'net';
 import { logger } from '../logger';
 import { hashPayload, integrityAuditLog } from './auditLog';
 import { enqueueAudit } from './asyncPipeline';
-import { enqueueWebhookRetry } from '../jobs/queue';
+import { enqueueWebhookRetry, WEBHOOK_RETRY_DELAYS_MS } from '../jobs/queue';
 
 export interface WebhookRegistration {
   id: string;
@@ -49,8 +49,8 @@ export const WEBHOOK_EVENTS = {
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[keyof typeof WEBHOOK_EVENTS];
 
-const RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
 const DELIVERY_TIMEOUT_MS = 10_000;
+const DEFAULT_DELIVERY_LOG_LIMIT = 10_000;
 
 /**
  * Recommended freshness window (in milliseconds) for receivers verifying the
@@ -141,22 +141,28 @@ export async function assertSafeWebhookUrl(rawUrl: string): Promise<void> {
 }
 
 /**
- * Storage abstraction for webhook registrations, delivery attempts, and the
- * dead-letter queue. The in-memory implementation is the default; a persistent
- * `WebhookDeliveryRepository` can be swapped in without touching the service.
+ * Minimal persistence contract for webhook state. Implementations may back this
+ * with Postgres (production) or an in-memory store (tests / single-process).
  */
-export interface WebhookDeliveryStore {
+export interface WebhookStore {
   saveRegistration(registration: WebhookRegistration): void;
-  getRegistration(id: string): WebhookRegistration | undefined;
-  getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[];
   deleteRegistration(id: string): boolean;
-  recordAttempt(attempt: DeliveryAttempt): void;
-  getAttempts(registrationId?: string): DeliveryAttempt[];
-  addToDLQ(entry: DLQEntry): void;
-  getDLQ(): DLQEntry[];
+  getRegistration(id: string): WebhookRegistration | undefined;
+  listRegistrations(): WebhookRegistration[];
+  appendDeliveryAttempt(attempt: DeliveryAttempt): void;
+  listDeliveryAttempts(): DeliveryAttempt[];
+  pruneDeliveryLog(maxEntries: number): void;
+  saveDLQEntry(entry: DLQEntry): void;
+  listDLQEntries(): DLQEntry[];
+  getDLQEntry(id: string): DLQEntry | undefined;
+  deleteDLQEntry(id: string): boolean;
 }
 
-export class InMemoryWebhookDeliveryStore implements WebhookDeliveryStore {
+/**
+ * In-memory fallback store. Used when no Postgres-backed store is injected so
+ * the service keeps working in tests and single-process deployments.
+ */
+export class InMemoryWebhookStore implements WebhookStore {
   private registrations = new Map<string, WebhookRegistration>();
   private attempts: DeliveryAttempt[] = [];
   private dlq: DLQEntry[] = [];
@@ -243,6 +249,65 @@ export class WebhookDeliveryService {
     this.store = store;
   }
 
+  saveRegistration(registration: WebhookRegistration): void {
+    this.registrations.set(registration.id, registration);
+  }
+
+  deleteRegistration(id: string): boolean {
+    return this.registrations.delete(id);
+  }
+
+  getRegistration(id: string): WebhookRegistration | undefined {
+    return this.registrations.get(id);
+  }
+
+  listRegistrations(): WebhookRegistration[] {
+    return [...this.registrations.values()];
+  }
+
+  appendDeliveryAttempt(attempt: DeliveryAttempt): void {
+    this.deliveryLog.push(attempt);
+  }
+
+  listDeliveryAttempts(): DeliveryAttempt[] {
+    return [...this.deliveryLog];
+  }
+
+  pruneDeliveryLog(maxEntries: number): void {
+    if (this.deliveryLog.length > maxEntries) {
+      this.deliveryLog.splice(0, this.deliveryLog.length - maxEntries);
+    }
+  }
+
+  saveDLQEntry(entry: DLQEntry): void {
+    this.dlq.push(entry);
+  }
+
+  listDLQEntries(): DLQEntry[] {
+    return [...this.dlq];
+  }
+
+  getDLQEntry(id: string): DLQEntry | undefined {
+    return this.dlq.find((e) => e.id === id);
+  }
+
+  deleteDLQEntry(id: string): boolean {
+    const idx = this.dlq.findIndex((e) => e.id === id);
+    if (idx === -1) return false;
+    this.dlq.splice(idx, 1);
+    return true;
+  }
+}
+
+export class WebhookDeliveryService {
+  private store: WebhookStore;
+  private deliveryLogLimit: number;
+
+  constructor(store: WebhookStore = new InMemoryWebhookStore(), deliveryLogLimit = DEFAULT_DELIVERY_LOG_LIMIT) {
+    this.store = store;
+    this.deliveryLogLimit = deliveryLogLimit;
+  }
+
   register(params: { url: string; secret: string; apiKeyId: string; events: string[] }): WebhookRegistration {
     const registration: WebhookRegistration = {
       id: crypto.randomUUID(),
@@ -266,19 +331,7 @@ export class WebhookDeliveryService {
   }
 
   getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[] {
-    return this.store.getRegistrationsByApiKeyId(apiKeyId);
-  }
-
-  recordAttempt(attempt: DeliveryAttempt): void {
-    this.store.recordAttempt(attempt);
-  }
-
-  getAttempts(registrationId?: string): DeliveryAttempt[] {
-    return this.store.getAttempts(registrationId);
-  }
-
-  getDLQ(): DLQEntry[] {
-    return this.store.getDLQ();
+    return this.store.listRegistrations().filter((r) => r.apiKeyId === apiKeyId);
   }
 
   /**
@@ -317,6 +370,11 @@ export class WebhookDeliveryService {
         'webhook emit failed',
       );
     });
+  }
+
+  private recordAttempt(attempt: DeliveryAttempt): void {
+    this.store.appendDeliveryAttempt(attempt);
+    this.store.pruneDeliveryLog(this.deliveryLogLimit);
   }
 
   private async attemptDelivery(
@@ -408,6 +466,82 @@ export class WebhookDeliveryService {
         'webhook delivery moved to DLQ',
       );
     }
+
+    this.recordAttempt(attempt);
+
+    if (attemptNumber < WEBHOOK_RETRY_DELAYS_MS.length) {
+      const delay = WEBHOOK_RETRY_DELAYS_MS[attemptNumber];
+      logger.info(
+        { registrationId: registration.id, event, nextAttemptIn: delay, attempt: attemptNumber + 1 },
+        'scheduling webhook retry',
+      );
+      try {
+        await enqueueWebhookRetry(
+          {
+            registrationId: registration.id,
+            url: registration.url,
+            event,
+            timestamp,
+            payload,
+            signature,
+            data,
+            attemptNumber: attemptNumber + 1,
+          },
+          delay,
+        );
+      } catch (err) {
+        logger.error(
+          { registrationId: registration.id, event, error: err instanceof Error ? err.message : String(err) },
+          'failed to enqueue webhook retry',
+        );
+        this.moveToDLQ(registration, event, data);
+      }
+    } else {
+      this.moveToDLQ(registration, event, data);
+    }
+  }
+
+  private moveToDLQ(registration: WebhookRegistration, event: string, data: unknown): void {
+    const attempts = this.store
+      .listDeliveryAttempts()
+      .filter((a) => a.registrationId === registration.id && a.event === event);
+    const entry: DLQEntry = {
+      id: crypto.randomUUID(),
+      registration,
+      payload: data,
+      event,
+      attempts,
+      failedAt: Date.now(),
+    };
+    this.store.saveDLQEntry(entry);
+    logger.error(
+      { registrationId: registration.id, url: registration.url, event, dlqId: entry.id },
+      'webhook moved to dead letter queue after max retries',
+    );
+  }
+
+  getDLQ(): DLQEntry[] {
+    return this.store.listDLQEntries();
+  }
+
+  getDLQEntry(id: string): DLQEntry | undefined {
+    return this.store.getDLQEntry(id);
+  }
+
+  deleteDLQEntry(id: string): boolean {
+    return this.store.deleteDLQEntry(id);
+  }
+
+  getDeliveryLog(): DeliveryAttempt[] {
+    return this.store.listDeliveryAttempts();
+  }
+
+  getStats(): { registered: number; dlqSize: number; totalAttempts: number } {
+    return {
+      registered: this.store.listRegistrations().length,
+      dlqSize: this.store.listDLQEntries().length,
+      totalAttempts: this.store.listDeliveryAttempts().length,
+    };
   }
 }
 
