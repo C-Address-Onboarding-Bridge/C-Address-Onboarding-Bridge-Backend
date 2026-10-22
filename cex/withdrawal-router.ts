@@ -8,6 +8,10 @@ export interface CexConfig {
   apiSecret?: string;
   /** Required by exchanges (e.g. Coinbase) that use a passphrase-protected API key. */
   apiPassphrase?: string;
+  /** Pre-registered withdrawal key name on Kraken. */
+  withdrawKey?: string;
+  /** Optional mapping of destination C-addresses to Kraken pre-registered withdrawal key names. */
+  withdrawKeys?: Record<string, string>;
 }
 
 /** Withdrawal request to be routed to an exchange. */
@@ -31,6 +35,24 @@ export interface WithdrawalResult {
   txHash?: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   estimatedCompletion?: string;
+  error?: string;
+}
+
+/**
+ * Converts an integer amount in stroops (7 decimal places) to a decimal string for exchange APIs.
+ *
+ * @param stroops - Integer amount string in stroops (e.g. `"10000000"` for 1 XLM).
+ * @param decimals - Number of decimal places (default 7 for Stellar stroops).
+ * @returns Human-readable decimal string (e.g. `"1"` or `"1.5"`).
+ */
+export function stroopsToDecimal(stroops: string, decimals = 7): string {
+  if (!/^-?\d+$/.test(stroops)) return stroops;
+  const negative = stroops.startsWith('-');
+  const digits = (negative ? stroops.slice(1) : stroops).padStart(decimals + 1, '0');
+  const whole = digits.slice(0, digits.length - decimals);
+  const fraction = digits.slice(digits.length - decimals).replace(/0+$/, '');
+  const result = fraction ? `${whole}.${fraction}` : whole;
+  return negative ? `-${result}` : result;
 }
 
 /**
@@ -217,10 +239,14 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
     const path = '/0/private/Withdraw';
     try {
       const nonce = String(Date.now());
+      const withdrawKey =
+        config.withdrawKeys?.[req.destinationAddress] ?? config.withdrawKey ?? req.destinationAddress;
+      const decimalAmount = stroopsToDecimal(req.amount);
+
       const body = new URLSearchParams({
         asset: req.asset,
-        key: req.destinationAddress,
-        amount: req.amount,
+        key: withdrawKey,
+        amount: decimalAmount,
         nonce,
       }).toString();
 
@@ -236,20 +262,43 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
       }, body);
 
       if (!res.ok) {
-        console.error(`kraken withdrawal failed: ${res.status} ${await res.text()}`);
-        return { success: false, withdrawalId: `kr-${Date.now()}`, status: 'failed' };
+        const errText = await res.text();
+        console.error(`kraken withdrawal failed: ${res.status} ${errText}`);
+        return { success: false, withdrawalId: `kr-${Date.now()}`, status: 'failed', error: errText };
       }
 
-      const data = await res.json() as { result?: { refid?: string } };
+      const data = (await res.json()) as { error?: string[]; result?: { refid?: string } };
+
+      if (data.error && data.error.length > 0) {
+        const errorMsg = data.error.join(', ');
+        console.error(`kraken withdrawal failed: ${errorMsg}`);
+        return {
+          success: false,
+          withdrawalId: `kr-${Date.now()}`,
+          status: 'failed',
+          error: errorMsg,
+        };
+      }
+
+      if (!data.result?.refid) {
+        console.error('kraken withdrawal response missing refid');
+        return {
+          success: false,
+          withdrawalId: `kr-${Date.now()}`,
+          status: 'failed',
+          error: 'Missing withdrawal refid',
+        };
+      }
+
       return {
         success: true,
-        withdrawalId: `kr-${data.result?.refid ?? Date.now()}`,
+        withdrawalId: data.result.refid,
         status: 'pending',
         estimatedCompletion: '5-30 minutes',
       };
     } catch (err) {
       console.error('kraken API error:', err);
-      return { success: false, withdrawalId: `kr-${Date.now()}`, status: 'failed' };
+      return { success: false, withdrawalId: `kr-${Date.now()}`, status: 'failed', error: String(err) };
     }
   },
 };

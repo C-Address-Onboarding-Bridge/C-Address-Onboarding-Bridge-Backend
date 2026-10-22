@@ -1,93 +1,147 @@
-import { dbHealthCheck } from './db';
 import { config } from '../config';
-import { logger } from '../logger';
+import { dbHealthCheck } from './db';
+import { getRedisClient } from './redis';
+import { rpcPool } from './rpcPool';
+import { logger } from '../utils/logger';
 
-interface DependencyCheck {
+export interface DependencyHealth {
   ok: boolean;
+  critical: boolean;
   latencyMs?: number;
   error?: string;
+  details?: Record<string, unknown>;
 }
 
-interface HealthResult {
+export interface HealthStatus {
   status: 'ok' | 'degraded' | 'unhealthy';
-  timestamp: number;
+  timestamp: string;
   version: string;
-  dependencies: Record<string, DependencyCheck & { critical: boolean }>;
+  uptimeSeconds: number;
+  dependencies: Record<string, DependencyHealth>;
 }
 
-let cachedResult: HealthResult | null = null;
-let cacheExpiresAt = 0;
 const CACHE_TTL_MS = 5000;
 
-async function checkSoroban(): Promise<DependencyCheck> {
-  const start = Date.now();
-  try {
-    const url = config.soroban.rpcUrls[0];
-    if (!url) return { ok: false, error: 'no rpc url configured' };
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getNetwork', params: [] }),
-      signal: AbortSignal.timeout(3000),
-    });
-    return { ok: res.ok || res.status < 500, latencyMs: Date.now() - start };
-  } catch (err) {
-    return { ok: false, latencyMs: Date.now() - start, error: String(err) };
-  }
-}
-
-async function checkRedis(): Promise<DependencyCheck> {
-  if (!config.redis.enabled) return { ok: true, error: undefined };
-  const start = Date.now();
-  try {
-    const { default: Redis } = await import('ioredis');
-    const client = new Redis(config.redis.url, {
-      lazyConnect: true,
-      maxRetriesPerRequest: 0,
-      connectTimeout: 2000,
-      enableOfflineQueue: false,
-    });
-    await client.connect();
-    await client.ping();
-    await client.quit();
-    return { ok: true, latencyMs: Date.now() - start };
-  } catch (err) {
-    return { ok: false, latencyMs: Date.now() - start, error: String(err) };
-  }
-}
-
-export async function getHealthStatus(force = false): Promise<HealthResult> {
-  const now = Date.now();
-  if (!force && cachedResult && now < cacheExpiresAt) {
-    return cachedResult;
-  }
-
-  const [dbCheck, sorobanCheck, redisCheck] = await Promise.all([dbHealthCheck(), checkSoroban(), checkRedis()]);
-
-  const dependencies: HealthResult['dependencies'] = {
-    database: { ...dbCheck, critical: true },
-    soroban: { ...sorobanCheck, critical: true },
-    redis: { ...redisCheck, critical: false },
-  };
-
-  const checks = Object.values(dependencies);
-  const criticalFailing = checks.some((d) => d.critical && !d.ok);
-  const anyFailing = checks.some((d) => !d.ok);
-  const status: HealthResult['status'] = criticalFailing ? 'unhealthy' : anyFailing ? 'degraded' : 'ok';
-
-  cachedResult = {
-    status,
-    timestamp: now,
-    version: config.logging.version,
-    dependencies,
-  };
-  cacheExpiresAt = now + CACHE_TTL_MS;
-
-  return cachedResult;
-}
+let cached: HealthStatus | null = null;
+let cachedAt = 0;
 
 export function invalidateHealthCache(): void {
-  cachedResult = null;
-  cacheExpiresAt = 0;
+  cached = null;
+  cachedAt = 0;
+}
+
+async function checkDatabase(): Promise<DependencyHealth> {
+  const start = Date.now();
+  try {
+    const result = await dbHealthCheck();
+    return {
+      ok: result.ok,
+      critical: false,
+      latencyMs: Date.now() - start,
+      error: result.ok ? undefined : result.error,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      critical: false,
+      latencyMs: Date.now() - start,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function checkRedis(): Promise<DependencyHealth> {
+  const start = Date.now();
+  try {
+    const client = getRedisClient();
+    if (!client) {
+      return { ok: true, critical: false, details: { enabled: false } };
+    }
+    const pong = await client.ping();
+    return {
+      ok: pong === 'PONG',
+      critical: false,
+      latencyMs: Date.now() - start,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      critical: false,
+      latencyMs: Date.now() - start,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function checkSoroban(): Promise<DependencyHealth> {
+  const start = Date.now();
+  try {
+    const metrics = rpcPool.getMetrics();
+    const healthyProviders = metrics.filter((m) => m.healthy);
+    const ok = healthyProviders.length > 0;
+    return {
+      ok,
+      critical: true,
+      latencyMs: Date.now() - start,
+      details: {
+        totalProviders: metrics.length,
+        healthyProviders: healthyProviders.length,
+      },
+      error: ok ? undefined : 'No healthy RPC providers',
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      critical: true,
+      latencyMs: Date.now() - start,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function getHealthStatus(force = false): Promise<HealthStatus> {
+  const now = Date.now();
+  if (!force && cached && now - cachedAt < CACHE_TTL_MS) {
+    return cached;
+  }
+
+  const [database, redis, soroban] = await Promise.all([
+    checkDatabase(),
+    checkRedis(),
+    checkSoroban(),
+  ]);
+
+  const dependencies: Record<string, DependencyHealth> = {
+    database,
+    redis,
+    soroban,
+  };
+
+  const criticalDown = Object.values(dependencies).some(
+    (d) => d.critical && !d.ok,
+  );
+  const anyDown = Object.values(dependencies).some((d) => !d.ok);
+
+  const status: HealthStatus['status'] = criticalDown
+    ? 'unhealthy'
+    : anyDown
+      ? 'degraded'
+      : 'ok';
+
+  const result: HealthStatus = {
+    status,
+    timestamp: new Date().toISOString(),
+    version: config.logging.version,
+    uptimeSeconds: Math.floor(process.uptime()),
+    dependencies,
+  };
+
+  cached = result;
+  cachedAt = now;
+
+  if (status !== 'ok') {
+    logger.warn('Health check degraded', { status, dependencies });
+  }
+
+  return result;
 }

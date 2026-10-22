@@ -31,6 +31,17 @@ export interface TokenMetadataParams {
 
 export interface RequestOptions {
   timeout?: number;
+  /**
+   * Optional signal used to cancel the request. When aborted, the in-flight
+   * request rejects with an `AbortError` and no further retries are attempted.
+   */
+  signal?: AbortSignal;
+  /**
+   * Idempotency key for non-idempotent POSTs (e.g. fund submission). Reuse the
+   * same key when re-submitting the same transaction so the server can
+   * deduplicate it; a key is generated per call when omitted.
+   */
+  idempotencyKey?: string;
 }
 
 /** Parameters for requesting a funding quote. */
@@ -144,7 +155,12 @@ export interface CexWithdrawalResult {
 export interface RequestSigningConfig {
   /** Enable HMAC-SHA256 request signing. Unsigned requests still work when false. */
   enabled: boolean;
-  /** Clock skew tolerance in milliseconds (default: 30 000). */
+  /**
+   * Clock skew tolerance in milliseconds (default: 300 000, matching the API's
+   * `TIMESTAMP_WINDOW_MS`). When set, the SDK learns the offset between the
+   * local clock and the server's `Date` response header and applies it to the
+   * `X-Timestamp` value so signed requests stay within the server's window.
+   */
   clockSkewToleranceMs?: number;
 }
 
@@ -224,7 +240,7 @@ export interface AutoPaginateOptions {
   signal?: AbortSignal;
 }
 
-export type PageFetcher<T> = (params: PaginatedRequestParams) => Promise<PaginatedResponse<T>>;
+export type PageFetcher<T> = (params: PaginatedRequestParams, signal?: AbortSignal) => Promise<PaginatedResponse<T>>;
 
 // Offline queue
 

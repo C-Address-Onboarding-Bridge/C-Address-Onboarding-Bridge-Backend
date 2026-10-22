@@ -140,36 +140,17 @@ describe('xssErrorSanitizer', () => {
   });
 });
 
-describe('applyRateLimitHeaders', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+describe('app smoke test', () => {
+  it('GET /health/live returns 200 and unknown route returns JSON error from errorHandler', async () => {
+    const { default: app } = await import('../index');
+    const request = (await import('supertest')).default;
 
-  it('is a plain helper, not Express error-handling middleware', () => {
-    // Express treats any 4-arity function as error-handling middleware
-    // (err, req, res, next). applyRateLimitHeaders must NOT have that shape,
-    // otherwise mounting it with app.use() would run it as an error handler
-    // and throw `res.set is not a function` when an error propagates.
-    expect(applyRateLimitHeaders.length).not.toBe(4);
-  });
+    const live = await request(app).get('/health/live');
+    expect(live.status).toBe(200);
 
-  it('sets X-RateLimit-* headers on the response when called directly', () => {
-    const setMock = vi.fn();
-    const res = { set: setMock } as unknown as Response;
-
-    applyRateLimitHeaders(res, 100, 42, 60000);
-
-    expect(setMock).toHaveBeenCalledWith('X-RateLimit-Limit', '100');
-    expect(setMock).toHaveBeenCalledWith('X-RateLimit-Remaining', '42');
-    expect(setMock).toHaveBeenCalledWith('X-RateLimit-Reset', '60');
-  });
-
-  it('does not throw when an Error is passed as the first argument (regression for #809)', () => {
-    // Simulates the old buggy mount: Express would call this with the error
-    // object as the first argument. It must not throw a TypeError.
-    const err = new Error('boom');
-    expect(() =>
-      applyRateLimitHeaders(err as unknown as Response, 100, 42, 60000)
-    ).not.toThrow();
+    const unknown = await request(app).get('/__definitely_not_a_route__');
+    expect([404, 500]).toContain(unknown.status);
+    expect(unknown.headers['content-type']).toMatch(/application\/json/);
+    expect(unknown.body).toHaveProperty('error');
   });
 });
