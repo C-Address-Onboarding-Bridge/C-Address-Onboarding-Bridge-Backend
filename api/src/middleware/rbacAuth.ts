@@ -12,7 +12,8 @@ export type PermissionScope =
   | 'cex:read'
   | 'cex:withdraw'
   | 'transactions:read'
-  | 'admin:keys';
+  | 'admin:keys'
+  | 'metrics:read';
 
 export interface ApiKeyRecord {
   id: string;

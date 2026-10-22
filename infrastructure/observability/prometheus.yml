@@ -16,7 +16,7 @@ scrape_configs:
       - targets: ['api:3001']
     metrics_path: /metrics
     authorization:
-      credentials: ${PROMETHEUS_SCRAPE_API_KEY}
+      credentials_file: /run/secrets/prometheus_scrape_key
 
   - job_name: prometheus
     static_configs:

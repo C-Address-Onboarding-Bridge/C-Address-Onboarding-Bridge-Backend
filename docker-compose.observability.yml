@@ -24,6 +24,8 @@ services:
       - ./infrastructure/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infrastructure/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
+    secrets:
+      - prometheus_scrape_key
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=30d

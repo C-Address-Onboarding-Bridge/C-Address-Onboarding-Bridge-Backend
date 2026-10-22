@@ -16,7 +16,7 @@ import { moonpayWebhookRouter, transakWebhookRouter } from './routes/webhook';
 import { webhookAdminRouter } from './routes/webhookAdmin';
 import { apiKeysRouter } from './routes/apiKeys';
 import { docsRouter } from './routes/docs';
-import { metricsRouter } from './routes/metrics';
+import { metricsAuth, metricsRouter } from './routes/metrics';
 import { telemetryRouter } from './routes/telemetry';
 import { transactionsRouter } from './routes/transactions';
 import { adminRouter } from './routes/admin';

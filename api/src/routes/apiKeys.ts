@@ -22,6 +22,7 @@ const PERMISSION_SCOPES: PermissionScope[] = [
   'cex:withdraw',
   'admin:keys',
   'transactions:read',
+  'metrics:read',
 ];
 
 const patchApiKeySchema = z
