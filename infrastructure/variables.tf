@@ -35,38 +35,23 @@ variable "redis_node_type" {
 }
 
 variable "db_security_group_id" {
-  description = "VPC security group ID for the RDS instance"
+  description = "VPC security group ID for RDS database access"
   type        = string
 }
 
 variable "db_subnet_group_name" {
-  description = "DB subnet group name for the RDS instance"
-  type        = string
-}
-
-variable "redis_auth_token" {
-  description = "Auth token for Redis replication group"
-  type        = string
-  sensitive   = true
-}
-
-variable "redis_subnet_group_name" {
-  description = "Cache subnet group name for the Redis replication group"
-  type        = string
-}
-
-variable "redis_security_group_id" {
-  description = "VPC security group ID for the Redis replication group"
+  description = "DB subnet group name for RDS"
   type        = string
 }
 
 variable "cdn_api_origin_domain" {
-  description = "API origin domain for CloudFront CDN"
+  description = "API origin domain for CDN distribution"
   type        = string
+  sensitive   = true
 }
 
 variable "cdn_origin_verify_secret" {
-  description = "Origin verification secret for CloudFront CDN"
+  description = "Shared secret for CDN origin request verification"
   type        = string
   sensitive   = true
 }

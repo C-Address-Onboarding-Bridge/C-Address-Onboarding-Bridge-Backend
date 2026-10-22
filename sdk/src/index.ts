@@ -1,13 +1,13 @@
-export { BridgeClient, type BridgeClientConfig } from './bridge';
-export { SDK_VERSION } from './version';
+export { BridgeClient, type BridgeClientConfig } from './bridge.js';
+export { SDK_VERSION } from './version.js';
 export type {
   BridgeStatus,
   RequestParams,
   RequestValue,
   FundingPrepareResult,
   RequestSigningConfig,
-} from './types';
-export * from './types';
+} from './types.js';
+export * from './types.js';
 export {
   isNativeToken,
   isSacToken,
@@ -19,9 +19,9 @@ export {
   formatTokenAmount,
   parseTokenAmount,
   getDefaultDecimals,
-} from './token';
-export * as utils from './utils';
-export { PaginationHelper, paginateAll, collectAllPages } from './pagination';
+} from './token.js';
+export * as utils from './utils.js';
+export { PaginationHelper, paginateAll, collectAllPages } from './pagination.js';
 export {
   BridgeError,
   AuthError,
@@ -48,11 +48,11 @@ export {
   type SupportedLocale,
   type MessageKey,
   type MessageParams,
-} from './errors';
-export { BridgeEventEmitter } from './events';
-export { OfflineQueue, OfflineBridgeClient } from './offline';
+} from './errors.js';
+export { BridgeEventEmitter } from './events.js';
+export { OfflineQueue, OfflineBridgeClient } from './offline.js';
 export {
   LOCALE_METADATA,
   type LocaleMetadata,
   type MessageCatalog,
-} from './i18n';
+} from './i18n.js';

@@ -8,6 +8,16 @@ on:
   schedule:
     # Run nightly fuzzing at 02:00 UTC
     - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzz_iterations:
+        description: 'Number of iterations per fuzz target'
+        required: false
+        default: '10000'
+      fuzz_seed:
+        description: 'Seed for the fuzz targets'
+        required: false
+        default: '0'
 
 env:
   # Configurable time budget per fuzz target (in iterations)
@@ -15,17 +25,6 @@ env:
   FUZZ_SEED: ${{ github.event.inputs.fuzz_seed || '0' }}
 
 jobs:
-  rust-fuzz:
-    name: Rust Contract Fuzz Tests
-    runs-on: ubuntu-latest
-    steps:
-<<<<<<< Updated upstream
-    - uses: actions/checkout@v4
-    - name: Setup Node.js environment
-      uses: ./.github/actions/setup-node-env
-    - name: Run Fuzz Tests
-      run: npm run test --workspace=sdk -- --run tests/fuzz.test.ts
-
   # These "fuzz targets" are self-contained property-test binaries (their own
   # main() and an LCG), not libFuzzer targets -- the crate has no libfuzzer-sys
   # dependency and no `cargo-fuzz = true` metadata, so `cargo fuzz run` rejected
@@ -36,37 +35,11 @@ jobs:
     name: Rust Property Fuzz Targets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('contracts/onboarding-bridge/fuzz/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-fuzz-
-
-      - name: Run fuzz_fee_calculation (100k iterations)
-        run: cargo run --release --bin fuzz_fee_calculation
-        working-directory: contracts/onboarding-bridge/fuzz
-
-      - name: Run fuzz_fund_sequence (100k iterations)
-        run: cargo run --release --bin fuzz_fund_sequence
-        working-directory: contracts/onboarding-bridge/fuzz
-
-      - name: Run fuzz_admin_ops (100k iterations)
-        run: cargo run --release --bin fuzz_admin_ops
-        working-directory: contracts/onboarding-bridge/fuzz
-=======
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -130,4 +103,3 @@ jobs:
 
       - name: Run SDK Fuzz Tests
         run: npm run test --workspace=sdk -- --run tests/fuzz.test.ts
->>>>>>> Stashed changes

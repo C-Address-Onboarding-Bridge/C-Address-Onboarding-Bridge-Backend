@@ -7,7 +7,6 @@ terraform {
   }
   backend "s3" {
     bucket         = "c-address-terraform-state"
-    key            = "global/s3/terraform.tfstate"
     region         = "us-east-1"
     dynamodb_table = "terraform-locks"
     encrypt        = true
@@ -64,6 +63,8 @@ module "cdn" {
   source                = "./cdn"
   api_origin_domain     = var.cdn_api_origin_domain
   origin_verify_secret  = var.cdn_origin_verify_secret
+  environment           = var.environment
+  aws_region            = var.aws_region
 }
 
 # Secrets Manager
