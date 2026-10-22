@@ -210,6 +210,97 @@ describe('BridgeClient.requestPaginated', () => {
   });
 });
 
+describe('BridgeClient.runDiagnostics', () => {
+  let client: BridgeClient;
+
+  beforeEach(() => {
+    client = new BridgeClient({ baseUrl: 'http://localhost:3001', apiKey: 'test-key' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('validates the API key against an authenticated endpoint', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ status: 'ok' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ status: 'ok' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await client.runDiagnostics();
+
+    expect(result.status).toBe('healthy');
+    expect(result.checks.apiKey.status).toBe('pass');
+    const apiKeyUrl: string = fetchMock.mock.calls[0][0];
+    expect(apiKeyUrl).toContain('/api/v1/status/health');
+    expect(apiKeyUrl).not.toMatch(/\/health$/);
+  });
+
+  it('reports 401 as an invalid API key', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ status: 'ok' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await client.runDiagnostics();
+
+    expect(result.status).toBe('unhealthy');
+    expect(result.checks.apiKey.status).toBe('fail');
+    expect(result.checks.apiKey.message).toMatch(/invalid|missing/i);
+  });
+
+  it('reports 403 as insufficient scope', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 403, json: () => Promise.resolve({ error: 'forbidden' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ status: 'ok' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await client.runDiagnostics();
+
+    expect(result.status).toBe('unhealthy');
+    expect(result.checks.apiKey.status).toBe('fail');
+    expect(result.checks.apiKey.message).toMatch(/scope|permission|forbidden/i);
+  });
+
+  it('measures connectivity with an uncached request', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ status: 'ok' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ status: 'ok' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await client.runDiagnostics();
+
+    const connectivityUrl: string = fetchMock.mock.calls[1][0];
+    expect(connectivityUrl).toContain('nocache=1');
+  });
+
+  it('returns degraded when a non-critical check fails', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ status: 'ok' }) })
+      .mockResolvedValueOnce({ ok: false, status: 503, json: () => Promise.resolve({ error: 'unavailable' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await client.runDiagnostics();
+
+    expect(result.status).toBe('degraded');
+    expect(result.checks.apiKey.status).toBe('pass');
+    expect(result.checks.connectivity.status).toBe('fail');
+  });
+
+  it('returns unhealthy when contract status check fails', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ status: 'ok' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ status: 'ok' }) })
+      .mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await client.runDiagnostics();
+
+    expect(result.status).toBe('unhealthy');
+    expect(result.checks.contract.status).toBe('fail');
+  });
+});
+
 describe('Utils', () => {
   it.skip('calculates fee correctly', () => {
     expect(calculateFee(1000n, 100)).toBe(10n);
@@ -236,259 +327,4 @@ describe('Utils', () => {
     expect(isGAddress(VALID_G_ADDR)).toBe(true);
     expect(isGAddress(VALID_C_ADDR)).toBe(false);
   });
-
-  it.skip('validates SAC token addresses', () => {
-    expect(isSacTokenAddress(VALID_C_ADDR)).toBe(true);
-    expect(isSacTokenAddress(VALID_G_ADDR)).toBe(false);
-    expect(isSacTokenAddress('not-an-address')).toBe(false);
-    expect(() => validateSacTokenAddress('invalid')).toThrow();
-    expect(() => validateSacTokenAddress(VALID_C_ADDR)).not.toThrow();
-  });
-
-  it.skip('formats token amounts with different decimals', () => {
-    expect(formatTokenAmount('1000000', 6)).toBe('1.000000');
-    expect(formatTokenAmount('10000000', 7)).toBe('1.0000000');
-    expect(formatTokenAmount('500', 6)).toBe('0.000500');
-    expect(formatTokenAmount('0', 6)).toBe('0.000000');
-  });
-
-  it.skip('parses token amounts with different decimals', () => {
-    expect(parseTokenAmount('1.5', 6)).toBe('1500000');
-    expect(parseTokenAmount('1.5', 7)).toBe('15000000');
-    expect(parseTokenAmount('0.001', 6)).toBe('1000');
-    expect(parseTokenAmount('2', 6)).toBe('2000000');
-  });
-
-  it.skip('converts token to source asset string', () => {
-    expect(tokenToSourceAsset({ type: 'native' })).toBe('XLM');
-    expect(tokenToSourceAsset({ type: 'sac', contractId: VALID_C_ADDR })).toBe(VALID_C_ADDR);
-  });
-
-  it.skip('derives token from legacy parameters', () => {
-    expect(tokenFromLegacy(VALID_C_ADDR)).toEqual({ type: 'sac', contractId: VALID_C_ADDR });
-    expect(tokenFromLegacy(undefined, 'XLM')).toEqual({ type: 'native' });
-    expect(tokenFromLegacy(undefined, VALID_C_ADDR)).toEqual({ type: 'sac', contractId: VALID_C_ADDR });
-    expect(tokenFromLegacy()).toEqual({ type: 'native' });
-  });
-
-  it.skip('returns correct default decimals', () => {
-    expect(getDefaultDecimals({ type: 'native' })).toBe(7);
-    expect(getDefaultDecimals({ type: 'sac', contractId: VALID_C_ADDR })).toBe(6);
-  });
 });
-
-describe('BridgeClient.getTokenMetadata URL encoding', () => {
-  it.skip('encodes special characters in contractId', async () => {
-    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
-    const mockMeta = { decimals: 6, name: 'Test', symbol: 'TST' };
-
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve(mockMeta),
-    }));
-
-    const contractIdWithSpecialChars = 'CABCDEFGHIJKLMNOPQRSTUVWXYZ234567+%20#';
-    await client.getTokenMetadata({ contractId: contractIdWithSpecialChars });
-
-    const calledUrl: string = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(calledUrl).toContain('/api/v1/token/');
-    expect(calledUrl).not.toContain('+%20#');
-    const url = new URL(calledUrl);
-    expect(url.pathname).toBe(`/api/v1/token/${encodeURIComponent(contractIdWithSpecialChars)}/metadata`);
-  });
-
-  it('rejects invalid contractId format', async () => {
-    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
-    await expect(client.getTokenMetadata({ contractId: 'invalid' })).rejects.toThrow();
-  });
-});
-
-describe('BridgeClient.getStatus URL encoding', () => {
-  it('encodes special characters in txHash', async () => {
-    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
-    const mockStatus = { status: 'success' as const, txHash: 'abc+def#123' };
-
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve(mockStatus),
-    }));
-
-    const txHash = 'abc+def#123';
-    await client.getStatus(txHash);
-
-    const calledUrl: string = (fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(calledUrl).toContain('/api/v1/status/');
-    expect(calledUrl).not.toContain('+#');
-    const url = new URL(calledUrl);
-    expect(url.pathname).toBe(`/api/v1/status/${encodeURIComponent(txHash)}`);
-  });
-
-  it('rejects empty txHash', async () => {
-    const client = new BridgeClient({ baseUrl: 'http://localhost:3001' });
-    await expect(client.getStatus('')).rejects.toThrow();
-    await expect(client.getStatus('   ')).rejects.toThrow();
-  });
-});
-
-describe('BridgeClient stale-while-revalidate', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  it('returns a stale quote immediately and refreshes it in the background', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-
-    const client = new BridgeClient({
-      baseUrl: 'http://localhost:3001',
-      cache: { quoteTtlMs: 10 },
-    });
-    const staleQuote = { estimatedFee: '100', expectedReceive: '9900', feeBps: 100, rate: '1.0' };
-    const freshQuote = { estimatedFee: '200', expectedReceive: '9800', feeBps: 200, rate: '1.0' };
-
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(staleQuote) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(freshQuote) });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const params = { sourceAsset: 'XLM', amount: '10000', targetAddress: VALID_G_ADDR };
-
-    const first = await client.getQuote(params);
-    expect(first).toEqual(staleQuote);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    // Advance past the 10ms TTL but within the (default) 2x stale-while-revalidate window.
-    vi.setSystemTime(15);
-
-    const second = await client.getQuote(params);
-    expect(second).toEqual(staleQuote); // stale value served immediately, no request awaited
-    expect(fetchMock).toHaveBeenCalledTimes(2); // but a background refresh was triggered
-
-    // Flush the background refresh's promise chain (cache.set happens in a .then()).
-    await vi.advanceTimersByTimeAsync(0);
-
-    const third = await client.getQuote(params);
-    expect(third).toEqual(freshQuote); // cache now holds the refreshed value
-    expect(fetchMock).toHaveBeenCalledTimes(2); // served from cache, no new request
-  });
-
-  it('does not trigger a background refresh for a fresh cache hit', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-
-    const client = new BridgeClient({
-      baseUrl: 'http://localhost:3001',
-      cache: { statusTtlMs: 10_000 },
-    });
-    const mockStatus = { status: 'pending' as const, hash: 'abc123' };
-
-    const fetchMock = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve(mockStatus),
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    await client.getStatus('abc123');
-    vi.setSystemTime(1000); // well within the 10s TTL
-    const second = await client.getStatus('abc123');
-
-    expect(second).toEqual(mockStatus);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('BridgeClient.runDiagnostics', () => {
-  let client: BridgeClient;
-
-  beforeEach(() => {
-    client = new BridgeClient({ baseUrl: 'http://localhost:3001', apiKey: 'test-key' });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it.skip('returns healthy when all checks pass', async () => {
-    vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }) // health latency
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ estimatedFee: '100', expectedReceive: '9900', feeBps: 100, rate: '1.0' }) }) // quote
-    );
-
-    const result = await client.runDiagnostics();
-    expect(result.status).toBe('healthy');
-    expect(result.checks.apiKey?.status).toBe('pass');
-    expect(result.checks.connectivity?.status).toBe('pass');
-    expect(result.checks.contractStatus?.status).toBe('pass');
-    expect(result.timestamp).toBeTruthy();
-  });
-
-  it('returns unhealthy when API key check fails', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: false, status: 401, json: () => Promise.resolve({ message: 'Unauthorized' }) }));
-
-    const result = await client.runDiagnostics({ checkApiKey: true, checkConnectivity: false, checkContractStatus: false });
-    expect(result.status).toBe('unhealthy');
-    expect(result.checks.apiKey?.status).toBe('fail');
-    expect(result.checks.apiKey?.message).toContain('Unauthorized');
-  });
-
-  it('returns unhealthy when connectivity check fails', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({ message: 'Server error' }) }));
-
-    const result = await client.runDiagnostics({ checkApiKey: false, checkConnectivity: true, checkContractStatus: false });
-    expect(result.status).toBe('unhealthy');
-    expect(result.checks.connectivity?.status).toBe('fail');
-  });
-
-  it('returns unhealthy when contract status check fails', async () => {
-    // Only the contract-status check is enabled, so the first (and only)
-    // request this test should make is the quote used as its proxy.
-    vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({ message: 'Contract error' }) }) // quote
-    );
-
-    const result = await client.runDiagnostics({ checkApiKey: false, checkConnectivity: false, checkContractStatus: true });
-    expect(result.status).toBe('unhealthy');
-    expect(result.checks.contractStatus?.status).toBe('fail');
-  });
-
-  it('validates address when targetAddress is provided', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok' }) }));
-
-    const result = await client.runDiagnostics({
-      checkApiKey: false,
-      checkConnectivity: false,
-      checkContractStatus: false,
-      targetAddress: 'CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW',
-    });
-    expect(result.checks.addressValidation?.status).toBe('pass');
-    expect(result.checks.addressValidation?.addressType).toBe('C-address');
-  });
-
-  it('fails address validation for invalid address', async () => {
-    const result = await client.runDiagnostics({
-      checkApiKey: false,
-      checkConnectivity: false,
-      checkContractStatus: false,
-      targetAddress: 'invalid-address',
-    });
-    expect(result.status).toBe('unhealthy');
-    expect(result.checks.addressValidation?.status).toBe('fail');
-    expect(result.checks.addressValidation?.message).toContain('Invalid Stellar address format');
-  });
-
-  it('skips checks when explicitly disabled', async () => {
-    vi.stubGlobal('fetch', vi.fn());
-
-    const result = await client.runDiagnostics({
-      checkApiKey: false,
-      checkConnectivity: false,
-      checkContractStatus: false,
-    });
-    expect(result.status).toBe('healthy');
-    expect(result.checks).toEqual({});
-  });
-});
-

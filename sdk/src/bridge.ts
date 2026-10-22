@@ -452,6 +452,7 @@ export class BridgeClient {
       { signedXdr: params.signedXdr },
       undefined,
       { timeout: this.fundSubmissionTimeout, ...options },
+      options?.idempotencyKey,
     );
   }
 

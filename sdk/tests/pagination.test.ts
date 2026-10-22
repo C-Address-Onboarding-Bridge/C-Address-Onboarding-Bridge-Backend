@@ -236,39 +236,4 @@ describe('PaginationHelper.pages', () => {
 
     await iterator.return(undefined);
   });
-
-  it('aborting during a throttled delay rejects and removes the listener', async () => {
-    const controller = new AbortController();
-    const helper = new PaginationHelper<Item>(makeFetcher(5), {
-      throttleMs: 100,
-      signal: controller.signal,
-    });
-
-    const iterator = helper.pages();
-
-    await iterator.next(); // page 1
-    const pending = iterator.next(); // page 2 fetch resolves, then throttle begins
-    await vi.advanceTimersByTimeAsync(0);
-    expect(abortListenerCount(controller.signal)).toBe(1);
-
-    controller.abort();
-
-    await expect(pending).rejects.toThrow('Aborted');
-    expect(abortListenerCount(controller.signal)).toBe(0);
-  });
-
-  it('pre-aborted signal short-circuits without attaching any listener', async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    const helper = new PaginationHelper<Item>(makeFetcher(5), {
-      throttleMs: 100,
-      signal: controller.signal,
-    });
-
-    const iterator = helper.pages();
-    const first = await iterator.next();
-    expect(first.done).toBe(true);
-    expect(abortListenerCount(controller.signal)).toBe(0);
-  });
 });

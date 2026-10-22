@@ -7,6 +7,9 @@ const router = Router();
  * Issue #672: GET /api/v1/token/:contractId/metadata
  * Returns token metadata (decimals, name, symbol) for a given contract ID.
  * For native XLM returns hardcoded values; for SAC tokens queries contract via RPC.
+ *
+ * Issue #804: returns the bare TokenMetadata object (no {success, data}
+ * envelope) so the SDK can consume it directly.
  */
 router.get(
   '/:contractId/metadata',
@@ -17,12 +20,9 @@ router.get(
       // Native XLM
       if (contractId === 'native') {
         return res.json({
-          success: true,
-          data: {
-            decimals: 7,
-            name: 'Stellar Lumens',
-            symbol: 'XLM',
-          },
+          decimals: 7,
+          name: 'Stellar Lumens',
+          symbol: 'XLM',
         });
       }
 
@@ -31,12 +31,9 @@ router.get(
       // placeholder that mirrors the SDK's fallback structure.
       // TODO: implement actual token contract metadata queries
       return res.json({
-        success: true,
-        data: {
-          decimals: 6,
-          name: 'Unknown Token',
-          symbol: 'UNKNOWN',
-        },
+        decimals: 6,
+        name: 'Unknown Token',
+        symbol: 'UNKNOWN',
       });
     } catch (error) {
       logger.error('Failed to fetch token metadata', { contractId, error });

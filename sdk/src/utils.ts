@@ -111,17 +111,32 @@ export function formatStellarAmount(amount: string): string {
 }
 
 /**
- * Generates a stable UUIDv4-like idempotency key using crypto.getRandomValues().
+ * Generates a real RFC 4122 v4 UUID idempotency key.
  * Used to prevent duplicate side-effects when retrying non-idempotent requests.
+ * The API's idempotency middleware only accepts dashed UUID v4 keys, so this
+ * must produce a value matching
+ * `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`.
  *
- * @returns A 32-character hex string suitable for the Idempotency-Key header.
+ * @returns A dashed UUID v4 string suitable for the Idempotency-Key header.
  */
 export function generateIdempotencyKey(): string {
+  // Prefer the platform implementation when available.
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
-  return Array.from(bytes)
+
+  // Set version (4) and variant (RFC 4122) bits.
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 // Re-export token formatting utilities for convenience
