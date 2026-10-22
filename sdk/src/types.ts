@@ -1,4 +1,4 @@
-import type { SupportedLocale } from './i18n/types';
+import type { SupportedLocale } from './i18n/types.js';
 
 export type BridgeStatus = 'pending' | 'success' | 'failed';
 export type RequestValue = string | number | boolean | undefined;
@@ -31,6 +31,17 @@ export interface TokenMetadataParams {
 
 export interface RequestOptions {
   timeout?: number;
+  /**
+   * Optional signal used to cancel the request. When aborted, the in-flight
+   * request rejects with an `AbortError` and no further retries are attempted.
+   */
+  signal?: AbortSignal;
+  /**
+   * Idempotency key for non-idempotent POSTs (e.g. fund submission). Reuse the
+   * same key when re-submitting the same transaction so the server can
+   * deduplicate it; a key is generated per call when omitted.
+   */
+  idempotencyKey?: string;
 }
 
 /** Parameters for requesting a funding quote. */
@@ -144,7 +155,12 @@ export interface CexWithdrawalResult {
 export interface RequestSigningConfig {
   /** Enable HMAC-SHA256 request signing. Unsigned requests still work when false. */
   enabled: boolean;
-  /** Clock skew tolerance in milliseconds (default: 30 000). */
+  /**
+   * Clock skew tolerance in milliseconds (default: 300 000, matching the API's
+   * `TIMESTAMP_WINDOW_MS`). When set, the SDK learns the offset between the
+   * local clock and the server's `Date` response header and applies it to the
+   * `X-Timestamp` value so signed requests stay within the server's window.
+   */
   clockSkewToleranceMs?: number;
 }
 
@@ -194,10 +210,25 @@ export interface PaginatedResponse<T> {
   hasMore: boolean;
 }
 
+/**
+ * Response returned by `POST /api/v1/fund/prepare`.
+ *
+ * Contains the unsigned transaction envelope (`unsignedXdr`) that the caller
+ * must sign with their wallet before submitting via `fundWithXdr`.
+ */
 export interface FundingPrepareResult {
-  instruction: string;
-  simulation: Record<string, string>;
-  params: FundParams;
+  /** Base64-encoded unsigned transaction envelope to be signed by the wallet. */
+  unsignedXdr: string;
+  /** Soroban transaction footprint (read-only / read-write ledger keys). */
+  footprint: Record<string, string>;
+  /** Estimated fee in stroops. */
+  fee: string;
+  sourceAddress: string;
+  targetAddress: string;
+  tokenAddress: string;
+  /** Amount in stroops as an integer string. */
+  amount: string;
+  memo?: string;
 }
 
 // Pagination helpers
@@ -209,7 +240,7 @@ export interface AutoPaginateOptions {
   signal?: AbortSignal;
 }
 
-export type PageFetcher<T> = (params: PaginatedRequestParams) => Promise<PaginatedResponse<T>>;
+export type PageFetcher<T> = (params: PaginatedRequestParams, signal?: AbortSignal) => Promise<PaginatedResponse<T>>;
 
 // Offline queue
 
@@ -277,9 +308,3 @@ export interface BridgeEvent<K extends BridgeEventType = BridgeEventType> {
 }
 
 export type EventHandler<K extends BridgeEventType = BridgeEventType> = (event: BridgeEvent<K>) => void;
-
-export interface EventEmitterOptions {
-  pollIntervalMs?: number;
-  historySize?: number;
-  healthCheckIntervalMs?: number;
-}

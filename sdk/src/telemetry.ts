@@ -1,4 +1,5 @@
-import { SDK_VERSION } from './version';
+import { SDK_VERSION } from './version.js';
+import { unrefTimer } from './utils.js';
 
 export { SDK_VERSION };
 
@@ -40,6 +41,7 @@ export class TelemetryClient {
   private readonly maxQueueSize: number;
   private readonly queue: TelemetryEvent[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
+  private destroyed = false;
 
   constructor(options: { endpoint?: string; enabled?: boolean; intervalMs?: number; transport?: TelemetryTransport; maxQueueSize?: number } = {}) {
     const runtimeProcess = typeof process !== 'undefined' ? process : undefined;
@@ -54,7 +56,7 @@ export class TelemetryClient {
   }
 
   record(event: Omit<TelemetryEvent, 'sdkVersion' | 'nodeVersion' | 'platform'>): void {
-    if (!this.enabled) {
+    if (!this.enabled || this.destroyed) {
       return;
     }
 
@@ -79,18 +81,40 @@ export class TelemetryClient {
     this.timer = setInterval(() => {
       this.flush();
     }, this.flushIntervalMs);
-
-    if (this.timer.unref) {
-      this.timer.unref();
-    }
+    unrefTimer(this.timer);
   }
 
-  private flush(): void {
+  /**
+   * Send any queued events immediately. Public so a host can drain telemetry
+   * before shutting down without stopping the periodic flush.
+   */
+  flush(): void {
     if (this.queue.length === 0) {
       return;
     }
 
     const batch = this.queue.splice(0, this.queue.length);
     this.transport.send(batch);
+  }
+
+  /**
+   * Stop the flush timer and send whatever is still queued.
+   *
+   * Without the final flush, up to one flush interval (60s by default) of
+   * telemetry is silently dropped on shutdown. Idempotent: safe to call from
+   * an `OfflineBridgeClient.destroy()` that delegates to `super.destroy()`.
+   */
+  destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
+
+    if (this.timer !== null) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+
+    this.flush();
   }
 }

@@ -18,40 +18,63 @@ import { config } from '../config';
  *   client cannot exhaust another client's nonce space.
  * - Cache errors return 503 instead of silently skipping verification.
  */
-
-const TIMESTAMP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-const NONCE_CACHE_TTL = 24 * 60 * 60; // 24 hours
-
-function constantTimeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+function serializeSortedQuery(query: Record<string, unknown> | undefined): string {
+  if (!query) {
+    return '';
   }
-  return result === 0;
+  const keys = Object.keys(query).sort();
+  const parts: string[] = [];
+  for (const key of keys) {
+    const value = query[key];
+    if (value === undefined || value === null) {
+      continue;
+    }
+    parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+  }
+  return parts.join('&');
 }
 
-export function requestSigningMiddleware(req: Request, res: Response, next: NextFunction): void {
-  // Skip if no signing headers present
-  const timestamp = req.headers['x-timestamp'] as string;
-  const nonce = req.headers['x-nonce'] as string;
-  const signature = req.headers['x-signature'] as string;
+/**
+ * Build the canonical signing payload. Must stay in sync with the SDK's
+ * `buildSigningPayload` in sdk/src/bridge.ts.
+ */
+export function buildSigningPayload(
+  method: string,
+  path: string,
+  query: Record<string, unknown> | undefined,
+  bodyStr: string,
+  timestamp: string,
+  nonce: string
+): string {
+  const sortedQuery = serializeSortedQuery(query);
+  return `${method.toUpperCase()}.${path}.${sortedQuery}.${bodyStr}.${timestamp}.${nonce}`;
+}
 
-  if (!timestamp || !nonce || !signature) {
-    // Signing is optional per-request; just continue
-    next();
+export function requestSigningMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const signature = req.header('X-Signature');
+  const timestamp = req.header('X-Timestamp');
+  const nonce = req.header('X-Nonce');
+
+  if (!signature || !timestamp || !nonce) {
+    res.status(401).json({ error: 'missing_signature' });
     return;
   }
 
-  // Verify timestamp freshness
-  const timestampMs = parseInt(timestamp, 10);
-  if (isNaN(timestampMs)) {
-    return res.status(400).json({ error: 'invalid_timestamp' });
+  const now = Math.floor(Date.now() / 1000);
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(now - ts) > MAX_CLOCK_SKEW_SECONDS) {
+    res.status(401).json({ error: 'invalid_timestamp' });
+    return;
   }
 
-  const now = Date.now();
-  if (Math.abs(now - timestampMs) > TIMESTAMP_WINDOW_MS) {
-    return res.status(401).json({ error: 'stale_timestamp' });
+  const secret = process.env.REQUEST_SIGNING_SECRET;
+  if (!secret) {
+    res.status(500).json({ error: 'signing_not_configured' });
+    return;
   }
 
   const apiKey = req.headers['x-api-key'] as string;
