@@ -1,3 +1,8 @@
+import { SDK_VERSION } from './version';
+import { unrefTimer } from './utils';
+
+export { SDK_VERSION };
+
 export interface TelemetryEvent {
   sdkVersion: string;
   nodeVersion: string;
@@ -8,11 +13,11 @@ export interface TelemetryEvent {
 }
 
 export interface TelemetryTransport {
-  send(event: TelemetryEvent): void;
+  send(_event: TelemetryEvent | TelemetryEvent[]): void;
 }
 
 export class NoopTelemetryTransport implements TelemetryTransport {
-  send(_event: TelemetryEvent): void {
+  send(_event: TelemetryEvent | TelemetryEvent[]): void {
     // no-op by default
   }
 }
@@ -20,7 +25,7 @@ export class NoopTelemetryTransport implements TelemetryTransport {
 export class FetchTelemetryTransport implements TelemetryTransport {
   constructor(private readonly endpoint: string) {}
 
-  send(event: TelemetryEvent): void {
+  send(event: TelemetryEvent | TelemetryEvent[]): void {
     void fetch(this.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -36,6 +41,7 @@ export class TelemetryClient {
   private readonly maxQueueSize: number;
   private readonly queue: TelemetryEvent[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
+  private destroyed = false;
 
   constructor(options: { endpoint?: string; enabled?: boolean; intervalMs?: number; transport?: TelemetryTransport; maxQueueSize?: number } = {}) {
     const runtimeProcess = typeof process !== 'undefined' ? process : undefined;
@@ -50,13 +56,13 @@ export class TelemetryClient {
   }
 
   record(event: Omit<TelemetryEvent, 'sdkVersion' | 'nodeVersion' | 'platform'>): void {
-    if (!this.enabled) {
+    if (!this.enabled || this.destroyed) {
       return;
     }
 
     const runtimeProcess = typeof process !== 'undefined' ? process : undefined;
     this.queue.push({
-      sdkVersion: runtimeProcess?.env?.npm_package_version || '0.1.0',
+      sdkVersion: SDK_VERSION,
       nodeVersion: runtimeProcess?.version || 'unknown',
       platform: runtimeProcess?.platform || 'unknown',
       ...event,
@@ -75,18 +81,40 @@ export class TelemetryClient {
     this.timer = setInterval(() => {
       this.flush();
     }, this.flushIntervalMs);
-
-    if (this.timer.unref) {
-      this.timer.unref();
-    }
+    unrefTimer(this.timer);
   }
 
-  private flush(): void {
+  /**
+   * Send any queued events immediately. Public so a host can drain telemetry
+   * before shutting down without stopping the periodic flush.
+   */
+  flush(): void {
     if (this.queue.length === 0) {
       return;
     }
 
     const batch = this.queue.splice(0, this.queue.length);
-    batch.forEach((event) => this.transport.send(event));
+    this.transport.send(batch);
+  }
+
+  /**
+   * Stop the flush timer and send whatever is still queued.
+   *
+   * Without the final flush, up to one flush interval (60s by default) of
+   * telemetry is silently dropped on shutdown. Idempotent: safe to call from
+   * an `OfflineBridgeClient.destroy()` that delegates to `super.destroy()`.
+   */
+  destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
+
+    if (this.timer !== null) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+
+    this.flush();
   }
 }

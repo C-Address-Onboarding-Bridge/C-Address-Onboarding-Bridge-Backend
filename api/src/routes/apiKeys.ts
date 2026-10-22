@@ -20,6 +20,7 @@ const PERMISSION_SCOPES: PermissionScope[] = [
   'offramp:write',
   'cex:read',
   'admin:keys',
+  'transactions:read',
 ];
 
 const patchApiKeySchema = z
@@ -32,20 +33,24 @@ const patchApiKeySchema = z
   })
   .partial();
 
-apiKeysRouter.post('/', requireScopes('admin:keys'), (req: Request, res: Response) => {
-  const { name, scopes, ipWhitelist, expiresAt, rateLimit } = req.body as {
-    name?: string;
-    scopes?: PermissionScope[];
-    ipWhitelist?: string[];
-    expiresAt?: number | null;
-    rateLimit?: 'low' | 'standard' | 'high';
-  };
+const createApiKeySchema = z.object({
+  name: z.string().min(1),
+  scopes: z.array(z.enum(PERMISSION_SCOPES as [PermissionScope, ...PermissionScope[]])).min(1),
+  ipWhitelist: z.array(z.string()).optional(),
+  expiresAt: z.number().int().positive().nullable().optional(),
+  rateLimit: z.enum(['low', 'standard', 'high']).optional(),
+});
 
-  if (!name || !Array.isArray(scopes) || scopes.length === 0) {
-    res.status(400).json({ error: 'bad_request', message: 'name and scopes are required' });
+apiKeysRouter.post('/', requireScopes('admin:keys'), (req: Request, res: Response, next: NextFunction) => {
+  let parsed: z.infer<typeof createApiKeySchema>;
+  try {
+    parsed = createApiKeySchema.parse(req.body);
+  } catch (err) {
+    next(err);
     return;
   }
 
+  const { name, scopes, ipWhitelist, expiresAt, rateLimit } = parsed;
   const createdBy = req.apiKeyRecord?.id ?? 'unknown';
   const { rawKey, record } = createApiKey({ name, scopes, ipWhitelist, expiresAt, rateLimit, createdBy });
 
@@ -56,8 +61,13 @@ apiKeysRouter.get('/', requireScopes('admin:keys'), (_req: Request, res: Respons
   res.json({ keys: listApiKeys() });
 });
 
-apiKeysRouter.get('/audit', requireScopes('admin:keys'), (_req: Request, res: Response) => {
-  res.json({ log: getAuditLog() });
+apiKeysRouter.get('/audit', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const rawOffset = parseInt(req.query.offset as string, 10);
+  const rawLimit = parseInt(req.query.limit as string, 10);
+  const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100;
+  const result = getAuditLog(offset, limit);
+  res.json(result);
 });
 
 apiKeysRouter.get('/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {

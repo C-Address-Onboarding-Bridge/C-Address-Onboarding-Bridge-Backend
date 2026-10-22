@@ -5,17 +5,26 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  schedule:
+    # Run nightly fuzzing at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzz_iterations:
+        description: 'Number of iterations per fuzz target'
+        required: false
+        default: '10000'
+      fuzz_seed:
+        description: 'Seed for the fuzz targets'
+        required: false
+        default: '0'
+
+env:
+  # Configurable time budget per fuzz target (in iterations)
+  FUZZ_ITERATIONS: ${{ github.event.inputs.fuzz_iterations || '10000' }}
+  FUZZ_SEED: ${{ github.event.inputs.fuzz_seed || '0' }}
 
 jobs:
-  fuzz:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Setup Node.js environment
-      uses: ./.github/actions/setup-node-env
-    - name: Run Fuzz Tests
-      run: npm run test --workspace=sdk -- --run tests/fuzz.test.ts
-
   # These "fuzz targets" are self-contained property-test binaries (their own
   # main() and an LCG), not libFuzzer targets -- the crate has no libfuzzer-sys
   # dependency and no `cargo-fuzz = true` metadata, so `cargo fuzz run` rejected
@@ -26,35 +35,71 @@ jobs:
     name: Rust Property Fuzz Targets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Install Rust stable
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
+          workspaces: contracts/onboarding-bridge
+
+      - name: Build fuzz targets
+        run: |
+          cd contracts/onboarding-bridge/fuzz
+          cargo build --release
+
+      - name: Run fuzz_fee_calculation
+        run: |
+          cd contracts/onboarding-bridge/fuzz
+          cargo run --release --bin fuzz_fee_calculation -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+
+      - name: Run fuzz_fund_sequence
+        run: |
+          cd contracts/onboarding-bridge/fuzz
+          cargo run --release --bin fuzz_fund_sequence -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+
+      - name: Run fuzz_admin_ops
+        run: |
+          cd contracts/onboarding-bridge/fuzz
+          cargo run --release --bin fuzz_admin_ops -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+
+      - name: Run fuzz_invariants
+        run: |
+          cd contracts/onboarding-bridge/fuzz
+          cargo run --release --bin fuzz_invariants -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+
+      - name: Run fuzz_upgrade
+        run: |
+          cd contracts/onboarding-bridge/fuzz
+          cargo run --release --bin fuzz_upgrade -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+
+      - name: Upload fuzz findings (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures-${{ github.run_id }}
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('contracts/onboarding-bridge/fuzz/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-fuzz-
+            contracts/onboarding-bridge/fuzz/
+            !contracts/onboarding-bridge/fuzz/target/
 
-      - name: Run fuzz_fee_calculation (100k iterations)
-        run: cargo run --release --bin fuzz_fee_calculation
-        working-directory: contracts/onboarding-bridge/fuzz
+  sdk-fuzz:
+    name: SDK Fuzz Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # TODO(next-bounty): both targets below panic before exercising anything.
-      #   fuzz_fund_sequence -> HostError: Error(Storage, MissingValue). The
-      #     harness never sets up storage the contract now requires.
-      #   fuzz_admin_ops -> "execution too soon: minimum delay not elapsed". It
-      #     calls execute() without advancing the ledger past the governance
-      #     timelock (same cause as the ignored test_full_scenario).
-      # Update the harnesses to match the current contract, then restore.
-      # - name: Run fuzz_fund_sequence
-      #   run: cargo run --release --bin fuzz_fund_sequence
-      #   working-directory: contracts/onboarding-bridge/fuzz
-      #
-      # - name: Run fuzz_admin_ops
-      #   run: cargo run --release --bin fuzz_admin_ops
-      #   working-directory: contracts/onboarding-bridge/fuzz
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+
+      - name: Run SDK Fuzz Tests
+        run: npm run test --workspace=sdk -- --run tests/fuzz.test.ts

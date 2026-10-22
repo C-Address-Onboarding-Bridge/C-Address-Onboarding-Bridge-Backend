@@ -1,6 +1,22 @@
 import { ValidationError } from './errors';
 
 /**
+ * Prevents a Node.js timer from keeping the process alive. Browsers (and
+ * environments where `setInterval` returns a numeric handle) have no `unref`,
+ * in which case this is a no-op.
+ *
+ * SDK timers are background housekeeping (telemetry flushing, health polling,
+ * queue replay). A host process that forgets to call `destroy()` should not be
+ * held open by them, and a test runner should be able to exit.
+ */
+export function unrefTimer(timer: ReturnType<typeof setInterval>): void {
+  const candidate = timer as unknown as { unref?: () => void };
+  if (typeof candidate.unref === 'function') {
+    candidate.unref();
+  }
+}
+
+/**
  * Returns `true` if the string is a valid Stellar address (G-address or C-address).
  * Note: this accepts both account addresses (G…) and contract addresses (C…).
  * Use `isGAddress` / `isCAddress` when you need to distinguish between them.
@@ -52,7 +68,9 @@ function validateFeeBps(feeBps: number): void {
  * @throws {ValidationError} If `feeBps` is not an integer, or is outside `[0, 10000]`.
  */
 export function calculateFee(amount: bigint, feeBps: number): bigint {
-  throw new Error('Not implemented: calculateFee');
+  // #665: Validate feeBps and calculate fee with truncation
+  validateFeeBps(feeBps);
+  return (amount * BigInt(feeBps)) / BigInt(10000);
 }
 
 /**
@@ -64,7 +82,9 @@ export function calculateFee(amount: bigint, feeBps: number): bigint {
  * @throws {ValidationError} If `feeBps` is not an integer, or is outside `[0, 10000]`.
  */
 export function calculateReceiveAmount(amount: bigint, feeBps: number): bigint {
-  throw new Error('Not implemented: calculateReceiveAmount');
+  // #665: Calculate receive amount as total - fee
+  const fee = calculateFee(amount, feeBps);
+  return amount - fee;
 }
 
 /**
@@ -76,7 +96,47 @@ export function calculateReceiveAmount(amount: bigint, feeBps: number): bigint {
  * formatStellarAmount('500')      // '0.0000500'
  */
 export function formatStellarAmount(amount: string): string {
-  throw new Error('Not implemented: formatStellarAmount');
+  // #666: Format stroops to XLM (7 decimal places) using BigInt
+  const bn = BigInt(amount);
+  const divisor = BigInt(10000000); // 10^7
+
+  // Get integer and fractional parts
+  const integer = bn / divisor;
+  const remainder = bn % divisor;
+
+  // Format fractional part with leading zeros
+  const fractionalStr = remainder.toString().padStart(7, '0');
+
+  return `${integer}.${fractionalStr}`;
+}
+
+/**
+ * Generates a real RFC 4122 v4 UUID idempotency key.
+ * Used to prevent duplicate side-effects when retrying non-idempotent requests.
+ * The API's idempotency middleware only accepts dashed UUID v4 keys, so this
+ * must produce a value matching
+ * `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`.
+ *
+ * @returns A dashed UUID v4 string suitable for the Idempotency-Key header.
+ */
+export function generateIdempotencyKey(): string {
+  // Prefer the platform implementation when available.
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+
+  // Set version (4) and variant (RFC 4122) bits.
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 // Re-export token formatting utilities for convenience

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import request from 'supertest';
 
 process.env.NODE_ENV = 'test';
 
@@ -15,7 +16,19 @@ vi.mock('../services/db', () => ({
   dbHealthCheck: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
+const pingMock = vi.fn().mockResolvedValue('PONG');
+const getRedisClientMock = vi.fn(() => ({ ping: pingMock }));
+vi.mock('../services/redis', () => ({
+  getRedisClient: () => getRedisClientMock(),
+}));
+
+const getMetricsMock = vi.fn();
+vi.mock('../services/rpcPool', () => ({
+  rpcPool: { getMetrics: () => getMetricsMock() },
+}));
+
 import { getHealthStatus, invalidateHealthCache } from '../services/health';
+import app from '../index';
 
 /**
  * TODO(next-bounty): the tests marked `.skip` in this file assert behaviour that
@@ -27,6 +40,9 @@ import { getHealthStatus, invalidateHealthCache } from '../services/health';
 describe('getHealthStatus', () => {
   beforeEach(() => {
     invalidateHealthCache();
+    pingMock.mockReset().mockResolvedValue('PONG');
+    getRedisClientMock.mockReset().mockReturnValue({ ping: pingMock });
+    getMetricsMock.mockReset().mockReturnValue([{ url: 'https://rpc.example', healthy: true }]);
   });
 
   it('returns degraded when non-critical dependencies are down', async () => {
@@ -58,5 +74,44 @@ describe('getHealthStatus', () => {
   it('marks soroban as critical', async () => {
     const result = await getHealthStatus(true);
     expect(result.dependencies.soroban.critical).toBe(true);
+  });
+
+  it('pings the shared redis client instead of opening a new connection', async () => {
+    await getHealthStatus(true);
+    expect(getRedisClientMock).toHaveBeenCalledTimes(1);
+    expect(pingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports soroban healthy when at least one provider is healthy', async () => {
+    getMetricsMock.mockReturnValue([
+      { url: 'https://a.example', healthy: false },
+      { url: 'https://b.example', healthy: true },
+    ]);
+    const result = await getHealthStatus(true);
+    expect(result.dependencies.soroban.ok).toBe(true);
+  });
+
+  it('reports soroban unhealthy when no provider is healthy', async () => {
+    getMetricsMock.mockReturnValue([
+      { url: 'https://a.example', healthy: false },
+      { url: 'https://b.example', healthy: false },
+    ]);
+    const result = await getHealthStatus(true);
+    expect(result.dependencies.soroban.ok).toBe(false);
+    expect(result.status).toBe('unhealthy');
+  });
+});
+
+describe('app smoke test', () => {
+  it('GET /health/live returns 200', async () => {
+    const res = await request(app).get('/health/live');
+    expect(res.status).toBe(200);
+  });
+
+  it('unknown route returns JSON error from errorHandler', async () => {
+    const res = await request(app).get('/__definitely-not-a-route__');
+    expect([404, 500]).toContain(res.status);
+    expect(res.headers['content-type']).toMatch(/application\/json/);
+    expect(res.body).toHaveProperty('error');
   });
 });
