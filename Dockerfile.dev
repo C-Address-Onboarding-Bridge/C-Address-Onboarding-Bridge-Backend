@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY api/ api/
 COPY sdk/ sdk/
+COPY hooks/ hooks/
 
 # Install all dependencies (including dev dependencies)
 RUN npm ci
