@@ -42,4 +42,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run all examples
         working-directory: examples
-        run: docker compose up --build --abort-on-container-exit
+        run: |
+          set -e
+          for svc in python rust go java; do
+            echo "=== running $svc ==="
+            docker compose up --build --abort-on-container-exit --exit-code-from "$svc"
+            docker compose down -v
+          done
