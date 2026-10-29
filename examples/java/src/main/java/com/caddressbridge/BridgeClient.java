@@ -110,7 +110,7 @@ public final class BridgeClient {
         return request("POST", "/api/v1/offramp/transak", null, jsonBody);
     }
 
-    public String routeCexWithdrawal(String jsonBody) throws IOException, InterruptedException, BridgeException {
+    public JsonNode routeCexWithdrawal(String jsonBody) throws IOException, InterruptedException, BridgeException {
         return request("POST", "/api/v1/cex/route", null, jsonBody);
     }
 }
