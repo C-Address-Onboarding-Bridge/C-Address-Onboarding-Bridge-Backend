@@ -238,7 +238,24 @@ function persistRecord(record: ApiKeyRecord): void {
 }
 
 
-// ─── Public API ────────────────────────────────────────────────────────────────
+/**
+ * Hydrate the in-memory key store from Postgres on boot. Best-effort: if the
+ * DB is unavailable the in-memory store keeps whatever was seeded.
+ */
+export async function loadApiKeysFromDb(): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  try {
+    const result = await pool.query('SELECT * FROM api_keys');
+    for (const row of result.rows as Record<string, unknown>[]) {
+      const record = rowToRecord(row);
+      if (!keyStore.has(record.id)) keyStore.set(record.id, record);
+      if (!keyHashIndex.has(record.keyHash)) keyHashIndex.set(record.keyHash, record);
+    }
+  } catch (err) {
+    logger.warn({ err }, 'rbacAuth: failed to hydrate keys from DB (non-fatal)');
+  }
+}
 
 /**
  * Create a new API key, persist it to Postgres (when available), and return
@@ -263,6 +280,7 @@ export function createApiKey(input: CreateKeyInput): { rawKey: string; record: A
   };
   keyStore.set(record.id, record);
   keyHashIndex.set(record.keyHash, record);
+  persistRecord(record);
   return { rawKey, record };
 }
 
@@ -274,6 +292,7 @@ export function revokeApiKey(id: string): boolean {
   if (!record) return false;
   record.revoked = true;
   record.updatedAt = Date.now();
+  persistRecord(record);
   return true;
 }
 
@@ -318,6 +337,7 @@ export function updateApiKey(
   if (patch.expiresAt !== undefined) record.expiresAt = patch.expiresAt;
   if (patch.rateLimit !== undefined) record.rateLimit = patch.rateLimit;
   record.updatedAt = Date.now();
+  persistRecord(record);
   return true;
 }
 
@@ -472,5 +492,6 @@ export function seedLegacyKeys(rawKeys: string[]): void {
     };
     keyStore.set(record.id, record);
     keyHashIndex.set(keyHash, record);
+    persistRecord(record);
   }
 }
