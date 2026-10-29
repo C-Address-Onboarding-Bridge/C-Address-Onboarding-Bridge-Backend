@@ -93,6 +93,19 @@ export class BridgeEventEmitter {
         // fetch was in flight. In that case, swallow the error and stop.
         if (state.cancelled || this.destroyed) return;
         this.emit('error', { message: 'Failed to poll transaction status', error: err });
+        // Non-retryable errors (4xx such as 404/401) will not resolve by
+        // retrying, so stop polling instead of emitting 'error' forever.
+        const status =
+          (err as { status?: number })?.status ??
+          (err as { statusCode?: number })?.statusCode ??
+          (err as { response?: { status?: number } })?.response?.status;
+        const nonRetryable =
+          (typeof status === 'number' && status >= 400 && status < 500) ||
+          /\b40[0-9]\b/.test(String((err as { message?: string })?.message ?? ''));
+        if (nonRetryable) {
+          this.unwatch(txHash);
+          return;
+        }
         scheduleNext();
         return;
       }
