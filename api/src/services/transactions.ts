@@ -50,65 +50,6 @@ export interface TransactionStats {
   averageAmount: string;
 }
 
-const seededTransactions: TransactionRecord[] = [
-  {
-    id: 'tx_1001',
-    txHash: '0xabc1001',
-    sourceAddr: 'GABC1001',
-    targetAddr: 'GXYZ1001',
-    status: 'success',
-    amount: '120.50',
-    fee: '0.36',
-    createdAt: '2026-06-20T10:15:00.000Z',
-    currency: 'USDC',
-  },
-  {
-    id: 'tx_1002',
-    txHash: '0xabc1002',
-    sourceAddr: 'GABC1002',
-    targetAddr: 'GXYZ1002',
-    status: 'pending',
-    amount: '80.00',
-    fee: '0.24',
-    createdAt: '2026-06-21T09:45:00.000Z',
-    currency: 'USDC',
-  },
-  {
-    id: 'tx_1003',
-    txHash: '0xabc1003',
-    sourceAddr: 'GABC1003',
-    targetAddr: 'GXYZ1003',
-    status: 'failed',
-    amount: '45.00',
-    fee: '0.14',
-    createdAt: '2026-06-22T05:30:00.000Z',
-    currency: 'USDC',
-  },
-  {
-    id: 'tx_1004',
-    txHash: '0xabc1004',
-    sourceAddr: 'GABC1004',
-    targetAddr: 'GXYZ1004',
-    status: 'success',
-    amount: '220.00',
-    fee: '0.66',
-    createdAt: '2026-06-23T12:45:00.000Z',
-    currency: 'USDC',
-  },
-  {
-    id: 'tx_1005',
-    txHash: '0xabc1005',
-    sourceAddr: 'GABC1005',
-    targetAddr: 'GXYZ1005',
-    status: 'pending',
-    amount: '99.99',
-    fee: '0.30',
-    createdAt: '2026-06-24T08:10:00.000Z',
-    currency: 'USDC',
-  },
-];
-
-const transactionStore: TransactionRecord[] = [...seededTransactions];
 let feeConfigState: FeeConfigState = {
   feeBps: config.soroban.feeBps,
   updatedAt: Date.now(),
@@ -139,34 +80,76 @@ function rowToRecord(row: Record<string, unknown>): TransactionRecord {
   };
 }
 
-const DEFAULT_TRANSACTIONS_LIMIT = 20;
+const DEFAULT_TRANSACTIONS_LIMIT = 50;
+const MAX_TRANSACTIONS_LIMIT = 200;
 
-export function listTransactions(params: TransactionQueryParams = {}): { data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean } {
+function parseAmount(value: string): string {
+  // Truncate any fractional part so amounts are compared as integers.
+  const [intPart] = String(value).trim().split('.');
+  if (!intPart || intPart === '' || intPart === '-') return '0';
+  return intPart;
+}
+
+export async function listTransactions(params: TransactionQueryParams = {}): Promise<{ data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean }> {
+  const pool = getPool();
+  if (!pool) return { data: [], nextCursor: null, hasMore: false };
+
   const { status, fromDate, toDate, minAmount, maxAmount, cursor, offset } = params;
-  const limit = params.limit ?? DEFAULT_TRANSACTIONS_LIMIT;
 
-  const filtered = transactionStore.filter((tx) => {
-    if (status && tx.status !== status) return false;
-    if (fromDate && tx.createdAt < fromDate) return false;
-    if (toDate && tx.createdAt > toDate) return false;
-    if (minAmount !== undefined && parseAmount(tx.amount) < parseAmount(minAmount)) return false;
-    if (maxAmount !== undefined && parseAmount(tx.amount) > parseAmount(maxAmount)) return false;
-    return true;
-  });
+  let limit = Number(params.limit);
+  if (!Number.isFinite(limit) || limit < 1) limit = DEFAULT_TRANSACTIONS_LIMIT;
+  if (limit > MAX_TRANSACTIONS_LIMIT) limit = MAX_TRANSACTIONS_LIMIT;
 
-  let startIndex = 0;
+  let off = Number(offset);
+  if (!Number.isFinite(off) || off < 0) off = 0;
+
+  const fetchLimit = limit + 1;
+
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+  let idx = 1;
+
+  if (status) {
+    conditions.push(`status = $${idx++}`);
+    values.push(status);
+  }
+  if (fromDate) {
+    conditions.push(`created_at_iso >= $${idx++}`);
+    values.push(fromDate);
+  }
+  if (toDate) {
+    conditions.push(`created_at_iso <= $${idx++}`);
+    values.push(toDate);
+  }
+  if (minAmount !== undefined) {
+    conditions.push(`amount::numeric >= $${idx++}::numeric`);
+    values.push(parseAmount(minAmount));
+  }
+  if (maxAmount !== undefined) {
+    conditions.push(`amount::numeric <= $${idx++}::numeric`);
+    values.push(parseAmount(maxAmount));
+  }
   if (cursor) {
-    const cursorIndex = filtered.findIndex((tx) => tx.id === cursor);
-    startIndex = cursorIndex === -1 ? 0 : cursorIndex + 1;
-  } else if (offset) {
-    startIndex = offset;
+    conditions.push(`id > $${idx++}`);
+    values.push(cursor);
   }
 
-  const page = filtered.slice(startIndex, startIndex + limit);
-  const hasMore = startIndex + limit < filtered.length;
-  const nextCursor = hasMore ? page[page.length - 1]?.id ?? null : null;
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const sql = `SELECT id, tx_hash, source_addr, target_addr, status, amount, fee, currency, created_at, created_at_iso FROM transactions ${where} ORDER BY created_at DESC, id DESC LIMIT $${idx} OFFSET $${idx + 1}`;
+  values.push(fetchLimit, off);
 
-  return { data: page, nextCursor, hasMore };
+  const client = await pool.connect();
+  try {
+    const result = await client.query(sql, values);
+    const rows = result.rows as Record<string, unknown>[];
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    const data = pageRows.map(rowToRecord);
+    const nextCursor = hasMore ? (pageRows[pageRows.length - 1]?.id ? String(pageRows[pageRows.length - 1].id) : null) : null;
+    return { data, nextCursor, hasMore };
+  } finally {
+    client.release();
+  }
 }
 
 /**
