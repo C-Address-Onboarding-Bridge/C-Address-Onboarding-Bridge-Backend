@@ -160,8 +160,8 @@ export async function closeQueues(): Promise<void> {
 
 export async function scheduleRecurringJobs(): Promise<void> {
   const queues = getQueues();
-  await queues.cacheWarmup.add('cache-warmup', { assets: [] }, { repeat: { pattern: '*/30 * * * * *' } });
-  await queues.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { pattern: '0 * * * * *' } });
+  await queues.cacheWarmup.add('cache-warmup', { assets: [] }, { repeat: { every: 30_000 } });
+  await queues.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { every: config.jobs.metricsIntervalMs } });
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
