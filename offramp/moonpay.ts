@@ -58,8 +58,29 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
  * when the signature has a different byte length than the computed HMAC).
  */
 export function verifyMoonpayWebhook(config: MoonpayConfig, rawBody: string, signature: string): boolean {
-  const expected = crypto.createHmac('sha256', config.secretKey).update(rawBody).digest();
-  const received = Buffer.from(signature, 'base64');
+  // MoonPay V2 webhook signature: "t=<unix>,s=<base64-hmac>" where the HMAC is
+  // SHA-256 over `${t}.${rawBody}`. Reject anything that is not a V2 signature.
+  const parts = signature.split(',');
+  const tPart = parts.find((p) => p.startsWith('t='));
+  const sPart = parts.find((p) => p.startsWith('s='));
+  if (!tPart || !sPart) return false;
+
+  const t = tPart.slice(2);
+  const s = sPart.slice(2);
+  const timestamp = parseInt(t, 10);
+  if (!Number.isFinite(timestamp)) return false;
+
+  const now = Date.now();
+  const age = now - timestamp * 1000;
+  if (age > 5 * 60 * 1000 || age < -30_000) return false;
+
+  const expected = crypto.createHmac('sha256', config.secretKey).update(`${t}.${rawBody}`, 'utf8').digest();
+  let received: Buffer;
+  try {
+    received = Buffer.from(s, 'base64');
+  } catch {
+    return false;
+  }
   return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
