@@ -59,6 +59,47 @@ console.log(result.status); // 'pending' | 'success' | 'failed'
 
 See the [Wallet Integration Guide](../docs/wallet-integration.md) for the full funding flows (G-address, CEX withdrawal, credit card on-ramp) and typed error handling.
 
+## Offline client
+
+`OfflineBridgeClient` extends `BridgeClient` with an offline queue that stores
+requests while the network is unavailable and replays them when connectivity
+returns.
+
+```ts
+import { OfflineBridgeClient } from '@c-address-bridge/sdk';
+
+const client = new OfflineBridgeClient({ baseUrl, apiKey });
+// requests made while offline are queued and retried automatically
+await client.destroy(); // stops the health poll
+```
+
+## Events
+
+`BridgeEventEmitter` exposes a typed event stream for transaction status
+updates and non-retryable errors.
+
+```ts
+import { BridgeEventEmitter } from '@c-address-bridge/sdk';
+
+const emitter = new BridgeEventEmitter();
+emitter.on('status', (status) => console.log(status));
+emitter.on('error', (err) => console.error(err));
+```
+
+## Pagination
+
+`PaginationHelper`, `paginateAll`, and `collectAllPages` wrap cursor-paginated
+endpoints (e.g. `listTransactions`).
+
+```ts
+import { collectAllPages } from '@c-address-bridge/sdk';
+
+const all = await collectAllPages((params) => client.listTransactions(params));
+```
+
+Abort an in-flight pagination with an `AbortSignal`; the helper throws an
+`AbortError` (name === 'AbortError') when an abort cuts a fetch short.
+
 ## Testing
 
 The SDK ships with a dedicated testing package at `@c-address-bridge/sdk/testing`. It provides an in-memory mock server that intercepts `fetch` — no real API server or network required.
