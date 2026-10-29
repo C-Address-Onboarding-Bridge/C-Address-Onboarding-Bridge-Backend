@@ -40,12 +40,9 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
   const signature = crypto
     .createHmac('sha256', config.secretKey)
     .update(queryString)
-    .digest('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+    .digest('base64');
 
-  return `https://buy.moonpay.com${queryString}&signature=${signature}`;
+  return `https://buy.moonpay.com${queryString}&signature=${encodeURIComponent(signature)}`;
 }
 
 /**
