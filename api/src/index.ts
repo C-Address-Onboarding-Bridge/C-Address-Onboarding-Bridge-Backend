@@ -20,7 +20,7 @@ import { metricsAuth, metricsRouter } from './routes/metrics';
 import { telemetryRouter } from './routes/telemetry';
 import { transactionsRouter } from './routes/transactions';
 import { adminRouter } from './routes/admin';
-import { rbacAuth, requireScopes, seedLegacyKeys } from './middleware/rbacAuth';
+import { rbacAuth, requireScopes, seedLegacyKeys, loadApiKeysFromDb } from './middleware/rbacAuth';
 import { registerWebhookVerifier, moonpayVerifier, transakVerifier } from './middleware/webhookVerification';
 import { compressionMiddleware } from './middleware/compression';
 import { errorHandler } from './middleware/error';
@@ -54,6 +54,8 @@ registerWebhookVerifier('transak', transakVerifier, config.transak.webhookSecret
 if (config.apiKeys.length > 0) {
   seedLegacyKeys(config.apiKeys);
 }
+
+void loadApiKeysFromDb();
 
 setFeeRateBps(config.soroban.feeBps);
 
