@@ -2,6 +2,8 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { getPool } from './db';
 
+export const CONTRACT_MAX_FEE_BPS = 1000;
+
 export type TransactionStatus = 'pending' | 'success' | 'failed';
 
 export interface TransactionRecord {
