@@ -14,19 +14,56 @@ export class PaginationHelper<T> {
     const sig = signal ?? this.options.signal;
     const throttleMs = this.options.throttleMs ?? 0;
     let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+
+    const abortError = (): Error => {
+      const reason = sig?.reason;
+      if (reason instanceof Error) return reason;
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      return err;
+    };
 
     do {
+      // Graceful stop between pages when aborted.
       if (sig?.aborted) break;
 
-      const page = await this.fetcher({ cursor, limit: this.options.pageSize });
+      let page: PaginatedResponse<T>;
+      const fetchPromise = this.fetcher({ cursor, limit: this.options.pageSize });
+      if (!sig) {
+        page = await fetchPromise;
+      } else {
+        page = await new Promise<PaginatedResponse<T>>((resolve, reject) => {
+          if (sig.aborted) {
+            reject(abortError());
+            return;
+          }
+          const onAbort = () => reject(abortError());
+          sig.addEventListener('abort', onAbort, { once: true });
+          fetchPromise.then(
+            (p) => { sig.removeEventListener('abort', onAbort); resolve(p); },
+            (e) => { sig.removeEventListener('abort', onAbort); reject(e); },
+          );
+        });
+      }
+
+      // If aborted during/after fetch, propagate.
+      if (sig?.aborted) throw abortError();
+
       yield page;
 
-      cursor = page.nextCursor ?? undefined;
+      const nextCursor = page.nextCursor ?? undefined;
+      if (!page.hasMore || !nextCursor || seenCursors.has(nextCursor)) {
+        cursor = undefined;
+        break;
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
 
       if (cursor && throttleMs > 0) {
         await this.delayWithSignal(throttleMs, sig);
       }
-    } while (cursor && !sig?.aborted);
+    } while (cursor);
   }
 
   async all(signal?: AbortSignal): Promise<T[]> {
@@ -69,7 +106,9 @@ export class PaginationHelper<T> {
       const onAbort = (): void => {
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
-        reject(new Error('Aborted'));
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        reject(err);
       };
 
       const timer = setTimeout(() => {
