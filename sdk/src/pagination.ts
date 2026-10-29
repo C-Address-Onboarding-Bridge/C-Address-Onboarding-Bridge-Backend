@@ -14,19 +14,46 @@ export class PaginationHelper<T> {
     const sig = signal ?? this.options.signal;
     const throttleMs = this.options.throttleMs ?? 0;
     let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+
+    const throwIfAborted = (): void => {
+      if (sig?.aborted) {
+        const reason = sig.reason;
+        if (reason instanceof Error) throw reason;
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+    };
 
     do {
-      if (sig?.aborted) break;
+      throwIfAborted();
 
-      const page = await this.fetcher({ cursor, limit: this.options.pageSize });
+      let page: PaginatedResponse<T>;
+      try {
+        page = await this.fetcher({ cursor, limit: this.options.pageSize });
+      } catch (err) {
+        throwIfAborted();
+        throw err;
+      }
+
+      throwIfAborted();
       yield page;
 
-      cursor = page.nextCursor ?? undefined;
+      const nextCursor = page.nextCursor ?? undefined;
+      // Stop when the server says there are no more pages, or when a cursor
+      // repeats (guards against infinite loops on misbehaving servers).
+      if (!page.hasMore || !nextCursor || seenCursors.has(nextCursor)) {
+        cursor = undefined;
+        break;
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
 
       if (cursor && throttleMs > 0) {
         await this.delayWithSignal(throttleMs, sig);
       }
-    } while (cursor && !sig?.aborted);
+    } while (cursor);
   }
 
   async all(signal?: AbortSignal): Promise<T[]> {
@@ -69,7 +96,9 @@ export class PaginationHelper<T> {
       const onAbort = (): void => {
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
-        reject(new Error('Aborted'));
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        reject(err);
       };
 
       const timer = setTimeout(() => {
