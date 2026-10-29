@@ -174,7 +174,7 @@ export class IntegrityAuditLogService {
 
     try {
       const entriesResult = await pool.query(
-        'SELECT sequence, id, timestamp, type, actor, payload, previous_hash, hash, retention_until FROM audit_log_entries ORDER BY sequence ASC',
+        'SELECT sequence, id, created_at, event_type, actor, payload, previous_hash, hash, retention_until FROM audit_log_entries ORDER BY sequence ASC',
       );
 
       for (const row of entriesResult.rows) {
