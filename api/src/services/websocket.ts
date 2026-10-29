@@ -12,6 +12,7 @@ const TX_HASH_RE = /^[a-f0-9]{64}$/;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const POLL_INTERVAL_MS = 5_000;
 const STATUS_CACHE_NAMESPACE = 'status';
+const TERMINAL_STATUSES = new Set(['success', 'failed', 'expired']);
 const MAX_CONNECTIONS_PER_KEY = 10;
 const MAX_CONNECTIONS_PER_IP = 50;
 
@@ -77,11 +78,23 @@ async function pollStatusOnce(txHash: string): Promise<void> {
           timestamp: Date.now(),
         });
 
-        if (currentStatus === 'success' || currentStatus === 'failed') {
+        if (TERMINAL_STATUSES.has(currentStatus)) {
           clearInterval(sub.intervalId);
           client.subscriptions.delete(txHash);
           send(client.ws, { type: 'subscription_closed', txHash, reason: 'terminal_status' });
         }
+      }
+    }
+    // Stop the shared poller once no client is subscribed to this hash anymore
+    // (e.g. after a terminal status cleared every subscription).
+    const anySubscriber = Array.from(connectionsByToken.values())
+      .flatMap((set) => Array.from(set))
+      .some((c) => c.subscriptions.has(txHash));
+    if (!anySubscriber) {
+      const pollerId = sharedPollers.get(txHash);
+      if (pollerId) {
+        clearInterval(pollerId);
+        sharedPollers.delete(txHash);
       }
     }
   } catch (err) {

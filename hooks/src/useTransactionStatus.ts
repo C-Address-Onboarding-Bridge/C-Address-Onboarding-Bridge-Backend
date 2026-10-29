@@ -46,6 +46,7 @@ export function useTransactionStatus(
 
   useEffect(() => {
     if (!enabled || !txHash) {
+      setLoading(false);
       return;
     }
 
@@ -85,6 +86,7 @@ export function useTransactionStatus(
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      setLoading(false);
     };
   }, [client, txHash, enabled, pollIntervalMs]);
 
