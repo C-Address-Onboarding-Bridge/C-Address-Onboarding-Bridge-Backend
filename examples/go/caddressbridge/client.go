@@ -22,6 +22,7 @@ type BridgeError struct {
 	Status  int
 	Message string
 	Code    string
+	Details any
 }
 
 func (e *BridgeError) Error() string {
@@ -82,12 +83,19 @@ func (c *BridgeClient) request(method, path string, query url.Values, body any) 
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg, _ := out["message"].(string)
+		msg, _ := out["error"].(string)
+		if msg == "" {
+			msg, _ = out["message"].(string)
+		}
 		if msg == "" {
 			msg = resp.Status
 		}
-		code, _ := out["code"].(string)
-		return nil, &BridgeError{Status: resp.StatusCode, Message: msg, Code: code}
+		code, _ := out["error"].(string)
+		if code == "" {
+			code, _ = out["code"].(string)
+		}
+		details := out["details"]
+		return nil, &BridgeError{Status: resp.StatusCode, Message: msg, Code: code, Details: details}
 	}
 	return out, nil
 }

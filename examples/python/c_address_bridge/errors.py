@@ -63,14 +63,15 @@ class NetworkError(BridgeError):
 
 
 def parse_http_error(status: int, body: dict[str, Any]) -> BridgeError:
-    msg = body.get("message") or f"Request failed with status {status}"
-    code = body.get("code")
+    code = body.get("error") or body.get("code")
+    msg = body.get("message") or (code if isinstance(code, str) else None) or f"Request failed with status {status}"
+    fields = body.get("details") or body.get("fields")
     if status in (401, 403):
         return AuthError(msg, status_code=status, code=code)
     if status == 404:
         return NotFoundError(msg, code=code)
     if status in (400, 422):
-        return ValidationError(msg, status_code=status, code=code, fields=body.get("fields"))
+        return ValidationError(msg, status_code=status, code=code, fields=fields)
     if status == 429:
         retry_after = body.get("retryAfter")
         retry_ms = int(retry_after * 1000) if retry_after is not None else None

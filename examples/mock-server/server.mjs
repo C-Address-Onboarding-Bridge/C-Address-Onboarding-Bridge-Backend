@@ -72,7 +72,7 @@ function send(res, status, body) {
 function route(method, pathname) {
   if (method === 'GET' && pathname === '/health') return { status: 200, body: { status: 'ok' } };
   if (method === 'GET' && pathname === '/api/v1/quote' && process.env.MOCK_FORCE_ERROR === '1') {
-    return { status: 503, body: { message: 'Service unavailable', code: 'SERVICE_UNAVAILABLE' } };
+    return { status: 503, body: { error: 'SERVICE_UNAVAILABLE', message: 'Service unavailable' } };
   }
   if (method === 'GET' && pathname === '/api/v1/quote') return { status: 200, body: fixtures.quote };
   if (method === 'POST' && pathname === '/api/v1/fund/prepare') return { status: 200, body: fixtures.fundingPrepare };

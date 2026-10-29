@@ -22,9 +22,11 @@ pub enum BridgeError {
 
 impl BridgeError {
     pub fn from_response(status: u16, body: &serde_json::Value) -> Self {
+        let code = body.get("error").and_then(|v| v.as_str());
         let message = body
             .get("message")
             .and_then(|v| v.as_str())
+            .or(code)
             .unwrap_or("request failed")
             .to_string();
         match status {
