@@ -215,26 +215,22 @@ export class IntegrityAuditLogService {
     const pool = getPool();
     if (!pool) return;
 
-    try {
-      await pool.query(
-        `INSERT INTO audit_log_entries
-         (sequence, id, event_type, actor, payload, previous_hash, hash, created_at, retention_until)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          entry.sequence,
-          entry.id,
-          entry.type,
-          entry.actor,
-          JSON.stringify(entry.payload),
-          entry.previousHash,
-          entry.hash,
-          entry.timestamp,
-          entry.retentionUntil,
-        ],
-      );
-    } catch (err) {
-      console.warn('Failed to save audit entry to database:', err);
-    }
+    await pool.query(
+      `INSERT INTO audit_log_entries
+       (sequence, id, event_type, actor, payload, previous_hash, hash, created_at, retention_until)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        entry.sequence,
+        entry.id,
+        entry.type,
+        entry.actor,
+        JSON.stringify(entry.payload),
+        entry.previousHash,
+        entry.hash,
+        entry.timestamp,
+        entry.retentionUntil,
+      ],
+    );
   }
 
   private async saveCheckpointToDatabase(checkpoint: AuditCheckpoint): Promise<void> {
@@ -277,7 +273,7 @@ export class IntegrityAuditLogService {
     };
 
     this.entries.push(entry);
-    void this.saveEntryToDatabase(entry);
+    void this.saveEntryToDatabase(entry).catch((err) => console.error('Failed to save audit entry to database:', err));
 
     if (this.checkpointInterval > 0 && entry.sequence % this.checkpointInterval === 0) {
       void this.publishCheckpoint(entry);

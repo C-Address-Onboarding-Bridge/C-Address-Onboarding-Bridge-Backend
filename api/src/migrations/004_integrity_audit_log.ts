@@ -12,6 +12,11 @@ export const migration004: Migration = {
         event_type      TEXT NOT NULL CHECK (event_type IN (
           'transaction_submission',
           'transaction_submission_result',
+          'transaction_prepared',
+          'batch_transaction_submission_result',
+          'timelocked_transaction_submission_result',
+          'timelocked_claim_result',
+          'direct_transaction_submission_result',
           'fee_withdrawal',
           'admin_operation',
           'webhook_delivery'
