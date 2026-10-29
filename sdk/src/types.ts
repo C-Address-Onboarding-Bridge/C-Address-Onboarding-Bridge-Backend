@@ -312,3 +312,26 @@ export interface BridgeEvent<K extends BridgeEventType = BridgeEventType> {
 }
 
 export type EventHandler<K extends BridgeEventType = BridgeEventType> = (event: BridgeEvent<K>) => void;
+
+/** A single transaction record returned by GET /api/v1/transactions. */
+export interface Transaction {
+  id: string;
+  txHash: string;
+  sourceAddr: string;
+  targetAddr: string;
+  status: BridgeStatus;
+  amount: string;
+  fee: string;
+  createdAt: string;
+  currency: string;
+}
+
+/** Parameters for listing transactions. */
+export interface ListTransactionsParams extends PaginatedRequestParams {
+  status?: string;
+  fromDate?: string;
+  toDate?: string;
+  minAmount?: string;
+  maxAmount?: string;
+  format?: "json" | "csv";
+}
