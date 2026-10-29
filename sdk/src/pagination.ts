@@ -16,33 +16,43 @@ export class PaginationHelper<T> {
     let cursor: string | undefined;
     const seenCursors = new Set<string>();
 
-    const throwIfAborted = (): void => {
-      if (sig?.aborted) {
-        const reason = sig.reason;
-        if (reason instanceof Error) throw reason;
-        const err = new Error('Aborted');
-        err.name = 'AbortError';
-        throw err;
-      }
+    const abortError = (): Error => {
+      const reason = sig?.reason;
+      if (reason instanceof Error) return reason;
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      return err;
     };
 
     do {
-      throwIfAborted();
+      // Graceful stop between pages when aborted.
+      if (sig?.aborted) break;
 
       let page: PaginatedResponse<T>;
-      try {
-        page = await this.fetcher({ cursor, limit: this.options.pageSize });
-      } catch (err) {
-        throwIfAborted();
-        throw err;
+      const fetchPromise = this.fetcher({ cursor, limit: this.options.pageSize });
+      if (!sig) {
+        page = await fetchPromise;
+      } else {
+        page = await new Promise<PaginatedResponse<T>>((resolve, reject) => {
+          if (sig.aborted) {
+            reject(abortError());
+            return;
+          }
+          const onAbort = () => reject(abortError());
+          sig.addEventListener('abort', onAbort, { once: true });
+          fetchPromise.then(
+            (p) => { sig.removeEventListener('abort', onAbort); resolve(p); },
+            (e) => { sig.removeEventListener('abort', onAbort); reject(e); },
+          );
+        });
       }
 
-      throwIfAborted();
+      // If aborted during/after fetch, propagate.
+      if (sig?.aborted) throw abortError();
+
       yield page;
 
       const nextCursor = page.nextCursor ?? undefined;
-      // Stop when the server says there are no more pages, or when a cursor
-      // repeats (guards against infinite loops on misbehaving servers).
       if (!page.hasMore || !nextCursor || seenCursors.has(nextCursor)) {
         cursor = undefined;
         break;
