@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+.git
+contracts/**/target
+npm-debug.log
+*.log
+coverage
+.DS_Store
