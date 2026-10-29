@@ -210,7 +210,7 @@ server.on('upgrade', handleUpgrade);
 const port = config.port;
 server.listen(port, () => {
   logger.info(`API listening on port ${port}`);
-  integrityAuditLog('server_start', { port });
+  void integrityAuditLog.initialize().then(() => integrityAuditLog.append('server_start', { port }));
 });
 
 gracefulShutdown.attach(server, async () => {
