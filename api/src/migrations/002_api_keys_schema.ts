@@ -1,10 +1,11 @@
-import { Migration, runDDL } from './runner';
+import type { PoolClient } from 'pg';
+import { Migration } from './runner';
 
 export const migration002: Migration = {
   version: '002',
   name: 'api_keys_schema',
 
-  async up() {
+  async up(client: PoolClient) {
     const schema = `
       CREATE TABLE IF NOT EXISTS api_keys (
         id            TEXT PRIMARY KEY,
@@ -35,10 +36,10 @@ export const migration002: Migration = {
 
       CREATE INDEX IF NOT EXISTS idx_audit_key_id ON api_key_audit_log (key_id);
     `;
-    await runDDL(schema);
+    await client.query(schema);
   },
 
-  async down() {
+  async down(client: PoolClient) {
     const rollback = `
       DROP INDEX IF EXISTS idx_audit_key_id;
       DROP TABLE IF EXISTS api_key_audit_log;
@@ -46,6 +47,6 @@ export const migration002: Migration = {
       DROP INDEX IF EXISTS idx_api_keys_hash;
       DROP TABLE IF EXISTS api_keys;
     `;
-    await runDDL(rollback);
+    await client.query(rollback);
   },
 };

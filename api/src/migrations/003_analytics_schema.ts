@@ -1,10 +1,11 @@
-import { Migration, runDDL } from './runner';
+import type { PoolClient } from 'pg';
+import { Migration } from './runner';
 
 export const migration003: Migration = {
   version: '003',
   name: 'analytics_schema',
 
-  async up() {
+  async up(client: PoolClient) {
     const schema = `
       CREATE TABLE IF NOT EXISTS webhook_events (
         id          TEXT PRIMARY KEY,
@@ -28,10 +29,10 @@ export const migration003: Migration = {
 
       CREATE INDEX IF NOT EXISTS idx_analytics_period_metric ON analytics_metrics (period, metric);
     `;
-    await runDDL(schema);
+    await client.query(schema);
   },
 
-  async down() {
+  async down(client: PoolClient) {
     const rollback = `
       DROP INDEX IF EXISTS idx_analytics_period_metric;
       DROP TABLE IF EXISTS analytics_metrics;
@@ -39,6 +40,6 @@ export const migration003: Migration = {
       DROP INDEX IF EXISTS idx_webhook_events_source;
       DROP TABLE IF EXISTS webhook_events;
     `;
-    await runDDL(rollback);
+    await client.query(rollback);
   },
 };

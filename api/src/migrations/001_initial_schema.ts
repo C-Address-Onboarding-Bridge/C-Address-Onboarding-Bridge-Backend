@@ -1,10 +1,11 @@
-import { Migration, runDDL } from './runner';
+import type { PoolClient } from 'pg';
+import { Migration } from './runner';
 
 export const migration001: Migration = {
   version: '001',
   name: 'initial_schema',
 
-  async up() {
+  async up(client: PoolClient) {
     // When a real database client is wired in, execute DDL here.
     // Placeholder documents the intended schema for the bridge backend.
     const schema = `
@@ -59,10 +60,10 @@ export const migration001: Migration = {
         failed_at       BIGINT NOT NULL
       );
     `;
-    await runDDL(schema);
+    await client.query(schema);
   },
 
-  async down() {
+  async down(client: PoolClient) {
     const rollback = `
       DROP TABLE IF EXISTS webhook_dlq;
       DROP TABLE IF EXISTS webhook_delivery_log;
@@ -73,6 +74,6 @@ export const migration001: Migration = {
       DROP TABLE IF EXISTS transactions;
       DROP TABLE IF EXISTS schema_migrations;
     `;
-    await runDDL(rollback);
+    await client.query(rollback);
   },
 };

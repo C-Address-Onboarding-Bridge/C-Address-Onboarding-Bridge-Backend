@@ -43,10 +43,10 @@ function makeMigration(
     name,
     upCalled: false,
     downCalled: false,
-    async up() {
+    async up(_client) {
       m.upCalled = true;
     },
-    async down() {
+    async down(_client) {
       m.downCalled = true;
     },
   };
