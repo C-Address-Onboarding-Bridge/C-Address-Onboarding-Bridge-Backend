@@ -33,7 +33,6 @@ import {
   TimeoutError,
   ServerError,
   BridgeError,
-  ServerError,
   ValidationError,
 } from "./errors.js";
 
