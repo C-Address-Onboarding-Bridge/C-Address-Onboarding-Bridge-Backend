@@ -9,6 +9,7 @@ import {
   getAuditLog,
   requireScopes,
   PermissionScope,
+  validateIpOrCidr,
 } from '../middleware/rbacAuth';
 
 export const apiKeysRouter = Router();
@@ -29,7 +30,7 @@ const patchApiKeySchema = z
   .object({
     name: z.string().min(1),
     scopes: z.array(z.enum(PERMISSION_SCOPES as [PermissionScope, ...PermissionScope[]])).min(1),
-    ipWhitelist: z.array(z.string()),
+    ipWhitelist: z.array(z.string().refine(validateIpOrCidr, { message: 'invalid IP or CIDR' })),
     expiresAt: z.number().nullable(),
     rateLimit: z.enum(['low', 'standard', 'high']),
   })
@@ -38,7 +39,7 @@ const patchApiKeySchema = z
 const createApiKeySchema = z.object({
   name: z.string().min(1),
   scopes: z.array(z.enum(PERMISSION_SCOPES as [PermissionScope, ...PermissionScope[]])).min(1),
-  ipWhitelist: z.array(z.string()).optional(),
+  ipWhitelist: z.array(z.string().refine(validateIpOrCidr, { message: 'invalid IP or CIDR' })).optional(),
   expiresAt: z.number().int().positive().nullable().optional(),
   rateLimit: z.enum(['low', 'standard', 'high']).optional(),
 });
