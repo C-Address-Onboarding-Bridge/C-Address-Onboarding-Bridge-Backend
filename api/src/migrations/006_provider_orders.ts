@@ -1,10 +1,11 @@
-import { Migration, runDDL } from './runner';
+import type { PoolClient } from 'pg';
+import { Migration } from './runner';
 
 export const migration006: Migration = {
   version: '006',
   name: 'provider_orders',
 
-  async up() {
+  async up(client: PoolClient) {
     const schema = `
       CREATE TABLE IF NOT EXISTS provider_orders (
         id              TEXT PRIMARY KEY,
@@ -29,16 +30,16 @@ export const migration006: Migration = {
       CREATE INDEX IF NOT EXISTS idx_provider_orders_wallet
         ON provider_orders (wallet_address);
     `;
-    await runDDL(schema);
+    await client.query(schema);
   },
 
-  async down() {
+  async down(client: PoolClient) {
     const rollback = `
       DROP INDEX IF EXISTS idx_provider_orders_wallet;
       DROP INDEX IF EXISTS idx_provider_orders_user_created;
       DROP INDEX IF EXISTS idx_provider_orders_provider_created;
       DROP TABLE IF EXISTS provider_orders;
     `;
-    await runDDL(rollback);
+    await client.query(rollback);
   },
 };

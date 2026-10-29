@@ -24,8 +24,8 @@ export async function runDDL(sql: string): Promise<void> {
 export interface Migration {
   version: string;
   name: string;
-  up: () => Promise<void>;
-  down: () => Promise<void>;
+  up: (client: PoolClient) => Promise<void>;
+  down: (client: PoolClient) => Promise<void>;
 }
 
 /** Fixed advisory lock key used to serialise concurrent migrate() calls. */
@@ -149,7 +149,7 @@ export class MigrationRunner {
         console.log(`[migration] running ${migration.version}: ${migration.name}`);
 
         // Run the migration's up() inside the same connection / transaction.
-        await migration.up();
+        await migration.up(client);
 
         // Record the applied version atomically with the migration work.
         await client.query(
@@ -199,7 +199,7 @@ export class MigrationRunner {
         console.log(`[migration] rolling back ${migration.version}: ${migration.name}`);
 
         // Run the migration's down() inside the same transaction.
-        await migration.down();
+        await migration.down(client);
 
         // Remove the tracking record atomically with the rollback work.
         await client.query('DELETE FROM schema_migrations WHERE version = $1', [migration.version]);

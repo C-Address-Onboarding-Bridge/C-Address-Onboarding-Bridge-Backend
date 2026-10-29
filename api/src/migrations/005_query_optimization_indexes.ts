@@ -1,4 +1,5 @@
-import { Migration, runDDL } from './runner';
+import type { PoolClient } from 'pg';
+import { Migration } from './runner';
 
 /**
  * Migration 005 — Query optimization & indexing strategy
@@ -21,7 +22,7 @@ export const migration005: Migration = {
   version: '005',
   name: 'query_optimization_indexes',
 
-  async up() {
+  async up(client: PoolClient) {
     const schema = `
       -- ─────────────────────────────────────────────────────────
       -- Enable query statistics extension
@@ -130,10 +131,10 @@ export const migration005: Migration = {
       ANALYZE webhook_delivery_log;
     `;
 
-    await runDDL(schema);
+    await client.query(schema);
   },
 
-  async down() {
+  async down(client: PoolClient) {
     const rollback = `
       DROP INDEX IF EXISTS idx_audit_actor_time;
       DROP INDEX IF EXISTS idx_audit_entity_time;
@@ -150,6 +151,6 @@ export const migration005: Migration = {
       DROP INDEX IF EXISTS idx_tx_hash_covering;
     `;
 
-    await runDDL(rollback);
+    await client.query(rollback);
   },
 };

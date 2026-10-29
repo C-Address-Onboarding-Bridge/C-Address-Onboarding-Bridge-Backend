@@ -1,10 +1,11 @@
-import { Migration, runDDL } from './runner';
+import type { PoolClient } from 'pg';
+import { Migration } from './runner';
 
 export const migration004: Migration = {
   version: '004',
   name: 'integrity_audit_log',
 
-  async up() {
+  async up(client: PoolClient) {
     const schema = `
       CREATE TABLE IF NOT EXISTS audit_log_entries (
         sequence        BIGINT PRIMARY KEY,
@@ -41,10 +42,10 @@ export const migration004: Migration = {
       CREATE INDEX IF NOT EXISTS idx_audit_log_checkpoints_hash
         ON audit_log_checkpoints (hash);
     `;
-    await runDDL(schema);
+    await client.query(schema);
   },
 
-  async down() {
+  async down(client: PoolClient) {
     const rollback = `
       DROP INDEX IF EXISTS idx_audit_log_checkpoints_hash;
       DROP TABLE IF EXISTS audit_log_checkpoints;
@@ -52,6 +53,6 @@ export const migration004: Migration = {
       DROP INDEX IF EXISTS idx_audit_log_event_type_created;
       DROP TABLE IF EXISTS audit_log_entries;
     `;
-    await runDDL(rollback);
+    await client.query(rollback);
   },
 };
