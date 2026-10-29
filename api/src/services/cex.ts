@@ -257,8 +257,9 @@ export class CexRoutingService {
         exchangeTxId: data.id,
       };
     } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || /aborted/i.test(err.message));
       return {
-        status: 'failed',
+        status: isTimeout ? 'pending' : 'failed',
         withdrawalId: `binance-${Date.now()}`,
       };
     }
@@ -293,8 +294,9 @@ export class CexRoutingService {
         exchangeTxId: data.id || data.data?.id,
       };
     } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || /aborted/i.test(err.message));
       return {
-        status: 'failed',
+        status: isTimeout ? 'pending' : 'failed',
         withdrawalId: `coinbase-${Date.now()}`,
       };
     }
@@ -328,8 +330,9 @@ export class CexRoutingService {
         exchangeTxId: data.result?.refid,
       };
     } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || /aborted/i.test(err.message));
       return {
-        status: 'failed',
+        status: isTimeout ? 'pending' : 'failed',
         withdrawalId: `kraken-${Date.now()}`,
       };
     }
@@ -367,8 +370,9 @@ export class CexRoutingService {
         exchangeTxId: data.id,
       };
     } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || /aborted/i.test(err.message));
       return {
-        status: 'failed',
+        status: isTimeout ? 'pending' : 'failed',
         withdrawalId: `generic-${Date.now()}`,
       };
     }
