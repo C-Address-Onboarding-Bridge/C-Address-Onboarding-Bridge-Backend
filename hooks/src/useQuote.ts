@@ -47,6 +47,7 @@ export function useQuote(
 
   useEffect(() => {
     if (!enabled || !params) {
+      setLoading(false);
       return;
     }
 
@@ -70,6 +71,7 @@ export function useQuote(
     return () => {
       cancelled = true;
       controller.abort();
+      setLoading(false);
     };
   }, [client, paramsKey, enabled, refetchToken]);
 
