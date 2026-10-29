@@ -5,6 +5,8 @@ import {
   FundWithXdrParams,
   FundingResult,
   TransactionStatus,
+  Transaction,
+  ListTransactionsParams,
   MoonpayWidgetParams,
   MoonpayWidgetResult,
   TransakWidgetParams,
@@ -31,7 +33,6 @@ import {
   TimeoutError,
   ServerError,
   BridgeError,
-  ServerError,
   ValidationError,
 } from "./errors.js";
 
@@ -340,13 +341,31 @@ export class BridgeClient {
   ): Promise<PaginatedResponse<T>> {
     const queryParams: RequestParams = {};
     if (params?.cursor !== undefined) queryParams["cursor"] = params.cursor;
-    if (params?.limit !== undefined)
-      queryParams["limit"] = String(params.limit);
-    if (params?.offset !== undefined)
-      queryParams["offset"] = String(params.offset);
+    if (params?.limit !== undefined) queryParams["limit"] = String(params.limit);
+    if (params?.offset !== undefined) queryParams["offset"] = String(params.offset);
     return this.request<PaginatedResponse<T>>(
       "GET",
       path,
+      undefined,
+      queryParams,
+    );
+  }
+
+  async listTransactions(
+    params?: ListTransactionsParams,
+  ): Promise<PaginatedResponse<Transaction>> {
+    const queryParams: RequestParams = {};
+    if (params?.cursor !== undefined) queryParams["cursor"] = params.cursor;
+    if (params?.limit !== undefined) queryParams["limit"] = String(params.limit);
+    if (params?.offset !== undefined) queryParams["offset"] = String(params.offset);
+    if (params?.status !== undefined) queryParams["status"] = params.status;
+    if (params?.fromDate !== undefined) queryParams["fromDate"] = params.fromDate;
+    if (params?.toDate !== undefined) queryParams["toDate"] = params.toDate;
+    if (params?.minAmount !== undefined) queryParams["minAmount"] = params.minAmount;
+    if (params?.maxAmount !== undefined) queryParams["maxAmount"] = params.maxAmount;
+    return this.request<PaginatedResponse<Transaction>>(
+      "GET",
+      "/api/v1/transactions",
       undefined,
       queryParams,
     );
