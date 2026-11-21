@@ -250,7 +250,10 @@ export class SorobanService {
     tokenAddress?: string,
   ): Promise<{ fee: string; feeBps: number; rebateBps: number }> {
     const { feeBps, rebateBps } = await this.getContractFeeBps(sourceAddress, tokenAddress);
-    const effectiveBps = Math.max(0, feeBps - rebateBps);
+    // The contract applies the tier discount as a percentage of the fee, in
+    // basis points of the fee (see rebate_bps / effective_fee_bps in
+    // lib.rs), not as a flat bps subtraction from feeBps.
+    const effectiveBps = feeBps - Math.floor((feeBps * rebateBps) / BASIS_POINTS_DENOM);
     const amountBig = BigInt(amount);
     const fee = (amountBig * BigInt(effectiveBps)) / BigInt(BASIS_POINTS_DENOM);
     return { fee: fee.toString(), feeBps, rebateBps };
