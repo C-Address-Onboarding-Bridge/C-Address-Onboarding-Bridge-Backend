@@ -7,6 +7,7 @@ import {
   Account,
   TransactionBuilder,
   BASE_FEE,
+  rpc,
 } from '@stellar/stellar-sdk';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { config } from '../config';
@@ -58,11 +59,23 @@ export class SorobanRpcError extends Error {
  * `simulation_failed` footprint.
  */
 export class SorobanSimulationError extends Error {
-  readonly code = 'SIMULATION_FAILED';
+  readonly code: string = 'SIMULATION_FAILED';
 
   constructor(message = 'Soroban simulation failed', options?: { cause?: unknown }) {
     super(message, options);
     this.name = 'SorobanSimulationError';
+  }
+}
+
+/** A simulation requiring archived ledger entries to be restored before retry. */
+export class SorobanRestoreRequiredError extends SorobanSimulationError {
+  readonly code = 'RESTORE_REQUIRED';
+  readonly restorePreamble: unknown;
+
+  constructor(restorePreamble: unknown) {
+    super('Funding simulation requires ledger entries to be restored');
+    this.name = 'SorobanRestoreRequiredError';
+    this.restorePreamble = restorePreamble;
   }
 }
 
@@ -279,14 +292,22 @@ export class SorobanService {
           .build();
 
         const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
+        if (rpc.Api.isSimulationRestore(simulation)) {
+          throw new SorobanRestoreRequiredError(simulation.restorePreamble);
+        }
         if (!SorobanService.isSimulationSuccess(simulation)) {
           throw new SorobanSimulationError('Funding simulation failed');
         }
 
-        const prepared = SorobanService.assembleTransaction(tx, simulation);
+        let prepared: Transaction;
+        try {
+          prepared = SorobanService.assembleTransaction(tx, simulation);
+        } catch (err) {
+          throw new SorobanSimulationError('Funding transaction assembly failed', { cause: err });
+        }
         return {
           unsignedXdr: prepared.toXDR(),
-          footprint: JSON.stringify(simulation.result?.footprint ?? {}),
+          footprint: simulation.transactionData.build().toXDR('base64'),
           fee: prepared.fee,
         };
       } finally {
@@ -385,33 +406,25 @@ export class SorobanService {
 
   /** Type guard for a successful Soroban simulation response. */
   static isSimulationSuccess(simulation: unknown): simulation is {
-    result?: { retval?: xdr.ScVal; footprint?: unknown };
+    result?: { retval?: xdr.ScVal };
+    transactionData: { build(): xdr.SorobanTransactionData };
   } {
     return (
-      typeof simulation === 'object' &&
-      simulation !== null &&
-      'result' in simulation &&
-      !('error' in simulation)
+      typeof simulation === 'object' && simulation !== null &&
+      rpc.Api.isSimulationSuccess(simulation as Parameters<typeof rpc.Api.isSimulationSuccess>[0])
     );
   }
 
   /** Assembles a simulated transaction into a prepared envelope. */
   static assembleTransaction(
     tx: Transaction,
-    simulation: { result?: { retval?: xdr.ScVal; footprint?: unknown } },
+    simulation: Parameters<typeof rpc.assembleTransaction>[1],
   ): Transaction {
-    // Minimal assembly: attach the simulated footprint/fee via the SDK helper
-    // when available; otherwise return the original transaction.
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { SorobanRpc } = require('@stellar/stellar-sdk');
-      if (SorobanRpc?.assembleTransaction) {
-        return SorobanRpc.assembleTransaction(tx, simulation).build();
-      }
-    } catch {
-      // fall through
+      return rpc.assembleTransaction(tx, simulation).build();
+    } catch (err) {
+      throw new SorobanSimulationError('Funding transaction assembly failed', { cause: err });
     }
-    return tx;
   }
 }
 

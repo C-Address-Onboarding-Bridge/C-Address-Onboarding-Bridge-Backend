@@ -56,6 +56,32 @@ export function errorHandler(
     return;
   }
 
+  const codedError = err as Error & { code?: string; restorePreamble?: unknown };
+  if (codedError.code === 'TRY_AGAIN_LATER') {
+    const retryableError = codedError as typeof codedError & { hash?: string };
+    logger.warn({ err, message: err.message });
+    res.status(503).json({
+      error: codedError.code,
+      message: err.message,
+      ...(retryableError.hash ? { hash: retryableError.hash } : {}),
+    });
+    return;
+  }
+  if (codedError.code === 'RESTORE_REQUIRED') {
+    logger.warn({ err, message: err.message });
+    res.status(400).json({
+      error: codedError.code,
+      message: err.message,
+      restorePreamble: codedError.restorePreamble,
+    });
+    return;
+  }
+  if (codedError.code === 'SIMULATION_FAILED') {
+    logger.error({ err, message: err.message });
+    res.status(400).json({ error: codedError.code, message: err.message });
+    return;
+  }
+
   logger.error({ err, message: 'Unexpected error' });
   res.status(500).json({
     error: 'internal_server_error',
