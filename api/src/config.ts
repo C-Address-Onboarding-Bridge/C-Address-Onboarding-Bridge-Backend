@@ -194,6 +194,7 @@ export const config = {
     maxSockets: parseInt(process.env.HTTP_AGENT_MAX_SOCKETS || '50', 10),
     maxFreeSockets: parseInt(process.env.HTTP_AGENT_MAX_FREE_SOCKETS || '10', 10),
     keepAliveMsecs: parseInt(process.env.HTTP_AGENT_KEEP_ALIVE_MS || '15000', 10),
+    timeoutMs: parseInt(process.env.SOROBAN_RPC_TIMEOUT_MS || '10000', 10),
   },
   websocket: {
     authRequired: process.env.WS_AUTH_REQUIRED !== 'false',

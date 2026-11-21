@@ -50,7 +50,9 @@ export class RpcPool {
   private readonly strategy: 'round-robin' | 'latency' | 'random';
   private readonly failureThreshold: number;
   private readonly recoveryIntervalMs: number;
+  private readonly requestTimeoutMs = config.httpAgent?.timeoutMs ?? 10_000;
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private healthCheckInProgress = false;
 
   constructor() {
     // Reuse TCP/TLS connections per RPC endpoint via shared keep-alive agents.
@@ -93,23 +95,46 @@ export class RpcPool {
   }
 
   private async runHealthChecks(): Promise<void> {
-    const now = Date.now();
-    for (const p of this.providers) {
-      if (p.healthy) continue;
-      if (p.lastFailureAt !== null && now - p.lastFailureAt < this.recoveryIntervalMs) continue;
+    if (this.healthCheckInProgress) return;
+    this.healthCheckInProgress = true;
+    try {
+      const now = Date.now();
+      for (const p of this.providers) {
+        if (p.healthy) continue;
+        if (p.lastFailureAt !== null && now - p.lastFailureAt < this.recoveryIntervalMs) continue;
 
-      try {
-        const start = Date.now();
-        await p.server.getNetwork();
-        p.healthy = true;
-        p.consecutiveFailures = 0;
-        p.lastLatencyMs = Date.now() - start;
-        logger.info({ url: p.url }, 'rpc provider recovered');
-      } catch {
-        p.lastFailureAt = Date.now();
-        logger.warn({ url: p.url }, 'rpc provider still unhealthy');
+        try {
+          const start = Date.now();
+          await this.withTimeout(() => p.server.getNetwork(), p.url);
+          p.healthy = true;
+          p.consecutiveFailures = 0;
+          p.lastLatencyMs = Date.now() - start;
+          logger.info({ url: p.url }, 'rpc provider recovered');
+        } catch {
+          p.lastFailureAt = Date.now();
+          logger.warn({ url: p.url }, 'rpc provider still unhealthy');
+        }
       }
+    } finally {
+      this.healthCheckInProgress = false;
     }
+  }
+
+  private withTimeout<T>(operation: () => Promise<T>, url: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(Object.assign(
+          new Error(`Soroban RPC request to ${url} timed out after ${this.requestTimeoutMs}ms`),
+          { code: 'ETIMEDOUT' },
+        ));
+      }, this.requestTimeoutMs);
+      Promise.resolve()
+        .then(operation)
+        .then(
+          (value) => { clearTimeout(timeout); resolve(value); },
+          (err) => { clearTimeout(timeout); reject(err); },
+        );
+    });
   }
 
   private healthyProviders(): ProviderState[] {
@@ -191,7 +216,7 @@ export class RpcPool {
       provider.totalRequests++;
       const start = Date.now();
       try {
-        const result = await fn(provider.server);
+        const result = await this.withTimeout(() => fn(provider.server), provider.url);
         provider.consecutiveFailures = 0;
         provider.lastLatencyMs = Date.now() - start;
         return result;

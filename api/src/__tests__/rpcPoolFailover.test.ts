@@ -4,6 +4,7 @@ process.env.NODE_ENV = 'test';
 
 const { config, getNetwork } = vi.hoisted(() => ({
   config: {
+    httpAgent: { timeoutMs: 10 },
     soroban: {
       rpcUrls: [] as string[],
       rpc: {
@@ -68,6 +69,24 @@ describe('RpcPool failover (#688)', () => {
 
     expect(call).toHaveBeenCalledTimes(1);
     expect(pool.getMetrics().reduce((total, provider) => total + provider.totalRequests, 0)).toBe(1);
+    pool.destroy();
+  });
+
+  it('times out a hung provider call and fails over to the next endpoint', async () => {
+    config.soroban.rpcUrls = ['https://rpc-a.example.com', 'https://rpc-b.example.com'];
+    const pool = new RpcPool();
+    const visited: string[] = [];
+
+    const result = await pool.execute(async (server) => {
+      const url = (server as unknown as FakeServer).url;
+      visited.push(url);
+      if (url.includes('rpc-a')) return new Promise<never>(() => {});
+      return 'fallback-result';
+    });
+
+    expect(result).toBe('fallback-result');
+    expect(visited).toHaveLength(2);
+    expect(pool.getMetrics()[0].totalFailures).toBe(1);
     pool.destroy();
   });
 
