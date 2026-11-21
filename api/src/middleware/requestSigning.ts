@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { logger } from '../logger';
 import { cacheGet, cacheSet } from '../services/cache';
 import { config } from '../config';
+import { resolveRecord } from './rbacAuth';
 
 /**
  * Issue #673 / #860: Verify request signing headers (X-Timestamp, X-Nonce, X-Signature).
@@ -71,31 +72,29 @@ export function requestSigningMiddleware(
     return;
   }
 
-  const secret = process.env.REQUEST_SIGNING_SECRET;
-  if (!secret) {
-    res.status(500).json({ error: 'signing_not_configured' });
-    return;
-  }
-
   const apiKey = req.headers['x-api-key'] as string;
   if (!apiKey) {
     return res.status(401).json({ error: 'missing_api_key' });
   }
 
-  // Use the configured signing secret as the HMAC key, not the API key itself.
-  // The API key is sent in the same request, so it cannot serve as a secret.
-  const signingKey = config.signingSecret || apiKey;
+  // Per-key signing secret (#1026): every tenant gets a distinct HMAC key
+  // generated at key creation, so one tenant's key cannot be used to sign
+  // requests as another tenant. The global REQUEST_SIGNING_SECRET /
+  // config.signingSecret is only a fallback for keys created before this
+  // field existed, and only outside production.
+  const keyRecord = resolveRecord(apiKey);
+  const envSecret = process.env.REQUEST_SIGNING_SECRET || config.signingSecret;
+  const signingKey = keyRecord?.signingSecret || (process.env.NODE_ENV !== 'production' ? envSecret : undefined);
+  if (!signingKey) {
+    res.status(500).json({ error: 'signing_not_configured' });
+    return;
+  }
 
-  // Reconstruct the signed payload from the raw body.
-  // express.json() has already parsed req.body, so stringify it back for
-  // signature verification. Clients sign the exact bytes they sent.
-  const bodyStr =
-    typeof req.body === 'string'
-      ? req.body
-      : req.body !== null && typeof req.body === 'object'
-        ? JSON.stringify(req.body)
-        : '';
-  const payload = `${bodyStr}.${timestamp}.${nonce}`;
+  // Use the raw bytes the client sent (captured by the express.json() verify
+  // hook in index.ts), not a re-stringified req.body: key order/whitespace
+  // differences would otherwise fail verification even for an unmodified body.
+  const bodyStr = (req as Request & { rawBody?: string }).rawBody ?? '';
+  const payload = buildSigningPayload(req.method, req.path, req.query as Record<string, unknown>, bodyStr, timestamp, nonce);
 
   const expectedSig = crypto.createHmac('sha256', signingKey).update(payload).digest('hex');
   const sigFormat = signature.startsWith('sha256=') ? signature.slice(7) : signature;
