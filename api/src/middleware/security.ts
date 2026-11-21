@@ -1,5 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
+import { ZodError } from 'zod';
 import { logger } from '../logger';
+import { AppError } from './error';
+import { CircuitOpenError } from '../circuit-breaker';
 
 const SQL_PATTERNS = [
   /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|UNION|TRUNCATE|DECLARE|CAST|CONVERT)\b)/i,
@@ -345,8 +348,12 @@ export function suspiciousRateLimiting(req: Request, res: Response, next: NextFu
 }
 
 /**
- * Strips HTML/script fragments from error messages before they are sent to
- * clients, so reflected input cannot execute in a browser.
+ * Strips HTML/script fragments from an error's message so reflected input
+ * cannot execute in a browser, then forwards the error to errorHandler.
+ * Known error types (ZodError/AppError/CircuitOpenError) are left unchanged:
+ * errorHandler maps those to their proper status codes, and sanitizing their
+ * message here would corrupt the structured details (e.g. ZodError.errors)
+ * errorHandler relies on.
  */
 export function xssErrorSanitizer(err: unknown, req: Request, res: Response, next: NextFunction): void {
   if (res.headersSent) {
@@ -354,12 +361,17 @@ export function xssErrorSanitizer(err: unknown, req: Request, res: Response, nex
     return;
   }
 
-  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : 'Internal server error';
-  const sanitized = message
-    .replace(/<[^>]*>/g, '')
-    .replace(/javascript:/gi, '')
-    .replace(/on\w+\s*=/gi, '');
+  if (err instanceof ZodError || err instanceof AppError || err instanceof CircuitOpenError) {
+    next(err);
+    return;
+  }
 
-  logger.error({ err, ip: req.ip, path: req.path, method: req.method }, 'request failed');
-  res.status(500).json({ error: 'internal_error', message: sanitized });
+  if (err instanceof Error) {
+    err.message = err.message
+      .replace(/<[^>]*>/g, '')
+      .replace(/javascript:/gi, '')
+      .replace(/on\w+\s*=/gi, '');
+  }
+
+  next(err);
 }
