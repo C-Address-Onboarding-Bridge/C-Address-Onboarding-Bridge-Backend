@@ -104,3 +104,25 @@ WEBHOOK_RATE_LIMIT_FIX.md
 WEBHOOK_RATE_LIMIT_FIX_IMPLEMENTATION.md
 OPENAPI_DOCUMENTATION_GAP.md
 CORS_METHODS_FIX.md
+
+# Doc snippet type-check output
+sdk/doc-snippets/
+
+# Examples run log
+examples/README.md.run.log
+
+# Rust lock backup
+Cargo.lock.bak
+
+# Java IDE files
+.classpath
+.project
+.settings/
+*.iml
+
+# Go module download cache
+go/pkg/
+
+# Python dist
+*.egg-info/
+dist/
