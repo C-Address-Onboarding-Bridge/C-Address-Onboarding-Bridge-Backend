@@ -7,6 +7,7 @@ import {
   Account,
   TransactionBuilder,
   BASE_FEE,
+  nativeToScVal,
 } from '@stellar/stellar-sdk';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { config } from '../config';
@@ -246,16 +247,18 @@ export class SorobanService {
    * Builds a `fund_c_address` invocation, simulates it to obtain the required
    * footprint and fee, and returns the unsigned envelope.
    */
-  async prepareFundingTransaction(params: {
-    source: string;
-    target: string;
-    amount: string;
-  }): Promise<PreparedFundingTx> {
+  async prepareFundingTransaction(
+    source: string,
+    target: string,
+    tokenAddress: string,
+    amount: string,
+    memo?: string,
+  ): Promise<PreparedFundingTx> {
     return tracer.startActiveSpan('contract.prepareFunding', async (span) => {
       try {
         const contract = new Contract(this.contractId);
         const sourceAccount = await rpcPool.execute((server) =>
-          server.getAccount(params.source),
+          server.getAccount(source),
         );
 
         const tx = new TransactionBuilder(sourceAccount, {
@@ -265,14 +268,11 @@ export class SorobanService {
           .addOperation(
             contract.call(
               'fund_c_address',
-              new Address(params.source).toScVal(),
-              new Address(params.target).toScVal(),
-              xdr.ScVal.scvI128(
-                new xdr.Int128Parts({
-                  hi: xdr.Int64.fromString('0'),
-                  lo: xdr.Uint64.fromString(params.amount),
-                }),
-              ),
+              new Address(source).toScVal(),
+              new Address(target).toScVal(),
+              new Address(tokenAddress).toScVal(),
+              nativeToScVal(BigInt(amount), { type: 'i128' }),
+              nativeToScVal(memo ?? '', { type: 'string' }),
             ),
           )
           .setTimeout(30)
