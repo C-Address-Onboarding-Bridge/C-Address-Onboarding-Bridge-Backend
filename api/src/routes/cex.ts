@@ -115,6 +115,13 @@ function buildIdempotencyKey(req: Request, body: z.infer<typeof routeSchema>): s
     anyReq.auth?.apiKeyId ??
     anyReq.auth?.id ??
     'anonymous';
+  const suppliedKey = req.headers[IDEMPOTENCY_KEY_HEADER];
+  if (typeof suppliedKey === 'string' && suppliedKey.length > 0) {
+    // When the caller supplies an idempotency key, dedupe strictly on
+    // (caller, key). Two requests with different keys must never be
+    // coalesced, even if their routing params match.
+    return [String(caller), 'idemkey', suppliedKey].join(':');
+  }
   return [
     String(caller),
     body.exchange,
@@ -122,6 +129,7 @@ function buildIdempotencyKey(req: Request, body: z.infer<typeof routeSchema>): s
     body.amount,
     body.targetCAddress,
     body.targetNetwork,
+    body.memo ?? '',
   ].join(':');
 }
 
