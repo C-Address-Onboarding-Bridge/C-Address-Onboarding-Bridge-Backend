@@ -15,6 +15,35 @@ interface ProviderState {
   totalFailures: number;
 }
 
+export interface RpcExecutionOptions {
+  /** Disable retries for calls that may have side effects, such as sendTransaction. */
+  failover?: boolean;
+}
+
+/** True only for failures that indicate a provider/network problem. */
+export function isRetryableRpcError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const candidate = err as {
+    code?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+    request?: unknown;
+    cause?: unknown;
+  };
+
+  const status = candidate.response?.status ?? candidate.status ?? candidate.statusCode;
+  if (typeof status === 'number') return status === 429 || (status >= 500 && status < 600);
+  if (candidate.request && !candidate.response) return true;
+
+  const transportCodes = new Set([
+    'ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN',
+    'EHOSTUNREACH', 'ECONNREFUSED', 'ERR_NETWORK', 'EPIPE',
+  ]);
+  if (typeof candidate.code === 'string' && transportCodes.has(candidate.code)) return true;
+  return candidate.cause !== err && isRetryableRpcError(candidate.cause);
+}
+
 export class RpcPool {
   private providers: ProviderState[];
   private rrIndex = 0;
@@ -132,11 +161,20 @@ export class RpcPool {
   }
 
   /** Runs `fn` against a healthy provider (failing over between them) behind the soroban circuit breaker. */
-  async execute<T>(fn: (_server: SorobanRpc.Server) => Promise<T>): Promise<T> {
-    return getCircuitBreaker('soroban').execute(() => this.executeWithFailover(fn));
+  async execute<T>(
+    fn: (_server: SorobanRpc.Server) => Promise<T>,
+    options: RpcExecutionOptions = {},
+  ): Promise<T> {
+    return getCircuitBreaker('soroban').execute(
+      () => this.executeWithFailover(fn, options.failover !== false),
+      isRetryableRpcError,
+    );
   }
 
-  private async executeWithFailover<T>(fn: (_server: SorobanRpc.Server) => Promise<T>): Promise<T> {
+  private async executeWithFailover<T>(
+    fn: (_server: SorobanRpc.Server) => Promise<T>,
+    allowFailover: boolean,
+  ): Promise<T> {
     const tried = new Set<string>();
     const allProviders = [...this.providers];
 
@@ -159,8 +197,13 @@ export class RpcPool {
         return result;
       } catch (err) {
         lastError = err;
+        if (!isRetryableRpcError(err)) {
+          logger.debug({ url: provider.url, attempt, err }, 'rpc call failed with a non-retryable error');
+          throw err;
+        }
         this.markFailure(provider);
         logger.warn({ url: provider.url, attempt }, 'rpc call failed, trying next provider');
+        if (!allowFailover) break;
       }
     }
 

@@ -11,7 +11,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { config } from '../config';
-import { rpcPool } from './rpcPool';
+import { isRetryableRpcError, rpcPool } from './rpcPool';
 import { externalCallDuration } from './metrics';
 import { validateXdr, XdrValidationError } from './xdrValidator';
 import { logger } from '../logger';
@@ -32,10 +32,12 @@ export interface SorobanTxResponse {
  */
 export class SorobanRetryableError extends Error {
   readonly code = 'TRY_AGAIN_LATER';
+  readonly hash?: string;
 
-  constructor(message = 'Soroban RPC is congested; retry later') {
+  constructor(message = 'Soroban RPC is congested; retry later', hash?: string) {
     super(message);
     this.name = 'SorobanRetryableError';
+    this.hash = hash;
   }
 }
 
@@ -343,27 +345,37 @@ export class SorobanService {
   async submitTransaction(signedXdr: string): Promise<SorobanTxResponse> {
     return tracer.startActiveSpan('contract.submitTransaction', async (span) => {
       const start = Date.now();
+      let hash = '';
       try {
         const tx = new Transaction(signedXdr, this.networkPassphrase);
-        const hash = tx.hash().toString('hex');
+        hash = tx.hash().toString('hex');
         submittedTxTimeBounds.set(hash, {
           maxTime: tx.timeBounds?.maxTime ? Number(tx.timeBounds.maxTime) : 0,
           submittedAt: Math.floor(Date.now() / 1000),
         });
 
-        const response = await rpcPool.execute((server) => server.sendTransaction(tx));
+        const response = await rpcPool.execute(
+          (server) => server.sendTransaction(tx),
+          { failover: false },
+        );
         if (response.status === 'TRY_AGAIN_LATER') {
-          throw new SorobanRetryableError();
+          throw new SorobanRetryableError(undefined, hash);
         }
         if (response.status === 'ERROR') {
-          return { status: 'failed', hash, error: response.errorResult?.toXDR('base64') };
+          return { status: 'failed' as const, hash, error: response.errorResult?.toXDR('base64') };
         }
-        return { status: 'pending', hash };
+        return { status: 'pending' as const, hash };
       } catch (err) {
         if (err instanceof SorobanRetryableError) throw err;
+        if (isRetryableRpcError(err)) {
+          throw new SorobanRetryableError(
+            'Soroban submission may have reached the network; poll transaction status by hash',
+            hash,
+          );
+        }
         throw new SorobanRpcError('Soroban submitTransaction failed', { cause: err });
       } finally {
-        externalCallDuration.record(Date.now() - start, { call: 'submitTransaction' });
+        externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
         span.end();
       }
     });
@@ -378,11 +390,11 @@ export class SorobanService {
         const response = await rpcPool.execute((server) => server.getTransaction(hash));
         if (response.status === 'SUCCESS') {
           submittedTxTimeBounds.delete(hash);
-          return { status: 'success', hash };
+          return { status: 'success' as const, hash };
         }
         if (response.status === 'FAILED') {
           submittedTxTimeBounds.delete(hash);
-          return { status: 'failed', hash };
+          return { status: 'failed' as const, hash };
         }
 
         // NOT_FOUND — decide whether the tx's validity window has elapsed.
@@ -392,10 +404,10 @@ export class SorobanService {
           const expiry = tracked.maxTime || tracked.submittedAt + DEFAULT_RPC_RETENTION_SECONDS;
           if (nowSec >= expiry) {
             submittedTxTimeBounds.delete(hash);
-            return { status: 'expired', hash };
+            return { status: 'expired' as const, hash };
           }
         }
-        return { status: 'pending', hash };
+        return { status: 'pending' as const, hash };
       } catch (err) {
         throw new SorobanRpcError('Soroban getTransaction failed', { cause: err });
       } finally {
