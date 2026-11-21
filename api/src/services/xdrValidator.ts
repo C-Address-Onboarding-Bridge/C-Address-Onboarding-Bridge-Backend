@@ -243,11 +243,45 @@ function parseEnvelope(
   return parsed;
 }
 
-function checkNetwork(tx: Transaction, networkPassphrase: string): void {
-  if (tx.networkPassphrase !== networkPassphrase) {
+/**
+ * Verifies the envelope was actually signed for this server's network.
+ *
+ * `tx.networkPassphrase` is just whatever passphrase we handed to
+ * `TransactionBuilder.fromXDR` when parsing — the envelope itself does not
+ * encode a network, so comparing it against the same passphrase we just
+ * used to parse it can never fail. The network is only bound into the
+ * signature payload (`tx.hash()` is computed using the passphrase), so the
+ * only way to detect a wrong-network envelope offline is to verify that at
+ * least one decorated signature actually verifies against this server's
+ * hash of the transaction.
+ */
+function checkNetwork(tx: Transaction, _networkPassphrase: string): void {
+  const signatures = tx.signatures;
+  if (signatures.length === 0) {
+    // No signatures to check (e.g. the /fund/prepare path, which validates
+    // an unsigned transaction before the client signs it). Endpoints that
+    // require a signed transaction enforce that separately.
+    return;
+  }
+
+  const hash = tx.hash();
+  const verified = signatures.some((decorated) => {
+    const hint = decorated.hint();
+    const sig = decorated.signature();
+    try {
+      const source = StrKey.decodeEd25519PublicKey(tx.source);
+      const sourceBuf = Buffer.from(source);
+      if (!sourceBuf.slice(-4).equals(hint)) return false;
+      return Keypair.fromPublicKey(tx.source).verify(hash, sig);
+    } catch {
+      return false;
+    }
+  });
+
+  if (!verified) {
     throw new XdrValidationError(
       'WRONG_NETWORK',
-      `Transaction was built for network "${tx.networkPassphrase}" but this server expects "${networkPassphrase}"`,
+      'No signature on the envelope verifies against this network\'s transaction hash',
     );
   }
 }
