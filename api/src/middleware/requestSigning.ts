@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { logger } from '../logger';
-import { cacheGet, cacheSet } from '../services/cache';
+import { cacheSetNX } from '../services/cache';
 import { config } from '../config';
 
 /**
@@ -105,19 +105,20 @@ export function requestSigningMiddleware(
     return res.status(401).json({ error: 'invalid_signature' });
   }
 
-  // Signature verified — now cache the nonce to prevent replay.
-  // Scope nonce to the API key id so one client cannot burn another's nonces.
-  const keyId = (req as Request & { apiKey?: { id?: string } }).apiKey?.id ?? apiKey;
+  // Signature verified — now atomically reserve the nonce to prevent replay.
+  // Scope nonce to the hashed API key id so one client cannot burn another's
+  // nonces, and never store the raw key in Redis.
+  const keyId =
+    (req as Request & { apiKey?: { id?: string } }).apiKey?.id ??
+    crypto.createHash('sha256').update(apiKey).digest('hex');
   const nonceKey = `nonce:${keyId}:${nonce}`;
 
-  cacheGet(nonceKey)
-    .then((cached) => {
-      if (cached) {
-        return res.status(401).json({ error: 'replay_nonce' });
+  cacheSetNX(nonceKey, '1', NONCE_CACHE_TTL)
+    .then((reserved) => {
+      if (!reserved) {
+        res.status(401).json({ error: 'replay_nonce' });
+        return;
       }
-      return cacheSet(nonceKey, 'used', NONCE_CACHE_TTL);
-    })
-    .then(() => {
       next();
     })
     .catch((err) => {
