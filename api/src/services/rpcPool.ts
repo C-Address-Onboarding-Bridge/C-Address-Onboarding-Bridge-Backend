@@ -1,5 +1,5 @@
 import { SorobanRpc } from '@stellar/stellar-sdk';
-import { config } from '../config';
+import { config, ConfigError } from '../config';
 import { logger } from '../logger';
 import { applyKeepAliveAgents } from './httpAgent';
 import { getCircuitBreaker } from '../circuit-breaker';
@@ -31,10 +31,20 @@ export class RpcPool {
     this.strategy = rpc.selectionStrategy;
     this.failureThreshold = rpc.failureThreshold;
     this.recoveryIntervalMs = rpc.recoveryIntervalMs;
+    if (process.env.NODE_ENV === 'production') {
+      const insecureUrl = rpcUrls.find((url) => url.startsWith('http://'));
+      if (insecureUrl) {
+        throw new ConfigError(
+          `SOROBAN_RPC_URL(S) must use HTTPS in production; received insecure URL: ${insecureUrl}`,
+        );
+      }
+    }
 
     this.providers = rpcUrls.map((url) => ({
       url,
-      server: new SorobanRpc.Server(url),
+      server: new SorobanRpc.Server(url, {
+        allowHttp: url.startsWith('http://') && process.env.NODE_ENV !== 'production',
+      }),
       healthy: true,
       consecutiveFailures: 0,
       lastFailureAt: null,
