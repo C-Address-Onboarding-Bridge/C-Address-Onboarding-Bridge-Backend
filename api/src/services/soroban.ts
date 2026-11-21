@@ -1,5 +1,6 @@
 import {
   Transaction,
+  FeeBumpTransaction,
   xdr,
   Contract,
   Address,
@@ -12,7 +13,7 @@ import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { config } from '../config';
 import { rpcPool } from './rpcPool';
 import { externalCallDuration } from './metrics';
-import { validateXdr, XdrValidationError, recordSeenHash } from './xdrValidator';
+import { validateXdr, XdrValidationError, recordSeenHash, checkFee } from './xdrValidator';
 import { logger } from '../logger';
 
 const tracer = trace.getTracer('soroban-service');
@@ -323,24 +324,39 @@ export class SorobanService {
     return tracer.startActiveSpan('contract.submitTransaction', async (span) => {
       const start = Date.now();
       try {
-        const tx = new Transaction(signedXdr, this.networkPassphrase);
-        const hash = tx.hash().toString('hex');
-        submittedTxTimeBounds.set(hash, {
+        const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
+        const parsed = TransactionBuilder.fromXDR(envelope, this.networkPassphrase);
+        const isFeeBump = parsed instanceof FeeBumpTransaction;
+        const tx: Transaction = isFeeBump ? (parsed as FeeBumpTransaction).innerTransaction : parsed;
+
+        // Range-check the outer fee-bump fee too: that is what the fee
+        // source actually pays, and it is distinct from the inner fee that
+        // the validator's checkFee already covers for non-fee-bump cases.
+        if (isFeeBump) {
+          checkFee(parsed as FeeBumpTransaction);
+        }
+
+        // Use the outer hash for RPC status polling (that is what
+        // sendTransaction/getTransaction key on), but the inner hash for
+        // duplicate detection, matching what validateXdr checked.
+        const outerHash = parsed.hash().toString('hex');
+        const innerHash = tx.hash().toString('hex');
+        submittedTxTimeBounds.set(outerHash, {
           maxTime: tx.timeBounds?.maxTime ? Number(tx.timeBounds.maxTime) : 0,
           submittedAt: Math.floor(Date.now() / 1000),
         });
 
-        const response = await rpcPool.execute((server) => server.sendTransaction(tx));
+        const response = await rpcPool.execute((server) => server.sendTransaction(parsed));
         if (response.status === 'TRY_AGAIN_LATER') {
           throw new SorobanRetryableError();
         }
         if (response.status === 'ERROR') {
-          return { status: 'failed', hash, error: response.errorResult?.toXDR('base64') };
+          return { status: 'failed', hash: outerHash, error: response.errorResult?.toXDR('base64') };
         }
         if (response.status === 'PENDING' || response.status === 'DUPLICATE') {
-          recordSeenHash(hash);
+          recordSeenHash(innerHash);
         }
-        return { status: 'pending', hash };
+        return { status: 'pending', hash: outerHash };
       } catch (err) {
         if (err instanceof SorobanRetryableError) throw err;
         throw new SorobanRpcError('Soroban submitTransaction failed', { cause: err });

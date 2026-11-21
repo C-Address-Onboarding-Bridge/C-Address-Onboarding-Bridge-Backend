@@ -286,7 +286,7 @@ function checkNetwork(tx: Transaction, _networkPassphrase: string): void {
   }
 }
 
-function checkFee(tx: Transaction): void {
+export function checkFee(tx: Transaction | FeeBumpTransaction): void {
   const fee = Number(tx.fee);
   if (!Number.isFinite(fee) || fee < MIN_FEE_STROOPS) {
     throw new XdrValidationError(
