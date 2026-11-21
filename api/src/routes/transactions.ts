@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { requireScopes } from '../middleware/rbacAuth';
+import { asyncHandler } from '../utils/asyncHandler';
 import {
   listTransactions,
   serializeTransactionsCsv,
@@ -12,7 +13,7 @@ export const transactionsRouter = Router();
 
 export const TRANSACTIONS_CACHE_NAMESPACE = 'transactions';
 
-transactionsRouter.get('/', requireScopes('transactions:read'), async (req: Request, res: Response) => {
+transactionsRouter.get('/', requireScopes('transactions:read'), asyncHandler(async (req: Request, res: Response) => {
   const status = typeof req.query.status === 'string' ? (req.query.status as TransactionStatus) : undefined;
   const fromDate = typeof req.query.fromDate === 'string' ? req.query.fromDate : undefined;
   const toDate = typeof req.query.toDate === 'string' ? req.query.toDate : undefined;
@@ -57,7 +58,7 @@ transactionsRouter.get('/', requireScopes('transactions:read'), async (req: Requ
 
   res.setHeader('X-Cache', res.getHeader('X-Cache') ?? 'MISS');
   res.json(result);
-});
+}));
 
 /**
  * Invalidate all transaction list cache entries.

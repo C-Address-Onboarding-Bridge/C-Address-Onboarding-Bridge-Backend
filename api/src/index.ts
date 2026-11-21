@@ -6,6 +6,14 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
 import { logger } from './logger';
+
+// Last-resort safety net: Express 4 does not forward a rejected promise from
+// an async handler to error middleware, so an unguarded async route can
+// terminate the whole process on Node >= 15. Routes should use asyncHandler,
+// but this keeps a stray rejection from killing the server.
+process.on('unhandledRejection', (reason) => {
+  logger.error({ err: reason }, 'unhandledRejection');
+});
 import { fundingRouter } from './routes/funding';
 import { quoteRouter } from './routes/quote';
 import { statusRouter } from './routes/status';

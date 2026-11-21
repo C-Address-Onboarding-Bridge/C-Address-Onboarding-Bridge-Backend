@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { sorobanService, SorobanRpcError } from '../services/soroban';
 import { getQueueStats } from '../jobs/queue';
 
@@ -36,7 +36,7 @@ export function invalidateStatusCache(txHash?: string): void {
   statusCache.clear();
 }
 
-router.get('/:txHash', async (req: Request, res: Response) => {
+router.get('/:txHash', async (req: Request, res: Response, next: NextFunction) => {
   const { txHash } = req.params;
 
   if (!TX_HASH_REGEX.test(txHash)) {
@@ -62,7 +62,7 @@ router.get('/:txHash', async (req: Request, res: Response) => {
         message: error.message,
       });
     }
-    throw error;
+    next(error);
   }
 });
 
