@@ -1287,23 +1287,35 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/telemetry/telemetry',
+  path: '/api/telemetry',
   operationId: 'submitTelemetry',
   summary: 'Submit SDK telemetry',
-  description: 'Anonymous SDK usage telemetry. No API key required; rate limited per IP.',
+  description: 'Anonymous SDK usage telemetry. Accepts a single event or a batch array (max 100). No API key required; rate limited per IP.',
   tags: ['Observability'],
   request: {
     body: {
       content: json(
         z
-          .object({
-            sdkVersion: z.string().min(1),
-            nodeVersion: z.string().min(1),
-            platform: z.string().min(1),
-            method: z.string().min(1),
-            responseTimeMs: z.number().int().nonnegative(),
-            errorType: z.string().optional(),
-          })
+          .union([
+            z.object({
+              sdkVersion: z.string().min(1),
+              nodeVersion: z.string().min(1),
+              platform: z.string().min(1),
+              method: z.string().min(1),
+              responseTimeMs: z.number().nonnegative(),
+              errorType: z.string().optional(),
+            }),
+            z.array(
+              z.object({
+                sdkVersion: z.string().min(1),
+                nodeVersion: z.string().min(1),
+                platform: z.string().min(1),
+                method: z.string().min(1),
+                responseTimeMs: z.number().nonnegative(),
+                errorType: z.string().optional(),
+              }),
+            ).min(1).max(100),
+          ])
           .openapi({ title: 'TelemetryEvent' }),
       ),
     },
