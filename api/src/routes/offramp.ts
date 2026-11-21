@@ -98,6 +98,7 @@ interface ProviderQuote {
   fiatAmount: number;
   cryptoAmount: number;
   feeAmount: number;
+  feeCurrency: string;
   netAmount: number;
   estimatedRate: number;
 }
@@ -118,6 +119,8 @@ offrampRouter.get('/quote', async (req: Request, res: Response, next: NextFuncti
           fiatAmount: params.fiatAmount,
           cryptoAmount: quote.quoteCurrencyAmount,
           feeAmount: quote.feeAmount,
+          feeCurrency: params.fiatCurrency,
+          // feeAmount is already deducted by MoonPay; cryptoAmount is net.
           netAmount: quote.quoteCurrencyAmount,
           estimatedRate: quote.quoteCurrencyAmount / params.fiatAmount,
         };
@@ -133,7 +136,10 @@ offrampRouter.get('/quote', async (req: Request, res: Response, next: NextFuncti
           fiatAmount: params.fiatAmount,
           cryptoAmount: quote.cryptoAmount,
           feeAmount: quote.feeAmount,
-          netAmount: quote.cryptoAmount - quote.feeAmount,
+          feeCurrency: params.fiatCurrency,
+          // quote.feeAmount is a FIAT fee; quote.cryptoAmount is already net crypto.
+          // Never subtract a fiat fee from a crypto amount.
+          netAmount: quote.cryptoAmount,
           estimatedRate: quote.cryptoAmount / params.fiatAmount,
         };
       })(),
