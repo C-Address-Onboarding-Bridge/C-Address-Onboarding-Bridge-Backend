@@ -12,7 +12,7 @@ import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { config } from '../config';
 import { rpcPool } from './rpcPool';
 import { externalCallDuration } from './metrics';
-import { validateXdr, XdrValidationError } from './xdrValidator';
+import { validateXdr, XdrValidationError, recordSeenHash } from './xdrValidator';
 import { logger } from '../logger';
 
 const tracer = trace.getTracer('soroban-service');
@@ -336,6 +336,9 @@ export class SorobanService {
         }
         if (response.status === 'ERROR') {
           return { status: 'failed', hash, error: response.errorResult?.toXDR('base64') };
+        }
+        if (response.status === 'PENDING' || response.status === 'DUPLICATE') {
+          recordSeenHash(hash);
         }
         return { status: 'pending', hash };
       } catch (err) {
