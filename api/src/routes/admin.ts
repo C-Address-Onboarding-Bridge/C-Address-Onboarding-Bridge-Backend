@@ -97,7 +97,7 @@ adminRouter.get('/health', requireScopes('admin:keys'), async (_req: Request, re
   }
 
   const health = await getHealthStatus();
-  const statusCode = health.status === 'unhealthy' ? 503 : health.status === 'degraded' ? 207 : 200;
+  const statusCode = health.status === 'unhealthy' ? 503 : 200;
 
   res.status(statusCode).json({
     ...health,
