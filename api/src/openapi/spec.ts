@@ -1246,9 +1246,10 @@ adminPath('get', '/audit/integrity/export', 'exportAuditLog', 'Export the audit 
 
 registry.registerPath({
   method: 'get',
-  path: '/api/v1/cache/metrics',
+  path: '/api/cache-metrics',
   operationId: 'getCacheMetrics',
   summary: 'Cache hit/miss statistics',
+  description: 'Requires the `metrics:read` scope.',
   tags: ['Observability'],
   security: [{ ApiKeyAuth: [] }],
   responses: {

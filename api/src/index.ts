@@ -195,7 +195,7 @@ app.use('/api/v1/api-keys', rbacAuth, apiKeysRouter);
 app.use('/api/v1/webhooks', rbacAuth, webhookAdminRouter);
 app.use('/api/webhook/moonpay', moonpayWebhookRouter);
 app.use('/api/webhook/transak', transakWebhookRouter);
-app.use('/api/cache-metrics', rbacAuth, cacheMetricsRouter);
+app.use('/api/cache-metrics', rbacAuth, requireScopes('metrics:read'), cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
 app.use('/metrics', rbacAuth, requireScopes('metrics:read'), metricsRouter);
