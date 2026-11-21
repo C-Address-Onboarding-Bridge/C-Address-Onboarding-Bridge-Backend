@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct Quote {
@@ -43,8 +42,18 @@ pub struct FundPrepareBody<'a> {
 
 #[derive(Debug, Deserialize)]
 pub struct FundPrepareResult {
-    pub instruction: String,
-    pub simulation: HashMap<String, String>,
+    #[serde(rename = "unsignedXdr")]
+    pub unsigned_xdr: String,
+    pub footprint: String,
+    pub fee: String,
+    #[serde(rename = "sourceAddress")]
+    pub source_address: String,
+    #[serde(rename = "targetAddress")]
+    pub target_address: String,
+    #[serde(rename = "tokenAddress")]
+    pub token_address: String,
+    pub amount: String,
+    pub memo: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -22,9 +22,15 @@ public final class Example {
         try {
             System.out.println("Health: " + client.health());
             System.out.println("Quote: " + client.getQuote("XLM", "10000000", MOCK_C_ADDRESS));
-            System.out.println("Prepared: " + client.prepareFunding(
-                    MOCK_G_ADDRESS, MOCK_C_ADDRESS, MOCK_TOKEN_ADDRESS, "10000000", "onboarding"));
-            JsonNode funded = client.submitSignedXdr("AAAAAgAAAABexampleSignedTransactionXdr");
+            JsonNode prepared = client.prepareFunding(
+                    MOCK_G_ADDRESS, MOCK_C_ADDRESS, MOCK_TOKEN_ADDRESS, "10000000", "onboarding");
+            System.out.println("Prepared: unsignedXdr=" + prepared.path("unsignedXdr").asText("").substring(0, Math.min(40, prepared.path("unsignedXdr").asText("").length())) + "...");
+
+            // In production, sign prepared.unsignedXdr with the source key using java-stellar-sdk.
+            // For this example against the mock server we re-use the unsigned XDR directly
+            // (the mock validates only that the submitted value starts with 'AAAA').
+            String unsignedXdr = prepared.path("unsignedXdr").asText();
+            JsonNode funded = client.submitSignedXdr(unsignedXdr);
             System.out.println("Funded: " + funded);
             JsonNode hashNode = funded.get("hash");
             if (hashNode == null || hashNode.isNull()) {

@@ -29,10 +29,13 @@ async fn main() -> Result<(), BridgeError> {
             memo: "onboarding",
         })
         .await?;
-    println!("Funding prepared: {}...", &prepared.instruction[..prepared.instruction.len().min(40)]);
+    println!("Funding prepared: unsignedXdr={}...", &prepared.unsigned_xdr[..prepared.unsigned_xdr.len().min(40)]);
 
+    // In production, sign prepared.unsigned_xdr with the source key using stellar-base.
+    // For this example against the mock server we re-use the unsigned XDR directly
+    // (the mock validates only that the submitted value starts with 'AAAA').
     let funded = client
-        .submit_signed_xdr("AAAAAgAAAABexampleSignedTransactionXdr")
+        .submit_signed_xdr(&prepared.unsigned_xdr)
         .await?;
     println!(
         "Fund submitted: {} hash={}...",
