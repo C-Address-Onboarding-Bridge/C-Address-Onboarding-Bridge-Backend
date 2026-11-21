@@ -43,10 +43,10 @@ function makeMigration(
     name,
     upCalled: false,
     downCalled: false,
-    async up() {
+    async up(_client: PoolClient) {
       m.upCalled = true;
     },
-    async down() {
+    async down(_client: PoolClient) {
       m.downCalled = true;
     },
   };
@@ -209,10 +209,10 @@ describe('MigrationRunner', () => {
       const failingMigration: Migration = {
         version: '001',
         name: 'will_fail',
-        async up() {
+        async up(_client: PoolClient) {
           throw new Error('migration failed');
         },
-        async down() {},
+        async down(_client: PoolClient) {},
       };
       runner.register(failingMigration);
 

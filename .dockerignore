@@ -1,0 +1,46 @@
+# Node
+**/node_modules
+**/dist
+**/.npm
+
+# Environment / secrets
+.env
+.env.*
+*.local
+.secrets.local.json
+.secrets.local.enc
+
+# Git
+.git
+.gitignore
+
+# Rust / contracts
+contracts/**/target
+examples/rust/target
+
+# Test artifacts
+**/coverage
+**/__snapshots__
+**/*.snap
+**/vitest-results
+**/junit-*.xml
+**/test-results
+
+# Editor / OS
+.idea
+.vscode
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# CI / infra
+.github
+infrastructure
+monitoring
+reports

@@ -39,42 +39,8 @@ export class WebhookDeliveryRepository {
   constructor(private readonly pool: Pool) {}
 
   async init(): Promise<void> {
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS webhook_registrations (
-        id TEXT PRIMARY KEY,
-        url TEXT NOT NULL,
-        secret TEXT NOT NULL,
-        events TEXT[] NOT NULL DEFAULT '{}',
-        active BOOLEAN NOT NULL DEFAULT TRUE,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS webhook_dlq (
-        id TEXT PRIMARY KEY,
-        registration_id TEXT NOT NULL,
-        event TEXT NOT NULL,
-        payload JSONB NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS webhook_delivery_log (
-        id TEXT PRIMARY KEY,
-        registration_id TEXT NOT NULL,
-        event TEXT NOT NULL,
-        status TEXT NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        response_status INTEGER,
-        error TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await this.pool.query(
-      `CREATE INDEX IF NOT EXISTS webhook_delivery_log_created_at_idx ON webhook_delivery_log (created_at);`,
-    );
+    // Schema is created by the migration runner (migration 001).
+    // This stub is kept so callers do not need to change.
   }
 
   // --- Registrations -------------------------------------------------------
