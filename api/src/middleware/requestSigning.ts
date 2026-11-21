@@ -50,28 +50,60 @@ export function buildSigningPayload(
   return `${method.toUpperCase()}.${path}.${sortedQuery}.${bodyStr}.${timestamp}.${nonce}`;
 }
 
+/** Max allowed clock skew between client timestamp and server time, in seconds. */
+const MAX_CLOCK_SKEW_SECONDS = 300;
+
+/** How long a used nonce is remembered to reject replays, in seconds. */
+const NONCE_CACHE_TTL = MAX_CLOCK_SKEW_SECONDS * 2;
+
+/** Paths that must never require request signing (provider webhooks, docs, telemetry). */
+const SIGNING_EXEMPT_PREFIXES = ['/api/webhook/', '/api/docs', '/api/openapi.json', '/api/telemetry'];
+
+function isSigningExempt(path: string): boolean {
+  return SIGNING_EXEMPT_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+function constantTimeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export function requestSigningMiddleware(
   req: Request,
   res: Response,
   next: NextFunction
 ): void {
+  if (isSigningExempt(req.originalUrl.split('?')[0] ?? req.path)) {
+    next();
+    return;
+  }
+
   const signature = req.header('X-Signature');
   const timestamp = req.header('X-Timestamp');
   const nonce = req.header('X-Nonce');
 
   if (!signature || !timestamp || !nonce) {
+    if (!config.requestSigningRequired) {
+      next();
+      return;
+    }
     res.status(401).json({ error: 'missing_signature' });
     return;
   }
 
-  const now = Math.floor(Date.now() / 1000);
+  // Timestamps are sent in milliseconds (matches sdk/src/bridge.ts: String(Date.now())).
+  const now = Date.now();
   const ts = Number(timestamp);
-  if (!Number.isFinite(ts) || Math.abs(now - ts) > MAX_CLOCK_SKEW_SECONDS) {
+  if (!Number.isFinite(ts) || Math.abs(now - ts) > MAX_CLOCK_SKEW_SECONDS * 1000) {
     res.status(401).json({ error: 'invalid_timestamp' });
     return;
   }
 
-  const secret = process.env.REQUEST_SIGNING_SECRET;
+  const secret = config.signingSecret;
   if (!secret) {
     res.status(500).json({ error: 'signing_not_configured' });
     return;
@@ -82,9 +114,10 @@ export function requestSigningMiddleware(
     return res.status(401).json({ error: 'missing_api_key' });
   }
 
-  // Use the configured signing secret as the HMAC key, not the API key itself.
-  // The API key is sent in the same request, so it cannot serve as a secret.
-  const signingKey = config.signingSecret || apiKey;
+  // Use the configured signing secret (SIGNING_SECRET) as the HMAC key, not
+  // the API key itself. The API key is sent in the same request, so it
+  // cannot serve as a secret.
+  const signingKey = secret;
 
   // Reconstruct the signed payload from the raw body.
   // express.json() has already parsed req.body, so stringify it back for

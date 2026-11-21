@@ -128,6 +128,11 @@ export const config = {
    * Each API key record may store its own signing secret; this is the
    * global fallback. */
   signingSecret: process.env.SIGNING_SECRET || '',
+  /** When true, requests to signed routes must carry valid X-Signature /
+   * X-Timestamp / X-Nonce headers. Defaults to false so unsigned clients
+   * (legacy integrations, SDK clients with signing.enabled unset) are not
+   * rejected until signing is explicitly turned on. */
+  requestSigningRequired: process.env.REQUEST_SIGNING_REQUIRED === 'true',
   /** Shared secret sent by CloudFront as X-Origin-Verify. Enforced by
    * originVerifyMiddleware when ORIGIN_VERIFY_SECRET is set. */
   originVerifySecret: process.env.ORIGIN_VERIFY_SECRET || '',
