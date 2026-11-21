@@ -99,7 +99,7 @@ mock.onStatus(MOCK_TX_HASH).reply(200, fixtures.transactionStatus('success'));
 mock.onStatus().reply(200, fixtures.transactionStatus('failed'));
 
 // Generic route override (useful for paginated endpoints)
-mock.onRoute('GET', '/api/v1/txns').reply(200, {
+mock.onRoute('GET', '/api/v1/transactions').reply(200, {
   data: [{ id: 'tx1' }],
   nextCursor: null,
   hasMore: false,
@@ -154,6 +154,7 @@ expect(req.headers['x-api-key']).toBe('my-api-key');
 | `fixtures.transakWidgetResult(overrides?)` | `TransakWidgetResult` |
 | `fixtures.apiError(message, code?)` | `{ message, code? }` |
 | `fixtures.token(overrides?)` | `Token` |
+| `fixtures.transaction(overrides?)` | `Transaction` |
 | `fixtures.tokenMetadata(overrides?)` | `TokenMetadata` |
 
 Pre-built constants: `MOCK_C_ADDRESS`, `MOCK_G_ADDRESS`, `MOCK_TOKEN_ADDRESS`, `MOCK_TX_HASH`, `MOCK_QUOTE_PARAMS`, `MOCK_FUND_PARAMS`, `MOCK_NATIVE_TOKEN`, `MOCK_SAC_TOKEN`, `MOCK_TOKEN_METADATA`.

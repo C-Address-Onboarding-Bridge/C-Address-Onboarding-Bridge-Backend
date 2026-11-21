@@ -46,6 +46,7 @@ export function useTransactionStatus(
 
   useEffect(() => {
     if (!enabled || !txHash) {
+      setLoading(false);
       return;
     }
 

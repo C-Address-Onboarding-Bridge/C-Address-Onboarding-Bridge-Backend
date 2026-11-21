@@ -8,6 +8,7 @@ import {
   updateApiKey,
   getAuditLog,
   requireScopes,
+  validateIpOrCidr,
   PermissionScope,
 } from '../middleware/rbacAuth';
 
@@ -29,7 +30,9 @@ const patchApiKeySchema = z
   .object({
     name: z.string().min(1),
     scopes: z.array(z.enum(PERMISSION_SCOPES as [PermissionScope, ...PermissionScope[]])).min(1),
-    ipWhitelist: z.array(z.string()),
+    ipWhitelist: z.array(
+      z.string().refine(validateIpOrCidr, { message: 'Invalid IP address or CIDR' })
+    ),
     expiresAt: z.number().nullable(),
     rateLimit: z.enum(['low', 'standard', 'high']),
   })
@@ -38,7 +41,9 @@ const patchApiKeySchema = z
 const createApiKeySchema = z.object({
   name: z.string().min(1),
   scopes: z.array(z.enum(PERMISSION_SCOPES as [PermissionScope, ...PermissionScope[]])).min(1),
-  ipWhitelist: z.array(z.string()).optional(),
+  ipWhitelist: z.array(
+    z.string().refine(validateIpOrCidr, { message: 'Invalid IP address or CIDR' })
+  ).optional(),
   expiresAt: z.number().int().positive().nullable().optional(),
   rateLimit: z.enum(['low', 'standard', 'high']).optional(),
 });
