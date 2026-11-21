@@ -135,9 +135,14 @@ export class SorobanService {
    * (e.g. in tests without a live RPC).
    *
    * @param source - Optional source address for per-user rebate lookup.
+   * @param tokenAddress - Optional token contract address; required alongside
+   *   `source` to look up a rebate, since rebates are tracked per (user, token).
    * @returns Effective fee in basis points after any rebate.
    */
-  async getContractFeeBps(source?: string): Promise<{ feeBps: number; rebateBps: number }> {
+  async getContractFeeBps(
+    source?: string,
+    tokenAddress?: string,
+  ): Promise<{ feeBps: number; rebateBps: number }> {
     return tracer.startActiveSpan('contract.getFeeBps', async (span) => {
       try {
         let feeBps: number;
@@ -180,9 +185,9 @@ export class SorobanService {
           }
         }
 
-        // Per-user rebate via rebate_for(source). Best-effort; 0 on any error.
+        // Per-user rebate via rebate_for(user, token). Best-effort; 0 on any error.
         let rebateBps = 0;
-        if (source && this.contractId) {
+        if (source && tokenAddress && this.contractId) {
           try {
             const contract = new Contract(this.contractId);
             const tx = new TransactionBuilder(
@@ -190,7 +195,11 @@ export class SorobanService {
               { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
             )
               .addOperation(
-                contract.call('rebate_for', new Address(source).toScVal()),
+                contract.call(
+                  'rebate_for',
+                  new Address(source).toScVal(),
+                  new Address(tokenAddress).toScVal(),
+                ),
               )
               .setTimeout(30)
               .build();
@@ -205,8 +214,9 @@ export class SorobanService {
                 rebateBps = raw.u32();
               }
             }
-          } catch {
-            // rebate_for may not exist on all contract versions — ignore.
+          } catch (err) {
+            // rebate_for may not exist on all contract versions — degrade to 0.
+            logger.debug({ err }, 'rebate_for simulation failed; defaulting rebateBps to 0');
           }
         }
 
@@ -228,13 +238,18 @@ export class SorobanService {
    * @param _sourceAsset - Asset code (e.g. `XLM`, `USDC`). Reserved for future rate lookup.
    * @param amount - Amount in stroops as an integer string.
    * @param sourceAddress - Funding source address; used for rebate lookup.
+   * @param _targetAddress - Funding target address. Reserved for future use.
+   * @param tokenAddress - Token contract address; required alongside
+   *   `sourceAddress` to look up a per-user rebate.
    */
   async getQuote(
     _sourceAsset: string,
     amount: string,
-    sourceAddress: string,
+    sourceAddress?: string,
+    _targetAddress?: string,
+    tokenAddress?: string,
   ): Promise<{ fee: string; feeBps: number; rebateBps: number }> {
-    const { feeBps, rebateBps } = await this.getContractFeeBps(sourceAddress);
+    const { feeBps, rebateBps } = await this.getContractFeeBps(sourceAddress, tokenAddress);
     const effectiveBps = Math.max(0, feeBps - rebateBps);
     const amountBig = BigInt(amount);
     const fee = (amountBig * BigInt(effectiveBps)) / BigInt(BASIS_POINTS_DENOM);
