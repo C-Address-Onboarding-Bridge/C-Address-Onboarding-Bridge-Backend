@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getPool } from './db';
+import { logger } from '../logger';
 
 export type AuditEventType =
   | 'transaction_submission'
@@ -174,7 +175,7 @@ export class IntegrityAuditLogService {
 
     try {
       const entriesResult = await pool.query(
-        'SELECT sequence, id, timestamp, type, actor, payload, previous_hash, hash, retention_until FROM audit_log_entries ORDER BY sequence ASC',
+        'SELECT sequence, id, event_type, actor, payload, previous_hash, hash, created_at, retention_until FROM audit_log_entries ORDER BY sequence ASC',
       );
 
       for (const row of entriesResult.rows) {
@@ -207,7 +208,7 @@ export class IntegrityAuditLogService {
         this.checkpoints.push(checkpoint);
       }
     } catch (err) {
-      console.warn('Failed to load audit log from database:', err);
+      logger.warn({ err }, 'Failed to load audit log from database');
     }
   }
 
@@ -233,7 +234,7 @@ export class IntegrityAuditLogService {
         ],
       );
     } catch (err) {
-      console.warn('Failed to save audit entry to database:', err);
+      logger.error({ err, sequence: entry.sequence, type: entry.type }, 'Failed to save audit entry to database');
     }
   }
 
@@ -255,7 +256,7 @@ export class IntegrityAuditLogService {
         ],
       );
     } catch (err) {
-      console.warn('Failed to save checkpoint to database:', err);
+      logger.error({ err, sequence: checkpoint.sequence }, 'Failed to save audit checkpoint to database');
     }
   }
 

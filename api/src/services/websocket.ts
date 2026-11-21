@@ -18,7 +18,6 @@ const MAX_CONNECTIONS_PER_IP = 50;
 interface Subscription {
   txHash: string;
   lastStatus: string | null;
-  intervalId: NodeJS.Timeout;
 }
 
 interface ClientState {
@@ -77,11 +76,24 @@ async function pollStatusOnce(txHash: string): Promise<void> {
           timestamp: Date.now(),
         });
 
-        if (currentStatus === 'success' || currentStatus === 'failed') {
-          clearInterval(sub.intervalId);
+        if (currentStatus === 'success' || currentStatus === 'failed' || currentStatus === 'expired') {
           client.subscriptions.delete(txHash);
           send(client.ws, { type: 'subscription_closed', txHash, reason: 'terminal_status' });
         }
+      }
+    }
+
+    // Once every subscriber has been removed for a terminal status, stop the
+    // shared poller so no further RPC calls happen for this hash.
+    const stillSubscribed = Array.from(connectionsByToken.values())
+      .flatMap((set) => Array.from(set))
+      .some((c) => c.subscriptions.has(txHash));
+
+    if (!stillSubscribed) {
+      const pollerId = sharedPollers.get(txHash);
+      if (pollerId) {
+        clearInterval(pollerId);
+        sharedPollers.delete(txHash);
       }
     }
   } catch (err) {
@@ -108,7 +120,6 @@ function subscribe(client: ClientState, txHash: string, lastKnownStatus: string 
   const sub: Subscription = {
     txHash,
     lastStatus: lastKnownStatus,
-    intervalId: 0 as unknown as NodeJS.Timeout,
   };
 
   client.subscriptions.set(txHash, sub);
