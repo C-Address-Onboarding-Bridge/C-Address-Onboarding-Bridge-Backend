@@ -133,6 +133,10 @@ export const config = {
    * (legacy integrations, SDK clients with signing.enabled unset) are not
    * rejected until signing is explicitly turned on. */
   requestSigningRequired: process.env.REQUEST_SIGNING_REQUIRED === 'true',
+  /** Bootstrap key for the very first admin:keys-scoped key. Seeded once at
+   * boot (see seedAdminKey) so an operator can reach /api-keys, /webhooks
+   * and /admin on a fresh deployment, then mint properly scoped keys. */
+  adminApiKey: process.env.ADMIN_API_KEY || '',
   /** Shared secret sent by CloudFront as X-Origin-Verify. Enforced by
    * originVerifyMiddleware when ORIGIN_VERIFY_SECRET is set. */
   originVerifySecret: process.env.ORIGIN_VERIFY_SECRET || '',
