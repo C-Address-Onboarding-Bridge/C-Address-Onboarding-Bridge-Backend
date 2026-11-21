@@ -36,6 +36,22 @@ export function invalidateStatusCache(txHash?: string): void {
   statusCache.clear();
 }
 
+router.get('/queues', async (_req: Request, res: Response) => {
+  try {
+    const stats = await getQueueStats();
+    return res.json(stats);
+  } catch (error) {
+    return res.status(500).json({
+      error: 'Failed to fetch queue stats',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+router.get('/health', (_req: Request, res: Response) => {
+  return res.json({ status: 'ok' });
+});
+
 router.get('/:txHash', async (req: Request, res: Response) => {
   const { txHash } = req.params;
 
@@ -64,22 +80,6 @@ router.get('/:txHash', async (req: Request, res: Response) => {
     }
     throw error;
   }
-});
-
-router.get('/queues', async (_req: Request, res: Response) => {
-  try {
-    const stats = await getQueueStats();
-    return res.json(stats);
-  } catch (error) {
-    return res.status(500).json({
-      error: 'Failed to fetch queue stats',
-      message: error instanceof Error ? error.message : 'Unknown error',
-    });
-  }
-});
-
-router.get('/health', (_req: Request, res: Response) => {
-  return res.json({ status: 'ok' });
 });
 
 export const statusRouter = router;
