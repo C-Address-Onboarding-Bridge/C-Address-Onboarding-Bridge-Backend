@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
+import { isValidGAddress } from '../utils/constants';
 import { moonpayService } from '../services/moonpay';
 import { transakService } from '../services/transak';
 import { onrampRequestCount } from '../services/metrics';
@@ -11,7 +11,7 @@ export const offrampRouter = Router();
 
 const moonpaySchema = z.object({
   currencyCode: z.string().default('xlm'),
-  walletAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
+  walletAddress: z.string().refine(isValidGAddress, 'invalid Stellar account (G...) address'),
   walletNetwork: z.string().default('stellar'),
   baseCurrencyAmount: z.number().positive().optional(),
   baseCurrencyCode: z.string().optional(),
@@ -25,7 +25,7 @@ const moonpayQuoteSchema = z.object({
 });
 
 const transakSchema = z.object({
-  walletAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
+  walletAddress: z.string().refine(isValidGAddress, 'invalid Stellar account (G...) address'),
   network: z.string().default('stellar'),
   fiatCurrency: z.string().optional(),
   cryptoCurrency: z.string().optional(),
@@ -91,7 +91,6 @@ const quoteRequestSchema = z.object({
   fiatAmount: z.coerce.number().positive(),
   fiatCurrency: z.string().min(1),
   cryptoCurrency: z.string().min(1).default('xlm'),
-  cAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
 });
 
 interface ProviderQuote {
