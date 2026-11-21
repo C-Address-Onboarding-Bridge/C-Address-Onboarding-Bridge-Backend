@@ -44,7 +44,7 @@ const registerSchema = z.object({
 });
 
 // Register a webhook callback URL
-webhookAdminRouter.post('/register', requireScopes('admin:keys'), (req: Request, res: Response, next: NextFunction) => {
+webhookAdminRouter.post('/register', requireScopes('webhooks:manage'), (req: Request, res: Response, next: NextFunction) => {
   try {
     const apiKeyId = req.apiKeyRecord?.id ?? '';
     const body = registerSchema.parse(req.body);
@@ -61,7 +61,7 @@ webhookAdminRouter.post('/register', requireScopes('admin:keys'), (req: Request,
 });
 
 // List registered webhooks for the current API key
-webhookAdminRouter.get('/registrations', requireScopes('admin:keys'), (req: Request, res: Response) => {
+webhookAdminRouter.get('/registrations', requireScopes('webhooks:manage'), (req: Request, res: Response) => {
   const apiKeyId = req.apiKeyRecord?.id ?? '';
   const registrations = webhookDeliveryService.getRegistrationsByApiKeyId(apiKeyId).map((r) => ({
     id: r.id,
@@ -73,7 +73,7 @@ webhookAdminRouter.get('/registrations', requireScopes('admin:keys'), (req: Requ
 });
 
 // Delete a registration owned by the calling key
-webhookAdminRouter.delete('/registrations/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
+webhookAdminRouter.delete('/registrations/:id', requireScopes('webhooks:manage'), (req: Request, res: Response) => {
   const apiKeyId = req.apiKeyRecord?.id ?? '';
   const registration = webhookDeliveryService.getRegistration(req.params.id);
   if (!registration || registration.apiKeyId !== apiKeyId) {
@@ -130,7 +130,7 @@ router.delete('/:id', requireScopes('webhooks:write'), (req: Request, res: Respo
 });
 
 // DLQ inspection — list failed deliveries for the calling key
-webhookAdminRouter.get('/dlq', requireScopes('admin:keys'), (req: Request, res: Response) => {
+webhookAdminRouter.get('/dlq', requireScopes('webhooks:manage'), (req: Request, res: Response) => {
   const apiKeyId = req.apiKeyRecord?.id ?? '';
   const entries = webhookDeliveryService
     .getDLQ()
@@ -147,7 +147,7 @@ webhookAdminRouter.get('/dlq', requireScopes('admin:keys'), (req: Request, res: 
 });
 
 // DLQ entry detail — full payload and attempt history
-webhookAdminRouter.get('/dlq/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
+webhookAdminRouter.get('/dlq/:id', requireScopes('webhooks:manage'), (req: Request, res: Response) => {
   const apiKeyId = req.apiKeyRecord?.id ?? '';
   const entry = webhookDeliveryService.getDLQEntry(req.params.id);
   if (!entry || entry.registration.apiKeyId !== apiKeyId) {
@@ -159,7 +159,7 @@ webhookAdminRouter.get('/dlq/:id', requireScopes('admin:keys'), (req: Request, r
 });
 
 // Remove a DLQ entry after manual inspection / resolution
-webhookAdminRouter.delete('/dlq/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
+webhookAdminRouter.delete('/dlq/:id', requireScopes('webhooks:manage'), (req: Request, res: Response) => {
   const apiKeyId = req.apiKeyRecord?.id ?? '';
   const entry = webhookDeliveryService.getDLQEntry(req.params.id);
   if (!entry || entry.registration.apiKeyId !== apiKeyId) {
@@ -171,12 +171,12 @@ webhookAdminRouter.delete('/dlq/:id', requireScopes('admin:keys'), (req: Request
 });
 
 // Webhook health dashboard
-webhookAdminRouter.get('/stats', requireScopes('admin:keys'), (_req: Request, res: Response) => {
+webhookAdminRouter.get('/stats', requireScopes('webhooks:manage'), (_req: Request, res: Response) => {
   res.json(webhookDeliveryService.getStats());
 });
 
 // Delivery log — scoped to the calling key's registrations
-webhookAdminRouter.get('/log', requireScopes('admin:keys'), (req: Request, res: Response) => {
+webhookAdminRouter.get('/log', requireScopes('webhooks:manage'), (req: Request, res: Response) => {
   const apiKeyId = req.apiKeyRecord?.id ?? '';
   const registrationIds = new Set(
     webhookDeliveryService.getRegistrationsByApiKeyId(apiKeyId).map((r) => r.id),
