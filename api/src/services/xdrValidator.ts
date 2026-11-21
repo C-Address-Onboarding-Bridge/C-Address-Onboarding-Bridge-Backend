@@ -289,6 +289,17 @@ function checkTimeBounds(tx: Transaction): void {
       );
     }
   }
+
+  const minTime = Number(timeBounds.minTime);
+  if (minTime !== 0) {
+    const minTimeMs = minTime * 1000;
+    if (minTimeMs > now + MAX_MIN_TIME_SKEW_MS) {
+      throw new XdrValidationError(
+        'TRANSACTION_NOT_YET_VALID',
+        `Transaction is not valid until ${new Date(minTimeMs).toISOString()}`,
+      );
+    }
+  }
 }
 
 function checkSourceAccount(tx: Transaction): void {
