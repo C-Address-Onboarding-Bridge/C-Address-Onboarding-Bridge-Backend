@@ -207,6 +207,12 @@ app.use('/api/cache-metrics', rbacAuth, cacheMetricsRouter);
 // Prometheus metrics — internal only, protected by RBAC
 app.use('/metrics', rbacAuth, requireScopes('metrics:read'), metricsRouter);
 
+// Catch-all for unmatched routes: without this, Express's default
+// finalhandler answers with an HTML 404 instead of JSON.
+app.use((req, res) => {
+  res.status(404).json({ error: 'not_found' });
+});
+
 // Error handler must be the last middleware
 app.use(xssErrorSanitizer);
 app.use(errorHandler);
