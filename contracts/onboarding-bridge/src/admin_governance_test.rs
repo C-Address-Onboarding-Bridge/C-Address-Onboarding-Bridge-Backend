@@ -90,3 +90,26 @@ fn test_returning_funder_succeeds_after_default_ttl_elapsed() {
     bridge.fund_c_address(&source, &target, &token, &1000, &memo);
     assert_eq!(bridge.get_stats().unique_funder_count, 1);
 }
+
+// #1084: accounting actions respect the execution delay.
+
+#[test]
+fn test_rebate_tier_and_token_rate_respect_execution_delay() {
+    let env = Env::default();
+    let bridge = new_bridge(&env);
+    let admins = distinct_admins(&env, 1);
+    bridge.initialize(&admins, &1, &100, &1000, &1, &i128::MAX);
+    let admin = admins.get_unchecked(0);
+    let token = Address::generate(&env);
+
+    let p1 = bridge.propose(&admin, &ProposalAction::SetRebateTier(0, 1000, 100), &1000);
+    let p2 = bridge.propose(&admin, &ProposalAction::SetFeeTokenRate(token, 5000), &1000);
+
+    assert_eq!(bridge.try_execute(&p1), Err(Ok(BridgeError::ExecutionTooSoon)));
+    assert_eq!(bridge.try_execute(&p2), Err(Ok(BridgeError::ExecutionTooSoon)));
+
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + MIN_EXEC_DELAY);
+    bridge.execute(&p1);
+    bridge.execute(&p2);
+}

@@ -1279,6 +1279,18 @@ impl OnboardingBridge {
                 return Err(BridgeError::ExecutionTooSoon);
             }
         }
+        // Fee/accounting actions change money flows just like the actions
+        // above, so they get the same transparency window.
+        let delayed_accounting = matches!(
+            proposal.action,
+            ProposalAction::SetRebateTier(_, _, _)
+                | ProposalAction::SetFeeTokenWhitelist(_, _)
+                | ProposalAction::SetFeeTokenRate(_, _)
+                | ProposalAction::ArchiveOldEntries(_)
+        );
+        if delayed_accounting && env.ledger().sequence() < proposal.proposed_at + MIN_EXEC_DELAY {
+            return Err(BridgeError::ExecutionTooSoon);
+        }
 
         let mut executed_proposal = proposal.clone();
         executed_proposal.executed = true;
