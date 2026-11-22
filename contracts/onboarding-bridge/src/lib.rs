@@ -1249,7 +1249,7 @@ impl OnboardingBridge {
         if proposal.executed {
             return Err(BridgeError::ProposalAlreadyExecuted);
         }
-        if proposal.approval_count < threshold {
+        if count_current_admin_approvals(&env, proposal_id)? < threshold {
             return Err(BridgeError::InsufficientApprovals);
         }
 
@@ -1581,6 +1581,24 @@ impl OnboardingBridge {
 
         Ok(pruned)
     }
+}
+
+/// Counts approvals on a proposal that were given by admins in the *current*
+/// admin set, so approvals from admins removed by `RotateAdmins` are ignored.
+fn count_current_admin_approvals(env: &Env, proposal_id: u32) -> Result<u32, BridgeError> {
+    let admins: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admins)
+        .ok_or(BridgeError::NotInitialized)?;
+    let mut count = 0u32;
+    for i in 0..admins.len() {
+        let key = DataKey::ProposalApproval(proposal_id, admins.get_unchecked(i));
+        if env.storage().persistent().has(&key) {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn is_admin_in_list(admins: &Vec<Address>, addr: &Address) -> bool {

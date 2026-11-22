@@ -118,3 +118,32 @@ fn test_withdraw_fees_zero_amount_uses_per_token_balance() {
     assert_eq!(bridge.accumulated_fees_for_token(&token_b), 30);
 }
 
+/// #1081: an approval from an admin removed by RotateAdmins no longer counts.
+#[test]
+fn test_removed_admin_approval_not_counted_after_rotation() {
+    let (env, bridge, admins) = setup(2, 2, 100);
+    let removed = admins.get_unchecked(1);
+    let pending = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetFee(200), &1000);
+    bridge.approve(&removed, &pending);
+
+    let mut new_admins: Vec<Address> = Vec::new(&env);
+    new_admins.push_back(admins.get_unchecked(0));
+    new_admins.push_back(Address::generate(&env));
+    let rotation = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::RotateAdmins(new_admins.clone()),
+        &1000,
+    );
+    bridge.approve(&removed, &rotation);
+    advance(&env, MIN_EXEC_DELAY);
+    bridge.execute(&rotation);
+
+    assert_eq!(
+        bridge.try_execute(&pending),
+        Err(Ok(BridgeError::InsufficientApprovals))
+    );
+
+    // A current admin's approval makes the proposal executable again.
+    bridge.approve(&new_admins.get_unchecked(1), &pending);
+    bridge.execute(&pending);
+}

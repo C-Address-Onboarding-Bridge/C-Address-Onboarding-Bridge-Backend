@@ -1452,7 +1452,7 @@ fn test_rotate_admins_removes_old_admin_privileges() {
 }
 
 #[test]
-#[should_panic(expected = "insufficient approvals")]
+#[should_panic(expected = "Error(Contract, #28)")]
 fn test_removed_admin_approval_does_not_count_for_pending_proposal() {
     let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
     let removed_admin = admins.get_unchecked(1);
