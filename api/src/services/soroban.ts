@@ -157,7 +157,7 @@ export class SorobanService {
               .setTimeout(30)
               .build();
 
-            const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
+            const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx), 'simulateTransaction');
             if (
               SorobanService.isSimulationSuccess(simulation) &&
               simulation.result?.retval
@@ -194,7 +194,7 @@ export class SorobanService {
               .setTimeout(30)
               .build();
 
-            const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
+            const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx), 'simulateTransaction');
             if (
               SorobanService.isSimulationSuccess(simulation) &&
               simulation.result?.retval
@@ -255,7 +255,7 @@ export class SorobanService {
       try {
         const contract = new Contract(this.contractId);
         const sourceAccount = await rpcPool.execute((server) =>
-          server.getAccount(params.source),
+          server.getAccount(params.source), 'getAccount',
         );
 
         const tx = new TransactionBuilder(sourceAccount, {
@@ -278,7 +278,7 @@ export class SorobanService {
           .setTimeout(30)
           .build();
 
-        const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx));
+        const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx), 'simulateTransaction');
         if (!SorobanService.isSimulationSuccess(simulation)) {
           throw new SorobanSimulationError('Funding simulation failed');
         }
@@ -330,7 +330,7 @@ export class SorobanService {
           submittedAt: Math.floor(Date.now() / 1000),
         });
 
-        const response = await rpcPool.execute((server) => server.sendTransaction(tx));
+        const response = await rpcPool.execute((server) => server.sendTransaction(tx), 'sendTransaction');
         if (response.status === 'TRY_AGAIN_LATER') {
           throw new SorobanRetryableError();
         }
@@ -354,7 +354,7 @@ export class SorobanService {
   async getTransactionStatus(hash: string): Promise<SorobanTxResponse> {
     return tracer.startActiveSpan('contract.getTransactionStatus', async (span) => {
       try {
-        const response = await rpcPool.execute((server) => server.getTransaction(hash));
+        const response = await rpcPool.execute((server) => server.getTransaction(hash), 'getTransaction');
         if (response.status === 'SUCCESS') {
           submittedTxTimeBounds.delete(hash);
           return { status: 'success', hash };

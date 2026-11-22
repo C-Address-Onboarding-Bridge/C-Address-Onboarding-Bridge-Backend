@@ -3,6 +3,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { applyKeepAliveAgents } from './httpAgent';
 import { getCircuitBreaker } from '../circuit-breaker';
+import { recordSorobanRpcCall } from './metrics';
 
 interface ProviderState {
   url: string;
@@ -122,11 +123,14 @@ export class RpcPool {
   }
 
   /** Runs `fn` against a healthy provider (failing over between them) behind the soroban circuit breaker. */
-  async execute<T>(fn: (_server: SorobanRpc.Server) => Promise<T>): Promise<T> {
-    return getCircuitBreaker('soroban').execute(() => this.executeWithFailover(fn));
+  async execute<T>(fn: (_server: SorobanRpc.Server) => Promise<T>, method = 'rpc_call'): Promise<T> {
+    return getCircuitBreaker('soroban').execute(() => this.executeWithFailover(fn, method));
   }
 
-  private async executeWithFailover<T>(fn: (_server: SorobanRpc.Server) => Promise<T>): Promise<T> {
+  private async executeWithFailover<T>(
+    fn: (_server: SorobanRpc.Server) => Promise<T>,
+    method: string
+  ): Promise<T> {
     const tried = new Set<string>();
     const allProviders = [...this.providers];
 
@@ -146,9 +150,11 @@ export class RpcPool {
         const result = await fn(provider.server);
         provider.consecutiveFailures = 0;
         provider.lastLatencyMs = Date.now() - start;
+        recordSorobanRpcCall(method, provider.lastLatencyMs / 1000, true);
         return result;
       } catch (err) {
         lastError = err;
+        recordSorobanRpcCall(method, (Date.now() - start) / 1000, false);
         this.markFailure(provider);
         logger.warn({ url: provider.url, attempt }, 'rpc call failed, trying next provider');
       }
