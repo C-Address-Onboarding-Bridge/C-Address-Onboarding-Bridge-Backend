@@ -23,6 +23,7 @@ services:
     volumes:
       - ./infrastructure/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infrastructure/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     secrets:
       - prometheus_scrape_key
@@ -58,6 +59,7 @@ services:
       - grafana_data:/var/lib/grafana
       - ./infrastructure/observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infrastructure/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards-monitoring:ro
     depends_on:
       - prometheus
       - loki
