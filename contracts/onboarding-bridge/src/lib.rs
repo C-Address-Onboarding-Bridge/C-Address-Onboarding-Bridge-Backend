@@ -120,7 +120,12 @@ pub enum BridgeError {
     InsufficientAccumulatedFees = 32,
     DiscountTooHigh = 33,
     TierCapExceeded = 34,
+    /// The admin list contains the same address more than once.
+    DuplicateAdmin = 35,
 }
+
+#[cfg(test)]
+mod admin_governance_test;
 
 #[contractevent(topics = ["initialize"], data_format = "vec")]
 #[derive(Clone)]
@@ -422,6 +427,13 @@ impl OnboardingBridge {
             let admin = admins.get_unchecked(i);
             if admin == contract_address {
                 return Err(BridgeError::AdminCannotBeContract);
+            }
+            // Duplicates would count toward `admins.len()` in threshold
+            // checks but can only approve once, making a threshold unreachable.
+            for j in (i + 1)..admins.len() {
+                if admins.get_unchecked(j) == admin {
+                    return Err(BridgeError::DuplicateAdmin);
+                }
             }
         }
         Ok(())
