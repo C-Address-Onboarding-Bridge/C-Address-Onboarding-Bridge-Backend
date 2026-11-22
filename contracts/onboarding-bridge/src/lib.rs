@@ -319,6 +319,8 @@ pub enum ProposalAction {
     WithdrawFees(Address, Address, i128),
     Pause,
     Unpause,
+    /// Replaces the live contract WASM with the given hash (governed, timelocked).
+    Upgrade(BytesN<32>),
     /// Replaces the entire admin set. The current threshold must still be
     /// satisfiable by the new admin count, or execution panics.
     RotateAdmins(Vec<Address>),
@@ -1256,6 +1258,7 @@ impl OnboardingBridge {
                 | ProposalAction::SetFee(_)
                 | ProposalAction::Pause
                 | ProposalAction::Unpause
+                | ProposalAction::Upgrade(_)
                 | ProposalAction::RotateAdmins(_)
                 | ProposalAction::SetThreshold(_)
         );
@@ -1382,6 +1385,10 @@ impl OnboardingBridge {
             ProposalAction::Unpause => {
                 env.storage().instance().set(&DataKey::Paused, &false);
                 Unpaused.publish(&env);
+                0i128
+            }
+            ProposalAction::Upgrade(wasm_hash) => {
+                upgrade::apply_upgrade(&env, wasm_hash);
                 0i128
             }
             ProposalAction::RotateAdmins(new_admins) => {
@@ -1592,4 +1599,7 @@ fn is_admin_in_list(admins: &Vec<Address>, addr: &Address) -> bool {
     false
 }
 
+mod upgrade;
+#[cfg(test)]
+mod upgrade_test;
 mod test;
