@@ -1640,7 +1640,7 @@ fn test_initialize() {
 }
 
 #[test]
-#[should_panic(expected = "contract already initialized")]
+#[should_panic(expected = "Error(Contract, #36)")]
 fn test_double_initialize_fails() {
     let (env, bridge) = setup_env();
     let admins = create_admins(&env, 2);

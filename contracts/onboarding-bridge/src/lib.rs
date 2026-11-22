@@ -120,6 +120,7 @@ pub enum BridgeError {
     InsufficientAccumulatedFees = 32,
     DiscountTooHigh = 33,
     TierCapExceeded = 34,
+    AlreadyInitialized = 36,
 }
 
 #[contractevent(topics = ["initialize"], data_format = "vec")]
@@ -476,7 +477,7 @@ impl OnboardingBridge {
         max_amount: i128,
     ) -> Result<(), BridgeError> {
         if env.storage().instance().has(&DataKey::Version) {
-            return Ok(());
+            return Err(BridgeError::AlreadyInitialized);
         }
         if admins.is_empty() {
             return Err(BridgeError::AdminsEmpty);
@@ -501,6 +502,12 @@ impl OnboardingBridge {
         }
 
         Self::validate_admins(&env, &admins)?;
+
+        // Every admin must authorize initialization so nobody can front-run
+        // the deployer and install their own governance.
+        for admin in admins.iter() {
+            admin.require_auth();
+        }
 
         env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage()
