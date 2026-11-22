@@ -113,3 +113,37 @@ fn test_rebate_tier_and_token_rate_respect_execution_delay() {
     bridge.execute(&p1);
     bridge.execute(&p2);
 }
+
+// #1082: pruning is permissionless and skips over active proposals.
+
+#[test]
+fn test_prune_skips_active_proposal_and_prunes_later_terminal_ones() {
+    let env = Env::default();
+    let bridge = new_bridge(&env);
+    let admins = distinct_admins(&env, 2);
+    bridge.initialize(&admins, &2, &100, &1000, &1, &i128::MAX);
+    let a = admins.get_unchecked(0);
+    let b = admins.get_unchecked(1);
+
+    // [active (long expiry), executed, expired]
+    let active = bridge.propose(&a, &ProposalAction::SetFee(150), &100_000);
+    let executed = bridge.propose(&a, &ProposalAction::SetFee(200), &100_000);
+    bridge.approve(&b, &executed);
+    let expired = bridge.propose(&a, &ProposalAction::SetFee(300), &10);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + MIN_EXEC_DELAY + 20);
+    bridge.execute(&executed);
+
+    // The call takes no caller and requires no auth, so any party may prune.
+    let pruned = bridge.prune_proposals(&10);
+    assert_eq!(pruned, 2);
+
+    let exists = |id: u32| {
+        env.as_contract(&bridge.address, || {
+            env.storage().persistent().has(&DataKey::Proposal(id))
+        })
+    };
+    assert!(exists(active));
+    assert!(!exists(executed));
+    assert!(!exists(expired));
+}

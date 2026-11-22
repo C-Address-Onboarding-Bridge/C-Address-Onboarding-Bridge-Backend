@@ -1536,9 +1536,9 @@ impl OnboardingBridge {
     /// into instance storage and previously nothing ever removed them, so the
     /// contract's instance footprint grew forever with governance activity.
     /// This sweeps forward from the last pruned id, scanning at most
-    /// `max_scan` proposals, stopping early if it reaches a proposal that is
-    /// still active (neither executed nor expired) so a later call can pick
-    /// up from there once it becomes terminal. Returns the number of
+    /// `max_scan` proposals, skipping over proposals that are still
+    /// active (neither executed nor expired) while keeping the cursor at the
+    /// lowest active id so a later call can pick it up once it is terminal. Returns the number of
     /// proposals actually pruned.
     pub fn prune_proposals(env: Env, max_scan: u32) -> Result<u32, BridgeError> {
         let admins: Vec<Address> = env
@@ -1546,9 +1546,8 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::Admins)
             .ok_or(BridgeError::NotInitialized)?;
-        if !admins.is_empty() {
-            admins.get_unchecked(0).require_auth();
-        }
+        // Permissionless: pruning only deletes terminal (executed or expired)
+        // proposals, so no caller authorization is needed.
         Self::extend_ttl(&env);
 
         let nonce: u32 = env
@@ -1561,6 +1560,9 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::NextPruneId)
             .unwrap_or(1);
+        // Lowest still-active id seen this call; the stored cursor never
+        // advances past it, but scanning continues beyond it.
+        let mut first_active: Option<u32> = None;
         let current_block = env.ledger().sequence();
 
         let mut pruned: u32 = 0;
@@ -1587,21 +1589,23 @@ impl OnboardingBridge {
                             .persistent()
                             .remove(&DataKey::ProposalApproval(cursor, proposal.proposer));
                         pruned += 1;
-                        cursor += 1;
-                    } else {
-                        // Still active: stop advancing so a future call
-                        // resumes here instead of skipping it permanently.
-                        break;
+                    } else if first_active.is_none() {
+                        // Still active: remember it so the stored cursor
+                        // resumes here, but keep scanning later proposals.
+                        first_active = Some(cursor);
                     }
                 }
                 None => {
                     // Already pruned in a previous call — keep advancing.
-                    cursor += 1;
                 }
             }
+            cursor += 1;
             scanned += 1;
         }
 
+        if let Some(id) = first_active {
+            cursor = id;
+        }
         env.storage().instance().set(&DataKey::NextPruneId, &cursor);
 
         ProposalsPruned { pruned, cursor }.publish(&env);
