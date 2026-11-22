@@ -14,6 +14,7 @@ export class PaginationHelper<T> {
     const sig = signal ?? this.options.signal;
     const throttleMs = this.options.throttleMs ?? 0;
     let cursor: string | undefined;
+    const seenCursors = new Set<string>();
 
     do {
       if (sig?.aborted) break;
@@ -21,14 +22,19 @@ export class PaginationHelper<T> {
       const page = await this.fetcher({ cursor, limit: this.options.pageSize });
       yield page;
 
-      cursor = page.nextCursor ?? undefined;
+      const nextCursor = page.nextCursor ?? undefined;
+
+      if (!page.hasMore || !nextCursor) break;
+      if (seenCursors.has(nextCursor)) break;
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
 
       if (cursor && throttleMs > 0) {
         await new Promise<void>((resolve, reject) => {
           const t = setTimeout(resolve, throttleMs);
           sig?.addEventListener('abort', () => {
             clearTimeout(t);
-            reject(new Error('Aborted'));
+            reject(sig!.reason instanceof Error ? sig!.reason : new DOMException('Aborted', 'AbortError'));
           }, { once: true });
         });
       }
@@ -36,9 +42,17 @@ export class PaginationHelper<T> {
   }
 
   async all(signal?: AbortSignal): Promise<T[]> {
+    const sig = signal ?? this.options.signal;
     const results: T[] = [];
-    for await (const page of this.pages(signal)) {
-      results.push(...page.data);
+    try {
+      for await (const page of this.pages(signal)) {
+        results.push(...page.data);
+      }
+    } catch (err) {
+      throw err;
+    }
+    if (sig?.aborted) {
+      throw sig.reason instanceof Error ? sig.reason : new DOMException('Aborted', 'AbortError');
     }
     return results;
   }
@@ -71,5 +85,6 @@ export async function collectAllPages<T>(
   fetcher: PageFetcher<T>,
   options?: AutoPaginateOptions,
 ): Promise<T[]> {
-  throw new Error('Not implemented: collectAllPages');
+  const helper = new PaginationHelper(fetcher, options);
+  return helper.all(options?.signal);
 }

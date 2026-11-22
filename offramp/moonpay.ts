@@ -25,7 +25,24 @@ export interface MoonpayPurchaseParams {
  * @returns Fully-formed URL to open in a browser or WebView.
  */
 export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPurchaseParams): string {
-  throw new Error('Not implemented: createMoonpayWidgetUrl');
+  const query = new URLSearchParams();
+  query.set('apiKey', config.apiKey);
+  query.set('walletAddress', params.walletAddress);
+  query.set('walletNetwork', params.walletNetwork);
+  if (params.currencyCode !== undefined) query.set('currencyCode', params.currencyCode);
+  if (params.baseCurrency !== undefined) query.set('baseCurrency', params.baseCurrency);
+  if (params.baseCurrencyAmount !== undefined) query.set('baseCurrencyAmount', String(params.baseCurrencyAmount));
+  if (params.email !== undefined) query.set('email', params.email);
+  if (params.redirectUrl !== undefined) query.set('redirectUrl', params.redirectUrl);
+
+  const queryString = `?${query.toString()}`;
+
+  const signature = crypto
+    .createHmac('sha256', config.secretKey)
+    .update(queryString)
+    .digest('base64');
+
+  return `https://buy.moonpay.com${queryString}&signature=${encodeURIComponent(signature)}`;
 }
 
 /**
@@ -33,12 +50,23 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
  *
  * @param config - MoonPay credentials (only `secretKey` is used).
  * @param rawBody - Raw request body string received from MoonPay.
- * @param signature - Value of the `x-moonpay-signature` header.
+ * @param signature - Value of the `x-moonpay-signature` header (hex).
  * @returns `true` when the signature matches, `false` otherwise (including
  * when the signature has a different byte length than the computed HMAC).
  */
 export function verifyMoonpayWebhook(config: MoonpayConfig, rawBody: string, signature: string): boolean {
-  throw new Error('Not implemented: verifyMoonpayWebhook');
+  const computed = crypto
+    .createHmac('sha256', config.secretKey)
+    .update(rawBody)
+    .digest('hex');
+
+  if (computed.length !== signature.length) return false;
+
+  try {
+    return crypto.timingSafeEqual(Buffer.from(computed, 'hex'), Buffer.from(signature, 'hex'));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -53,9 +81,7 @@ export async function getMoonpayBuyQuote(config: MoonpayConfig, params: {
   baseCurrency: string;
   baseCurrencyAmount: number;
   quoteCurrency: string;
-}): Promise<{
-  throw new Error('Not implemented: getMoonpayBuyQuote');
-}> {
+}): Promise<{ quoteCurrencyAmount: number; feeAmount: number; totalAmount: number }> {
   const url = `https://api.moonpay.com/v3/currencies/${params.quoteCurrency}/buy_quote`;
   const query = new URLSearchParams({
     apiKey: config.apiKey,

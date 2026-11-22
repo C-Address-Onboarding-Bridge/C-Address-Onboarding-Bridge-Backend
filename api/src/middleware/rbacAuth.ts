@@ -36,6 +36,7 @@ export interface CreateKeyInput {
 }
 
 const keyStore = new Map<string, ApiKeyRecord>();
+const keyHashIndex = new Map<string, ApiKeyRecord>();
 const auditLog: Array<{ ts: number; keyId: string; ip: string; path: string; method: string }> = [];
 
 function hashKey(rawKey: string): string {
@@ -107,30 +108,68 @@ function isIpAllowed(ip: string, whitelist: string[]): boolean {
 }
 
 export function createApiKey(input: CreateKeyInput): { rawKey: string; record: ApiKeyRecord } {
-  throw new Error('Not implemented: createApiKey');
+  const rawKey = 'cab_' + crypto.randomBytes(32).toString('hex');
+  const kh = hashKey(rawKey);
+  const now = Date.now();
+  const record: ApiKeyRecord = {
+    id: crypto.randomUUID(),
+    keyHash: kh,
+    name: input.name,
+    createdBy: input.createdBy,
+    createdAt: now,
+    updatedAt: now,
+    lastUsedAt: null,
+    scopes: input.scopes,
+    ipWhitelist: input.ipWhitelist ?? [],
+    expiresAt: input.expiresAt ?? null,
+    rateLimit: input.rateLimit ?? 'standard',
+    revoked: false,
+  };
+  keyStore.set(record.id, record);
+  keyHashIndex.set(kh, record);
+  return { rawKey, record };
 }
 
 export function revokeApiKey(id: string): boolean {
-  throw new Error('Not implemented: revokeApiKey');
+  const record = keyStore.get(id);
+  if (!record) return false;
+  record.revoked = true;
+  record.updatedAt = Date.now();
+  return true;
 }
 
 export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {
-  throw new Error('Not implemented: listApiKeys');
+  return Array.from(keyStore.values()).map((record) => {
+    const { keyHash: _kh, ...rest } = record;
+    return rest;
+  });
 }
 
 export function getApiKey(id: string): Omit<ApiKeyRecord, 'keyHash'> | undefined {
-  throw new Error('Not implemented: getApiKey');
+  const record = keyStore.get(id);
+  if (!record) return undefined;
+  const { keyHash: _kh, ...rest } = record;
+  return rest;
 }
 
 export function updateApiKey(
   id: string,
   patch: Partial<Pick<ApiKeyRecord, 'name' | 'scopes' | 'ipWhitelist' | 'expiresAt' | 'rateLimit'>>,
 ): boolean {
-  throw new Error('Not implemented: updateApiKey');
+  const record = keyStore.get(id);
+  if (!record) return false;
+  if (patch.name !== undefined) record.name = patch.name;
+  if (patch.scopes !== undefined) record.scopes = patch.scopes;
+  if (patch.ipWhitelist !== undefined) record.ipWhitelist = patch.ipWhitelist;
+  if (patch.expiresAt !== undefined) record.expiresAt = patch.expiresAt;
+  if (patch.rateLimit !== undefined) record.rateLimit = patch.rateLimit;
+  record.updatedAt = Date.now();
+  return true;
 }
 
 export function resolveRecord(rawKey: string): ApiKeyRecord | undefined {
-  throw new Error('Not implemented: resolveRecord');
+  const kh = hashKey(rawKey);
+  return keyHashIndex.get(kh);
 }
 
 declare module 'express-serve-static-core' {
@@ -141,17 +180,87 @@ declare module 'express-serve-static-core' {
 }
 
 export function requireScopes(...required: PermissionScope[]) {
-  throw new Error('Not implemented: requireScopes');
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const scopes = req.resolvedScopes ?? [];
+    const hasAll = required.every((s) => scopes.includes(s));
+    if (!hasAll) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    next();
+  };
 }
 
 export function rbacAuth(req: Request, res: Response, next: NextFunction): void {
-  throw new Error('Not implemented: rbacAuth');
+  const rawKey = req.headers['x-api-key'];
+  if (!rawKey || typeof rawKey !== 'string') {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const record = resolveRecord(rawKey);
+  if (!record) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  if (record.revoked) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  if (record.expiresAt !== null && record.expiresAt < Date.now()) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  if (!isIpAllowed(req.ip ?? '', record.ipWhitelist)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+
+  const { keyHash: _kh, ...safeRecord } = record;
+  req.apiKeyRecord = safeRecord;
+  req.resolvedScopes = record.scopes;
+
+  record.lastUsedAt = Date.now();
+
+  auditLog.push({
+    ts: Date.now(),
+    keyId: record.id,
+    ip: req.ip ?? '',
+    path: req.path,
+    method: req.method,
+  });
+
+  logger.info({ keyId: record.id, path: req.path, method: req.method }, 'api key authenticated');
+
+  next();
 }
 
 export function getAuditLog(): typeof auditLog {
-  throw new Error('Not implemented: getAuditLog');
+  return auditLog;
 }
 
 export function seedLegacyKeys(rawKeys: string[]): void {
-  throw new Error('Not implemented: seedLegacyKeys');
+  for (const rawKey of rawKeys) {
+    const kh = hashKey(rawKey);
+    if (keyHashIndex.has(kh)) continue;
+    const record: ApiKeyRecord = {
+      id: crypto.randomUUID(),
+      keyHash: kh,
+      name: 'legacy',
+      createdBy: 'seed',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastUsedAt: null,
+      scopes: [],
+      ipWhitelist: [],
+      expiresAt: null,
+      rateLimit: 'standard',
+      revoked: false,
+    };
+    keyStore.set(record.id, record);
+    keyHashIndex.set(kh, record);
+  }
 }
