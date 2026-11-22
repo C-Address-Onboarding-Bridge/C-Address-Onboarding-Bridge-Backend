@@ -371,6 +371,9 @@ pub struct Stats {
 #[contract]
 pub struct OnboardingBridge;
 
+#[cfg(test)]
+mod entrypoint_auth_test;
+
 fn rebate_bps(env: &Env, user: &Address, token: &Address) -> u32 {
     let volume: i128 = env
         .storage()
@@ -729,6 +732,7 @@ impl OnboardingBridge {
         amount: i128,
         memo: String,
     ) -> Result<i128, BridgeError> {
+        source.require_auth();
         Self::extend_ttl(&env);
         Self::pre_reentrancy_check(&env)?;
         Self::validate_c_address(&target)?;
