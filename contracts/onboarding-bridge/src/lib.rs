@@ -914,6 +914,9 @@ impl OnboardingBridge {
                 .instance()
                 .set(&DataKey::UniqueFunderCount, &new_uc);
         }
+        // Keep the entry alive for both first-time and returning funders so
+        // it is never archived (which would make later funding fail).
+        Self::extend_persistent_ttl(env, &unique_key);
 
         Funded {
             source: source.clone(),
