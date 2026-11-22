@@ -353,6 +353,9 @@ pub struct Proposal {
     pub proposed_at: u32,
 }
 
+#[cfg(test)]
+mod governance_fixes_test;
+
 /// #20: Batch analytics view returned by `get_stats`.
 ///
 /// **Warning**: When multiple token types are active, `total_volume` and `total_fees`
@@ -988,7 +991,11 @@ impl OnboardingBridge {
             return Err(BridgeError::ContractPaused);
         }
         exchange.require_auth();
-        Self::fund_c_address_internal(&env, &exchange, &target, &token_address, amount, &memo)
+        Self::set_reentrancy_guard(&env);
+        let result =
+            Self::fund_c_address_internal(&env, &exchange, &target, &token_address, amount, &memo);
+        Self::clear_reentrancy_guard(&env);
+        result
     }
 
     pub fn funding_count(env: Env) -> u32 {
