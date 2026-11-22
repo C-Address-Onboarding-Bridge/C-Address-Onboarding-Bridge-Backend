@@ -145,7 +145,13 @@ export interface CexWithdrawalParams {
 
 /** Result from a CEX withdrawal routing request. */
 export interface CexWithdrawalResult {
-  status: 'pending' | 'completed' | 'failed';
+  /**
+   * - `pending` / `completed` — exchange confirmed the action.
+   * - `failed` — exchange definitively rejected the request.
+   * - `unknown` — network timeout before the exchange responded. The withdrawal
+   *   MAY have been executed. Callers MUST reconcile before retrying.
+   */
+  status: 'pending' | 'completed' | 'failed' | 'unknown';
   withdrawalId: string;
   exchangeTxId?: string;
   estimatedArrival?: string;
@@ -283,6 +289,19 @@ export interface OfflineQueueOptions {
  }
 
 // Event emitter
+
+export interface EventEmitterOptions {
+  pollIntervalMs?: number;
+  historySize?: number;
+  healthCheckIntervalMs?: number;
+  /**
+   * Maximum number of consecutive retryable errors before the watcher stops
+   * polling and emits a terminal `error` event. Defaults to 10.
+   * Non-retryable errors (404, 401, 422, …) always stop immediately regardless
+   * of this setting.
+   */
+  maxConsecutiveErrors?: number;
+}
 
 export type BridgeEventType =
   | 'transaction:pending'
