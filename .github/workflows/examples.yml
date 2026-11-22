@@ -32,14 +32,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Run all language examples via verify-examples.sh
+      - name: Run all language examples + unit tests via verify-examples.sh
         run: bash examples/scripts/verify-examples.sh
 
   docker-compose:
     name: Docker Compose Examples
     runs-on: ubuntu-latest
+    # Run each client service in isolation so one fast client can't tear down
+    # the others before they finish, and so each service's exit code is
+    # captured individually.
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [python, rust, go, java]
     steps:
       - uses: actions/checkout@v4
-      - name: Build and run all examples
+
+      - name: Run ${{ matrix.service }} example against mock
         working-directory: examples
-        run: docker compose up --build --abort-on-container-exit
+        run: |
+          docker compose run --rm ${{ matrix.service }}

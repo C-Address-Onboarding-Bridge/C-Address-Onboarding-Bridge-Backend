@@ -8,16 +8,18 @@ class BridgeExceptionTest {
 
     @Test
     void extractsMessageFromJsonBody() {
-        BridgeException ex = BridgeException.fromResponse(401, "{\"message\":\"Unauthorized\",\"code\":\"AUTH\"}");
+        // Real API shape: {"error": "invalid_api_key"}
+        BridgeException ex = BridgeException.fromResponse(401, "{\"error\":\"invalid_api_key\"}");
         assertEquals(401, ex.getStatusCode());
-        assertEquals("Unauthorized", ex.getMessage());
+        assertEquals("invalid_api_key", ex.getMessage());
     }
 
     @Test
     void extractsMessageWhenOtherFieldsPrecedeIt() {
-        BridgeException ex = BridgeException.fromResponse(400, "{\"code\":\"VALIDATION\",\"message\":\"amount is required\",\"fields\":[]}");
+        // Real API shape: {"error": "validation_error", "details": [...]}
+        BridgeException ex = BridgeException.fromResponse(400, "{\"error\":\"validation_error\",\"details\":[]}");
         assertEquals(400, ex.getStatusCode());
-        assertEquals("amount is required", ex.getMessage());
+        assertEquals("validation_error", ex.getMessage());
     }
 
     @Test
