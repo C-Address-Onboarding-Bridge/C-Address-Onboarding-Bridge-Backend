@@ -79,3 +79,13 @@ fn test_route_from_exchange_clears_reentrancy_guard() {
     });
 }
 
+/// #1080: get_proposal reads the persistent entry written by propose.
+#[test]
+fn test_get_proposal_reads_persistent_storage() {
+    let (_env, bridge, admins) = setup(2, 2, 100);
+    let pid = bridge.propose(&admins.get_unchecked(0), &ProposalAction::SetFee(200), &1000);
+    let p = bridge.get_proposal(&pid);
+    assert_eq!(p.id, pid);
+    assert_eq!(p.approval_count, 1);
+}
+

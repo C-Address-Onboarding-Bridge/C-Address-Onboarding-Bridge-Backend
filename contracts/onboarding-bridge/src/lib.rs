@@ -1474,7 +1474,7 @@ impl OnboardingBridge {
 
     pub fn get_proposal(env: Env, proposal_id: u32) -> Result<Proposal, BridgeError> {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::Proposal(proposal_id))
             .ok_or(BridgeError::ProposalNotFound)
     }
