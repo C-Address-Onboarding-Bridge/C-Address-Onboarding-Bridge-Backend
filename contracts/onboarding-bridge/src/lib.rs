@@ -54,7 +54,7 @@
 #![allow(clippy::needless_borrows_for_generic_args)]
 
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, crypto::Hash, token, Address, Bytes,
+    contract, contracterror, contractevent, contractimpl, contracttype, crypto::Hash, token, Address, Bytes,
     BytesN, Env, String, Vec,
 };
 
@@ -524,9 +524,6 @@ impl OnboardingBridge {
         env.storage().instance().set(&DataKey::HotCount, &0u32);
         env.storage().instance().set(&DataKey::NextArchiveId, &0u32);
         env.storage().instance().set(&DataKey::NextArchiveRecordId, &1u32);
-        env.storage()
-            .instance()
-            .set(&DataKey::ExecutionDelay, &execution_delay);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::ProposalNonce, &0u32);
         env.storage()
@@ -555,6 +552,8 @@ impl OnboardingBridge {
             max_amount,
         }
         .publish(&env);
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -679,7 +678,7 @@ impl OnboardingBridge {
             .unwrap_or(false)
     }
 
-    pub fn get_admins(env: Env) -> Vec<Address> {
+    pub fn get_admins(env: Env) -> Result<Vec<Address>, BridgeError> {
         Self::extend_ttl(&env);
         env.storage()
             .instance()
@@ -687,7 +686,7 @@ impl OnboardingBridge {
             .ok_or(BridgeError::NotInitialized)
     }
 
-    pub fn get_threshold(env: Env) -> u32 {
+    pub fn get_threshold(env: Env) -> Result<u32, BridgeError> {
         Self::extend_ttl(&env);
         env.storage()
             .instance()
@@ -1015,8 +1014,16 @@ impl OnboardingBridge {
             return Err(BridgeError::NoEntriesToArchive);
         }
 
+        let start: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextArchiveRecordId)
+            .unwrap_or(1);
+        if start > total {
+            return Err(BridgeError::NoEntriesToArchive);
+        }
         let mut hash_bytes = Bytes::new(env);
-        let end = start + archive_count - 1;
+        let end = core::cmp::min(start + archive_count - 1, total);
         for i in start..=end {
             if let Some(mut record) = env
                 .storage()
@@ -1110,7 +1117,12 @@ impl OnboardingBridge {
         (funding_count, archived_count, accumulated_fees, hot_count)
     }
 
-    pub fn propose(env: Env, proposer: Address, action: ProposalAction, expiry_blocks: u32) -> u32 {
+    pub fn propose(
+        env: Env,
+        proposer: Address,
+        action: ProposalAction,
+        expiry_blocks: u32,
+    ) -> Result<u32, BridgeError> {
         Self::extend_ttl(&env);
         proposer.require_auth();
 
@@ -1177,7 +1189,7 @@ impl OnboardingBridge {
         Ok(proposal_id)
     }
 
-    pub fn approve(env: Env, admin: Address, proposal_id: u32) {
+    pub fn approve(env: Env, admin: Address, proposal_id: u32) -> Result<(), BridgeError> {
         Self::extend_ttl(&env);
         admin.require_auth();
 
@@ -1222,9 +1234,11 @@ impl OnboardingBridge {
             approval_count: proposal.approval_count,
         }
         .publish(&env);
+
+        Ok(())
     }
 
-    pub fn execute(env: Env, proposal_id: u32) -> i128 {
+    pub fn execute(env: Env, proposal_id: u32) -> Result<i128, BridgeError> {
         Self::extend_ttl(&env);
         let threshold: u32 = env
             .storage()
@@ -1319,10 +1333,7 @@ impl OnboardingBridge {
                 let key = DataKey::FeeTokenWhitelist(token.clone());
                 env.storage().persistent().set(&key, &enabled);
                 Self::extend_persistent_ttl(&env, &key);
-                env.events().publish(
-                    (Symbol::new(&env, "set_fee_token_whitelist"),),
-                    (token, enabled),
-                );
+                SetFeeTokenWhitelist { token, enabled }.publish(&env);
                 0i128
             }
             ProposalAction::SetFeeTokenRate(token, rate) => {
@@ -1331,8 +1342,7 @@ impl OnboardingBridge {
                 let key = DataKey::FeeTokenRate(token.clone());
                 env.storage().persistent().set(&key, &rate);
                 Self::extend_persistent_ttl(&env, &key);
-                env.events()
-                    .publish((Symbol::new(&env, "set_fee_token_rate"),), (token, rate));
+                SetFeeTokenRate { token, rate }.publish(&env);
                 0i128
             }
             ProposalAction::WithdrawFees(to, token, amount) => {
@@ -1431,7 +1441,9 @@ impl OnboardingBridge {
             }
             ProposalAction::SetRebateTier(tier_index, threshold, discount_bps) => {
                 assert!(discount_bps <= 5000, "discount capped at 50%");
-                assert!(tier_index < MAX_TIERS, "{}", ERR_TIER_CAP_EXCEEDED);
+                if tier_index >= MAX_TIERS {
+                    return Err(BridgeError::TierCapExceeded);
+                }
                 let threshold_key = DataKey::TierThreshold(tier_index);
                 let discount_key = DataKey::TierDiscount(tier_index);
                 env.storage().persistent().set(&threshold_key, &threshold);
