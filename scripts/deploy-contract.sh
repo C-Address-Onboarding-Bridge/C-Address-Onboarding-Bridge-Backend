@@ -6,7 +6,7 @@
 #   2. Compute WASM SHA-256 for source verification
 #   3. Deploy contract to Stellar network
 #   4. Initialize contract with admin parameters
-#   5. Verify deployment (invoke version(), compare WASM hash)
+#   5. Verify deployment (invoke version())
 #   6. Save deployment artifact (JSON)
 #   7. Generate deployment report (Markdown)
 #
@@ -198,6 +198,7 @@ deploy_contract() {
   # Extract contract ID (C... 56-char base32) from deploy output
   CONTRACT_ID=$(echo "$deploy_output" | grep -oE 'C[A-Z2-7]{55}' | head -1 || true)
   [[ -z "$CONTRACT_ID" ]] && log_err "Could not parse contract ID from deploy output: $deploy_output"
+  DEPLOY_TX=$(echo "$deploy_output" | grep -oiE '(hash|tx)[^0-9a-f]*[0-9a-f]{64}' | grep -oE '[0-9a-f]{64}' | head -1 || true)
   log_ok "Contract deployed: $CONTRACT_ID"
 }
 
@@ -254,6 +255,50 @@ verify_deployment() {
   log_ok "Contract version: $version"
 }
 
+# ── step 6: save deployment artifact ──────────────────────────────────────────
+# Writes deployments/deployment-<network>.json (read by generate-deployment-report.sh,
+# check_existing_deployment and rollback-contract.sh). Any previous artifact is
+# moved to deployment-<network>.prev.json first.
+write_deployment_artifact() {
+  mkdir -p "$ARTIFACTS_DIR"
+  local artifact="${ARTIFACTS_DIR}/deployment-${NETWORK}.json"
+  if [[ -f "$artifact" ]]; then
+    mv "$artifact" "${ARTIFACTS_DIR}/deployment-${NETWORK}.prev.json"
+  fi
+
+  local admins_json deployed_by git_sha git_tag
+  admins_json=$(printf '%s' "$ADMIN_ADDRESSES" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | jq -R . | jq -s -c .)
+  # Never record SOURCE_ACCOUNT itself: it may be a secret key.
+  deployed_by=$(stellar keys address "$SOURCE_ACCOUNT" 2>/dev/null || echo "${GITHUB_ACTOR:-${USER:-unknown}}")
+  git_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+  git_tag=$(git describe --tags --exact-match 2>/dev/null || echo "")
+
+  jq -n \
+    --arg network "$NETWORK" \
+    --arg contractId "$CONTRACT_ID" \
+    --arg deployTx "$DEPLOY_TX" \
+    --arg wasmHash "$WASM_HASH" \
+    --argjson wasmSize "${WASM_SIZE:-0}" \
+    --arg deployedAt "$DEPLOY_START_TS" \
+    --arg deployedBy "$deployed_by" \
+    --arg gitSha "$git_sha" \
+    --arg gitTag "$git_tag" \
+    --arg rpcUrl "$RPC_URL" \
+    --argjson admins "$admins_json" \
+    --argjson threshold "$THRESHOLD" \
+    --argjson feeBps "$FEE_BPS" \
+    --argjson maxFeeBps "$MAX_FEE_BPS" \
+    --argjson minAmount "$MIN_AMOUNT" \
+    --argjson maxAmount "$MAX_AMOUNT" \
+    '{network: $network, contractId: $contractId, deployTx: $deployTx,
+      wasmHash: $wasmHash, wasmSize: $wasmSize, deployedAt: $deployedAt,
+      deployedBy: $deployedBy, gitSha: $gitSha, gitTag: $gitTag, rpcUrl: $rpcUrl,
+      initParams: {admins: $admins, threshold: $threshold, feeBps: $feeBps,
+                   maxFeeBps: $maxFeeBps, minAmount: $minAmount, maxAmount: $maxAmount}}' \
+    > "$artifact"
+  log_ok "Deployment artifact written: $artifact"
+}
+
 # ── main ──────────────────────────────────────────────────────────────────────
 main() {
   DEPLOY_START_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -266,12 +311,19 @@ main() {
     return
   fi
 
+  local fresh_deploy=false
   if check_existing_deployment; then
     deploy_contract
     initialize_contract
+    fresh_deploy=true
   fi
 
   verify_deployment
+  # Only a fresh deployment produces a new artifact; an already-live contract
+  # keeps the existing file.
+  if $fresh_deploy; then
+    write_deployment_artifact
+  fi
   log_ok "Deployment pipeline finished for $CONTRACT_ID"
 }
 
