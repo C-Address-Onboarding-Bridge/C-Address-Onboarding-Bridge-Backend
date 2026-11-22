@@ -906,7 +906,7 @@ fn test_route_from_exchange_blocked_when_paused() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "Error(Contract, #12)")]
 fn test_batch_fund_blocked_when_paused() {
     let (env, bridge, admins) = setup_env_with_admins(2, 2, 100, 1000);
 

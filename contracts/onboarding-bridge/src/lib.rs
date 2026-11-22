@@ -950,6 +950,15 @@ impl OnboardingBridge {
             Self::validate_c_address(&targets.get(i).unwrap())?;
         }
 
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(BridgeError::ContractPaused);
+        }
+
         Self::set_reentrancy_guard(&env);
 
         let mut total_fees: i128 = 0;
