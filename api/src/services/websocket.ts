@@ -14,6 +14,13 @@ const POLL_INTERVAL_MS = 5_000;
 const STATUS_CACHE_NAMESPACE = 'status';
 const MAX_CONNECTIONS_PER_KEY = 10;
 const MAX_CONNECTIONS_PER_IP = 50;
+/** Valid messages are tiny `{action, txHash}` objects; ws closes larger frames with 1009. */
+export const MAX_PAYLOAD_BYTES = 4 * 1024;
+/** Per-connection token bucket: RATE_LIMIT_MESSAGES per RATE_LIMIT_WINDOW_MS. */
+export const RATE_LIMIT_MESSAGES = 20;
+export const RATE_LIMIT_WINDOW_MS = 10_000;
+/** Close code sent when the connection's API key is revoked or expired. */
+export const CLOSE_KEY_INVALID = 4401;
 
 interface Subscription {
   txHash: string;
@@ -28,6 +35,8 @@ interface ClientState {
   isAlive: boolean;
   token: string | null;
   clientIp: string | null;
+  rateTokens: number;
+  rateRefilledAt: number;
 }
 
 const connectionsByToken = new Map<string, Set<ClientState>>();
@@ -46,6 +55,28 @@ function validateToken(token: string | null): boolean {
   const record = resolveRecord(token);
   if (!record || record.revoked) return false;
   if (record.expiresAt !== null && Date.now() > record.expiresAt) return false;
+  return true;
+}
+
+/**
+ * Re-check the key the socket was opened with. Keys are only validated at
+ * upgrade time otherwise, so a revoked or expired key would keep its sockets.
+ * Returns false (and closes the socket with 4401) when the key is no longer valid.
+ */
+function ensureKeyStillValid(client: ClientState): boolean {
+  if (!client.token || validateToken(client.token)) return true;
+  client.ws.close(CLOSE_KEY_INVALID, 'API key revoked or expired');
+  return false;
+}
+
+/** Token bucket per connection; returns false when the client is over the limit. */
+function takeRateToken(client: ClientState): boolean {
+  const now = Date.now();
+  const refill = ((now - client.rateRefilledAt) / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_MESSAGES;
+  client.rateTokens = Math.min(RATE_LIMIT_MESSAGES, client.rateTokens + refill);
+  client.rateRefilledAt = now;
+  if (client.rateTokens < 1) return false;
+  client.rateTokens -= 1;
   return true;
 }
 
@@ -189,6 +220,7 @@ function handleMessage(client: ClientState, raw: string): void {
 
   switch (action) {
     case 'subscribe': {
+      if (!ensureKeyStillValid(client)) return;
       const txHash = String(msg.txHash ?? '');
       const lastKnown = typeof msg.lastKnownStatus === 'string' ? msg.lastKnownStatus : null;
       subscribe(client, txHash, lastKnown);
@@ -213,7 +245,7 @@ function handleMessage(client: ClientState, raw: string): void {
 }
 
 export function createWebSocketServer(): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const token = (ws as any).__wsToken || null;
@@ -225,7 +257,10 @@ export function createWebSocketServer(): WebSocketServer {
       isAlive: true,
       token,
       clientIp,
+      rateTokens: RATE_LIMIT_MESSAGES,
+      rateRefilledAt: Date.now(),
       heartbeatId: setInterval(() => {
+        if (!ensureKeyStillValid(client)) return;
         if (!client.isAlive) {
           ws.terminate();
           return;
@@ -252,6 +287,10 @@ export function createWebSocketServer(): WebSocketServer {
     });
 
     ws.on('message', (data: Buffer | string) => {
+      if (!takeRateToken(client)) {
+        ws.close(1008, 'Message rate limit exceeded');
+        return;
+      }
       handleMessage(client, data.toString());
     });
 

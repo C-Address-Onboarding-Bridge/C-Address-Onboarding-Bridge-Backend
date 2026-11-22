@@ -59,6 +59,9 @@ import { createWebSocketServer, handleUpgrade } from '../services/websocket';
 import { sorobanService } from '../services/soroban';
 import { explorerService } from '../services/explorer';
 import { getOrCompute } from '../services/cache';
+import { resolveRecord } from '../middleware/rbacAuth';
+import { createServer } from 'http';
+import type { AddressInfo } from 'net';
 import { IncomingMessage } from 'http';
 
 // Helper to wait for message
@@ -895,6 +898,77 @@ describe('WebSocket Service', () => {
       vi.advanceTimersByTime(30_000);
       expect(mockWs.ping).toHaveBeenCalledTimes(2);
       expect(mockWs.terminate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('key revocation, payload size and rate limiting (#1066)', () => {
+    let wss: WebSocketServer;
+
+    function connect(token: string | null = 'valid-token') {
+      const mockWs = new EventEmitter() as any;
+      mockWs.readyState = WebSocket.OPEN;
+      mockWs.send = vi.fn();
+      mockWs.ping = vi.fn();
+      mockWs.terminate = vi.fn();
+      mockWs.close = vi.fn();
+      mockWs.__wsToken = token;
+      wss.emit('connection', mockWs, { socket: { remoteAddress: '127.0.0.1' }, headers: {} });
+      return mockWs;
+    }
+
+    beforeEach(() => {
+      wss = createWebSocketServer();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      wss.close();
+    });
+
+    it('closes with 4401 on the next heartbeat after the key is revoked', () => {
+      vi.useFakeTimers();
+      const mockWs = connect();
+      vi.mocked(resolveRecord).mockReturnValueOnce({ revoked: true, expiresAt: null } as any);
+
+      vi.advanceTimersByTime(30_000);
+
+      expect(mockWs.close).toHaveBeenCalledWith(4401, 'API key revoked or expired');
+      expect(mockWs.ping).not.toHaveBeenCalled();
+    });
+
+    it('rejects subscribe with 4401 once the key has expired', () => {
+      const mockWs = connect();
+      vi.mocked(resolveRecord).mockReturnValueOnce({ revoked: false, expiresAt: Date.now() - 1 } as any);
+
+      mockWs.emit('message', JSON.stringify({ action: 'subscribe', txHash: 'd'.repeat(64) }));
+
+      expect(mockWs.close).toHaveBeenCalledWith(4401, 'API key revoked or expired');
+      const sent = mockWs.send.mock.calls.map(([d]: [string]) => JSON.parse(d).type);
+      expect(sent).not.toContain('subscribed');
+    });
+
+    it('closes with 1008 when a client exceeds the message rate', () => {
+      const mockWs = connect();
+      for (let i = 0; i < 20; i++) mockWs.emit('message', JSON.stringify({ action: 'list' }));
+      expect(mockWs.close).not.toHaveBeenCalled();
+
+      mockWs.emit('message', JSON.stringify({ action: 'list' }));
+      expect(mockWs.close).toHaveBeenCalledWith(1008, 'Message rate limit exceeded');
+    });
+
+    it('closes the connection with 1009 when a message exceeds maxPayload', async () => {
+      const server = createServer();
+      server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket as any, head));
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const { port } = server.address() as AddressInfo;
+
+      const client = new WebSocket(`ws://127.0.0.1:${port}`, 'valid-token');
+      await new Promise((resolve) => client.once('open', resolve));
+      const closed = new Promise<number>((resolve) => client.once('close', (code) => resolve(code)));
+      client.send('x'.repeat(1024 * 1024));
+
+      expect(await closed).toBe(1009);
+      await new Promise((resolve) => server.close(resolve));
     });
   });
 
