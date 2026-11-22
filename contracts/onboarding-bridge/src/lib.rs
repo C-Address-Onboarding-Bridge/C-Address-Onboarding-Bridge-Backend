@@ -14,9 +14,12 @@
 //!                       AccumulatedFees
 //! ```
 //!
-//! The contract itself does **not** move tokens; callers perform the actual
-//! token transfer off-chain (or via a separate SAC call) and invoke
-//! [`OnboardingBridge::fund_c_address`] to record the event and accrue fees.
+//! The contract **does** move tokens. Funding entry points
+//! (`fund_c_address`, `batch_fund_c_address`, `route_from_exchange`) pull the
+//! gross `amount` from the source into the contract with the token's
+//! `transfer(source, contract, amount)`, then forward `net_amount` to the
+//! target C-address with `transfer(contract, target, net_amount)`. The fee
+//! stays in the contract and is tracked in the accumulated-fee counters.
 //!
 //! ## Fee Model
 //!
@@ -27,28 +30,46 @@
 //! net_amount = amount − fee_amount
 //! ```
 //!
-//! Fees accumulate in [`DataKey::AccumulatedFees`] and can be withdrawn via
-//! `withdraw_fees` (admin, single or multi-recipient) or
-//! automatically via `trigger_auto_withdraw` (permissionless,
-//! fires when accumulated ≥ threshold).
+//! Fees accumulate in [`DataKey::AccumulatedFees`] (legacy total) and
+//! [`DataKey::AccumulatedFeesByToken`] (per token). They are withdrawn only
+//! through the multisig proposal flow: an admin calls `propose` with
+//! `ProposalAction::WithdrawFees(to, token, amount)`, admins `approve` until
+//! the threshold is met, the `MIN_EXEC_DELAY` window elapses, and anyone
+//! calls `execute`. There is no direct `withdraw_fees` entry point, no
+//! auto-withdraw trigger and no multi-recipient fee split.
 //!
-//! Multi-recipient splits are configured through
-//! `set_fee_recipients`; each recipient's share must be
-//! given in bps and all shares must sum to exactly 10 000.  The **last**
-//! recipient always receives the remainder to absorb integer-division dust.
+//! ## Governance
+//!
+//! `ProposalAction` covers `SetFee`, `SetFeeTokenWhitelist`,
+//! `SetFeeTokenRate`, `WithdrawFees`, `Pause`, `Unpause`, `Upgrade`,
+//! `RotateAdmins`, `SetThreshold`, `ArchiveOldEntries` and `SetRebateTier`.
 //!
 //! ## Storage Layout
 //!
-//! All keys live in **instance** storage (contract lifetime):
+//! Keys are spread over instance, persistent and temporary storage:
 //!
-//! | Key                    | Type            | Description                         |
-//! |------------------------|-----------------|-------------------------------------|
-//! | `Admin`                | `Address`       | Contract administrator              |
-//! | `FeeBps`               | `u32`           | Current fee rate (0–10 000)         |
-//! | `AccumulatedFees`      | `i128`          | Total unclaimed fees (stroops)      |
-//! | `Version`              | `u32`           | Contract schema version             |
-//! | `FeeRecipients`        | `Vec<FeeRecipient>` | Optional multi-recipient split  |
-//! | `AutoWithdrawThreshold`| `i128`          | Auto-withdraw trigger level; 0 = off|
+//! | Key                         | Type          | Storage    | Description                          |
+//! |-----------------------------|---------------|------------|--------------------------------------|
+//! | `FeeBps`                    | `u32`         | instance   | Current fee rate (bps)               |
+//! | `MaxFeeBps`                 | `u32`         | instance   | Upper bound for the fee rate         |
+//! | `AccumulatedFees`           | `i128`        | instance   | Total unclaimed fees                 |
+//! | `AccumulatedFeesByToken`    | `i128`        | instance   | Unclaimed fees per token             |
+//! | `Version`                   | `u32`         | instance   | Contract version, +1 per upgrade     |
+//! | `Paused`                    | `bool`        | instance   | Pause flag                           |
+//! | `Admins` / `Threshold`      | `Vec<Address>` / `u32` | instance | Multisig admin set and threshold |
+//! | `InitializationParams`      | struct        | instance   | Parameters given to `initialize`     |
+//! | `MinAmount` / `MaxAmount`   | `i128`        | instance   | Funding amount bounds                |
+//! | `ExecutionDelay`            | `u32`         | instance   | Execution delay setting              |
+//! | `ProposalNonce`, `ActiveProposalIds`, `NextPruneId` | `u32`, `Vec<u32>`, `u32` | instance | Proposal bookkeeping |
+//! | `FundingCount`, `HotCount`, `NextArchiveId`, `NextArchiveRecordId` | `u32` | instance | Funding record counters |
+//! | `TierCount`                 | `u32`         | instance   | Number of rebate tiers               |
+//! | `TotalVolume`, `UniqueFunderCount` | `i128`, `u32` | instance | Analytics counters           |
+//! | `FeeTokenWhitelist(Address)`, `FeeTokenRate(Address)` | `bool`, `u32` | persistent | Per-token fee config |
+//! | `Proposal(u32)`, `ProposalApproval(u32, Address)` | struct, `bool` | persistent | Proposals and approvals |
+//! | `Funding(u32)`, `ArchivedHash(u32)` | struct, hash | persistent | Funding records and archive hashes |
+//! | `UserVolume(Address, Address)`, `TotalVolumeByToken(Address)`, `UniqueFunder(Address)` | `i128` / marker | persistent | Volume analytics |
+//! | `TierThreshold(u32)`, `TierDiscount(u32)` | `i128`, `u32` | persistent | Rebate tier definitions |
+//! | `ReentrancyGuard`           | `bool`        | temporary  | Reentrancy lock during funding       |
 
 #![no_std]
 #![allow(clippy::needless_borrows_for_generic_args)]

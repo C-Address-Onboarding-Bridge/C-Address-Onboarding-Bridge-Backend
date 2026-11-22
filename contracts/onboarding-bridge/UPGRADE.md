@@ -114,8 +114,8 @@ default value on read and writes it on the next mutation. Follow all steps in
 §1 to roll the new WASM out through the governed upgrade flow.
 - **Redeploy.** If the change cannot be handled lazily, deploy a fresh contract
 with `stellar contract deploy`, re-run `initialize`, and migrate off-chain state
-(funding records, proposals) out of band. A redeploy is the only way to change storage layout that the new
-WASM cannot reconcile.
+(funding records, proposals) out of band. Prefer the governed upgrade when the new WASM can reconcile the
+storage layout itself.
 
 ---
 
@@ -143,14 +143,45 @@ steps:
 
 ## Error reference
 
-| Error | Code | When |
-|-------|------|------|
-| `AlreadyInitialized` | 1 | `initialize` called twice |
-| `NotInitialized` | 2 | Any function called before `initialize` |
-| `Unauthorized` | 3 | Non-admin calls admin-only function |
-| `InvalidFeeBps` | 4 | `fee_bps > 10000` |
-| `ZeroAmount` | 5 | `amount <= 0` in `fund_c_address` |
-| `InsufficientFees` | 6 | Withdrawal exceeds accumulated fees |
+The authoritative list is the `BridgeError` enum in `src/lib.rs`; clients see
+failures as `Error(Contract, #<code>)`.
+
+| Error | Code |
+|-------|------|
+| `NotInitialized` | 1 |
+| `AdminsEmpty` | 2 |
+| `ThresholdZero` | 3 |
+| `ThresholdExceedsAdminCount` | 4 |
+| `MaxFeeExceedsLimit` | 5 |
+| `FeeExceedsMaxFee` | 6 |
+| `MinAmountInvalid` | 7 |
+| `MaxAmountBelowMinimum` | 8 |
+| `AdminCannotBeContract` | 9 |
+| `InvalidCAddress` | 10 |
+| `AmountNotPositive` | 11 |
+| `ContractPaused` | 12 |
+| `AmountBelowMinimum` | 13 |
+| `AmountAboveMaximum` | 14 |
+| `AmountTooLarge` | 15 |
+| `ReentrantCall` | 16 |
+| `EmptyBatch` | 17 |
+| `MismatchedBatchLengths` | 18 |
+| `NoEntriesToArchive` | 19 |
+| `OnlyAdminsCanPropose` | 20 |
+| `ExpiryTooShort` | 21 |
+| `ExpiryTooLong` | 22 |
+| `OnlyAdminsCanApprove` | 23 |
+| `ProposalNotFound` | 24 |
+| `ProposalExpired` | 25 |
+| `ProposalAlreadyExecuted` | 26 |
+| `AlreadyApproved` | 27 |
+| `InsufficientApprovals` | 28 |
+| `ExecutionTooSoon` | 29 |
+| `RateBelowMinimum` | 30 |
+| `RateAboveMaximum` | 31 |
+| `InsufficientAccumulatedFees` | 32 |
+| `DiscountTooHigh` | 33 |
+| `TierCapExceeded` | 34 |
 
 ---
 
