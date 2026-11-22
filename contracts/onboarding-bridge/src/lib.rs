@@ -811,22 +811,20 @@ impl OnboardingBridge {
                 .instance()
                 .set(&DataKey::AccumulatedFees, &new_accumulated);
 
-            if Self::is_fee_token_whitelisted(env.clone(), token_address.clone()) {
-                let token_fee_rate = Self::fee_token_rate(env.clone(), token_address.clone());
-                let token_fee = (fee * token_fee_rate as i128) / 10000;
-                let token_accumulated: i128 = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::AccumulatedFeesByToken(token_address.clone()))
-                    .unwrap_or(0);
-                let new_token_accumulated = token_accumulated
-                    .checked_add(token_fee)
-                    .expect("token fee accumulator overflow");
-                env.storage().instance().set(
-                    &DataKey::AccumulatedFeesByToken(token_address.clone()),
-                    &new_token_accumulated,
-                );
-            }
+            // Track the real fee per token (whitelisted or not) so that every
+            // token's fees can be withdrawn independently.
+            let token_accumulated: i128 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AccumulatedFeesByToken(token_address.clone()))
+                .unwrap_or(0);
+            let new_token_accumulated = token_accumulated
+                .checked_add(fee)
+                .expect("token fee accumulator overflow");
+            env.storage().instance().set(
+                &DataKey::AccumulatedFeesByToken(token_address.clone()),
+                &new_token_accumulated,
+            );
         }
         tk.transfer(&env.current_contract_address(), target, &net_amount);
 
@@ -1350,27 +1348,22 @@ impl OnboardingBridge {
                     .get(&token_key)
                     .unwrap_or(0);
                 let withdraw_amount = if amount == 0 { token_accumulated } else { amount };
-                assert!(
-                    withdraw_amount <= token_accumulated,
-                    "insufficient accumulated fees"
-                );
-                let remaining = token_accumulated - withdraw_amount;
+                if withdraw_amount <= 0 || withdraw_amount > token_accumulated {
+                    return Err(BridgeError::InsufficientAccumulatedFees);
+                }
                 env.storage()
                     .instance()
-                    .set(&token_key, &remaining);
+                    .set(&token_key, &(token_accumulated - withdraw_amount));
+                // Keep the cross-token total as a reporting counter only.
                 let accumulated: i128 = env
                     .storage()
                     .instance()
                     .get(&DataKey::AccumulatedFees)
                     .unwrap_or(0);
-                let withdraw_amount = if amount == 0 { accumulated } else { amount };
-                if withdraw_amount > accumulated {
-                    return Err(BridgeError::InsufficientAccumulatedFees);
-                }
-                let remaining = accumulated - withdraw_amount;
-                env.storage()
-                    .instance()
-                    .set(&DataKey::AccumulatedFees, &(accumulated - withdraw_amount));
+                env.storage().instance().set(
+                    &DataKey::AccumulatedFees,
+                    &accumulated.saturating_sub(withdraw_amount),
+                );
                 let tk = token::Client::new(&env, &token);
                 tk.transfer(&env.current_contract_address(), &to, &withdraw_amount);
                 Withdrawn {

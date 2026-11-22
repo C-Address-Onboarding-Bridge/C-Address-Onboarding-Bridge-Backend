@@ -89,3 +89,32 @@ fn test_get_proposal_reads_persistent_storage() {
     assert_eq!(p.approval_count, 1);
 }
 
+/// #1079: fees of a non-whitelisted token are withdrawable, and amount = 0
+/// withdraws only that token's own balance.
+#[test]
+fn test_withdraw_fees_zero_amount_uses_per_token_balance() {
+    let (env, bridge, admins) = setup(2, 2, 100);
+    let token_a = env.register_contract(None, FixToken);
+    let token_b = env.register_contract(None, FixToken);
+    let source = Address::generate(&env);
+    let target = Address::generate(&env);
+    let memo = String::from_str(&env, "m");
+    FixTokenClient::new(&env, &token_a).mint(&source, &10_000);
+    FixTokenClient::new(&env, &token_b).mint(&source, &10_000);
+    bridge.fund_c_address(&source, &target, &token_a, &5000, &memo); // fee 50
+    bridge.fund_c_address(&source, &target, &token_b, &3000, &memo); // fee 30
+
+    let to = Address::generate(&env);
+    let pid = bridge.propose(
+        &admins.get_unchecked(0),
+        &ProposalAction::WithdrawFees(to.clone(), token_a.clone(), 0),
+        &1000,
+    );
+    bridge.approve(&admins.get_unchecked(1), &pid);
+    advance(&env, MIN_EXEC_DELAY);
+    assert_eq!(bridge.execute(&pid), 50);
+    assert_eq!(FixTokenClient::new(&env, &token_a).balance(&to), 50);
+    assert_eq!(bridge.accumulated_fees_for_token(&token_a), 0);
+    assert_eq!(bridge.accumulated_fees_for_token(&token_b), 30);
+}
+
