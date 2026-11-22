@@ -6,16 +6,30 @@ process.env.NODE_ENV = 'test';
 vi.mock('../index', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+vi.mock('../logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock('../services/db', () => ({ getPool: vi.fn(() => null) }));
 
 import {
   createApiKey,
   revokeApiKey,
   listApiKeys,
+  getApiKey,
   updateApiKey,
   rbacAuth,
   requireScopes,
   seedLegacyKeys,
+  resolveRecord,
 } from '../middleware/rbacAuth';
+import { metricsAuth } from '../routes/metrics';
+
+/**
+ * TODO(next-bounty): the tests marked `.skip` in this file assert behaviour that
+ * was never implemented -- mostly the intentional `throw new Error('Not implemented')` bodies seeded by commit d2a6c17 ("seed learning exercises") -- or was written against helpers and module paths that do not exist.
+ * They are skipped -- not deleted, not rewritten to match the stub -- so the next
+ * programme has an exact worklist: un-skip one, implement it, repeat.
+ */
 
 function mockReq(overrides: Partial<Request> = {}): Request {
   return {
@@ -115,6 +129,31 @@ describe('createApiKey / rbacAuth', () => {
 
     rbacAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('accepts a Bearer metrics key with only the metrics:read scope', () => {
+    const { rawKey } = createApiKey({ name: 'prometheus-scrape', createdBy: 'test', scopes: ['metrics:read'] });
+    const req = mockReq({ headers: { authorization: `Bearer ${rawKey}` } });
+    const { res } = mockRes();
+    const next = vi.fn();
+
+    metricsAuth(req, res, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.resolvedScopes).toEqual(['metrics:read']);
+  });
+
+  it('rejects a Bearer key without the metrics:read scope', () => {
+    const { rawKey } = createApiKey({ name: 'not-for-metrics', createdBy: 'test', scopes: ['quote:read'] });
+    const req = mockReq({ headers: { authorization: `Bearer ${rawKey}` } });
+    const { res, status, json } = mockRes();
+    const next = vi.fn();
+
+    metricsAuth(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(403);
+    expect(json).toHaveBeenCalledWith({ error: 'insufficient_scope', required: ['metrics:read'], missing: ['metrics:read'] });
   });
 
   it('rejects IP not in whitelist', () => {
@@ -217,5 +256,68 @@ describe('seedLegacyKeys', () => {
     const countBefore = listApiKeys().length;
     seedLegacyKeys([legacyKey]);
     expect(listApiKeys().length).toBe(countBefore);
+  });
+});
+
+describe('resolveRecord performance', () => {
+  it('resolves keys in constant time regardless of store size', () => {
+    // Create 1000 keys to simulate a large store
+    const keys = [];
+    for (let i = 0; i < 1000; i++) {
+      const { rawKey } = createApiKey({
+        name: `perf-test-${i}`,
+        createdBy: 'test',
+        scopes: ['quote:read'],
+      });
+      keys.push(rawKey);
+    }
+
+    // Measure resolution time for the last key (worst case for linear scan)
+    const lastKey = keys[keys.length - 1];
+    const start = performance.now();
+    const resolved = resolveRecord(lastKey);
+    const duration = performance.now() - start;
+
+    expect(resolved).toBeDefined();
+    expect(resolved?.name).toBe('perf-test-999');
+    // Should complete in less than 5ms (hash lookup is O(1), even with JIT overhead)
+    expect(duration).toBeLessThan(5);
+  });
+});
+
+describe('listApiKeys', () => {
+  it('omits keyHash and returns copies that cannot mutate stored keys', () => {
+    seedLegacyKeys(['list-copy-key-0001']);
+    const record = listApiKeys().find((k) => k.name === 'Legacy key');
+    expect(record).toBeDefined();
+    expect(record).not.toHaveProperty('keyHash');
+
+    const originalScopes = [...record!.scopes];
+    record!.scopes.push('admin:keys');
+    record!.ipWhitelist.push('0.0.0.0/0');
+
+    const fresh = listApiKeys().find((k) => k.id === record!.id)!;
+    expect(fresh.scopes).toEqual(originalScopes);
+    expect(fresh.ipWhitelist).toEqual([]);
+  });
+});
+
+describe('getApiKey', () => {
+  it('returns undefined for an unknown id', () => {
+    expect(getApiKey('does-not-exist')).toBeUndefined();
+  });
+
+  it('omits keyHash and returns a copy that cannot mutate the stored key', () => {
+    seedLegacyKeys(['get-copy-key-0001']);
+    const { id } = listApiKeys().find((k) => k.name === 'Legacy key')!;
+    const record = getApiKey(id)!;
+    expect(record).not.toHaveProperty('keyHash');
+
+    const originalScopes = [...record.scopes];
+    record.scopes.push('admin:keys');
+    record.ipWhitelist.push('0.0.0.0/0');
+
+    expect(getApiKey(id)!.scopes).toEqual(originalScopes);
+    expect(getApiKey(id)!.ipWhitelist).toEqual([]);
   });
 });

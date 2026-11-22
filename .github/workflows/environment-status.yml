@@ -1,9 +1,10 @@
 name: Environment Status
 
+# TODO(next-bounty): parked -- manual runs only. Automatic triggers removed
+# because it polled deployed environments every 30 minutes (48 runs a day) and
+# none exist yet, which buried the useful runs in the Actions tab.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '*/30 * * * *'  # every 30 minutes
 
 jobs:
   status:

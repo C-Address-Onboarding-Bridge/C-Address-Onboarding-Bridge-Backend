@@ -1,4 +1,4 @@
-import { logger } from './index';
+import { logger } from './logger';
 
 export enum CircuitState {
   CLOSED = 'CLOSED',
@@ -113,4 +113,18 @@ export class CircuitBreaker {
       service: this.service,
     };
   }
+}
+
+export type CircuitService = 'soroban' | 'moonpay' | 'transak' | 'cex';
+
+/** One breaker per upstream; outbound calls go through these and /health reports them. */
+export const circuitBreakers = new Map<CircuitService, CircuitBreaker>([
+  ['soroban', new CircuitBreaker('soroban')],
+  ['moonpay', new CircuitBreaker('moonpay')],
+  ['transak', new CircuitBreaker('transak')],
+  ['cex', new CircuitBreaker('cex')],
+]);
+
+export function getCircuitBreaker(service: CircuitService): CircuitBreaker {
+  return circuitBreakers.get(service)!;
 }

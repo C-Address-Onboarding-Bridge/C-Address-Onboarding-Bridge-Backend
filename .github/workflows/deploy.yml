@@ -1,8 +1,9 @@
 name: Deploy
 
+# TODO(next-bounty): parked -- manual runs only. Automatic triggers removed
+# because it builds and deploys on every push to main, and nothing is live yet --
+# no cluster, registry credentials or environments exist for it to target.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       environment:

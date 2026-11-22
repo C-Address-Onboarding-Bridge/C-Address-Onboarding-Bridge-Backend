@@ -34,6 +34,15 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
   if (params.baseCurrencyAmount !== undefined) query.set('baseCurrencyAmount', String(params.baseCurrencyAmount));
   if (params.email !== undefined) query.set('email', params.email);
   if (params.redirectUrl !== undefined) query.set('redirectUrl', params.redirectUrl);
+  const query = new URLSearchParams({ apiKey: config.apiKey });
+
+  if (params.walletAddress) query.set('walletAddress', params.walletAddress);
+  if (params.walletNetwork) query.set('walletNetwork', params.walletNetwork);
+  if (params.currencyCode) query.set('currencyCode', params.currencyCode);
+  if (params.baseCurrency) query.set('baseCurrencyCode', params.baseCurrency);
+  if (params.baseCurrencyAmount != null) query.set('baseCurrencyAmount', String(params.baseCurrencyAmount));
+  if (params.email) query.set('email', params.email);
+  if (params.redirectUrl) query.set('redirectUrl', params.redirectUrl);
 
   const queryString = `?${query.toString()}`;
 
@@ -43,6 +52,12 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
     .digest('base64');
 
   return `https://buy.moonpay.com${queryString}&signature=${encodeURIComponent(signature)}`;
+    .digest('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  return `https://buy.moonpay.com${queryString}&signature=${signature}`;
 }
 
 /**
@@ -67,6 +82,9 @@ export function verifyMoonpayWebhook(config: MoonpayConfig, rawBody: string, sig
   } catch {
     return false;
   }
+  const expected = crypto.createHmac('sha256', config.secretKey).update(rawBody).digest();
+  const received = Buffer.from(signature, 'base64');
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
 /**
@@ -82,6 +100,15 @@ export async function getMoonpayBuyQuote(config: MoonpayConfig, params: {
   baseCurrencyAmount: number;
   quoteCurrency: string;
 }): Promise<{ quoteCurrencyAmount: number; feeAmount: number; totalAmount: number }> {
+}): Promise<{
+  // Restored from d2a6c17^. The "seed learning exercises" stubbing pass wrote
+  // its `throw new Error('Not implemented')` into this *return type* instead of
+  // the function body -- a parse error that broke every test importing this
+  // module. The body below was already implemented and is untouched.
+  quoteCurrencyAmount: number;
+  feeAmount: number;
+  totalAmount: number;
+}> {
   const url = `https://api.moonpay.com/v3/currencies/${params.quoteCurrency}/buy_quote`;
   const query = new URLSearchParams({
     apiKey: config.apiKey,

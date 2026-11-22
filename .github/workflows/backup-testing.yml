@@ -1,9 +1,9 @@
 name: Automated Backup Testing
 
+# TODO(next-bounty): parked -- manual runs only. Automatic triggers removed
+# because it restores database backups from S3, but no AWS credentials or backup
+# bucket are configured, so every monthly run failed at the credentials step.
 on:
-  schedule:
-    # Monthly backup restoration test (1st of each month at 2:00 AM UTC)
-    - cron: "0 2 1 * *"
   workflow_dispatch:
     inputs:
       backup_id:

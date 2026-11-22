@@ -1,4 +1,4 @@
-import type { MessageCatalog } from './types';
+import type { MessageCatalog } from './types.js';
 
 /** English (en) — baseline / fallback catalog. */
 export const en: MessageCatalog = {

@@ -31,6 +31,7 @@ scrape_configs:
       - labels:
           level:
           service:
+      - structured_metadata:
           request_id:
           correlation_id:
           trace_id:

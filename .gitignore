@@ -1,36 +1,65 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 build/
+coverage/
+.nyc_output/
 target/
+
+# Environment / secrets
 .env
 .env.local
 .env.*.local
+*.local
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 .DS_Store
 Thumbs.db
-coverage/
-*.wasm
-.claude/
+
+# Editor artefacts
 .idea/
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# Test snapshots and results
 __snapshots__/
+**/__snapshots__/
 *.snap
 test_snapshots/
-__snapshots__/
-*.snap
-.vitest-cache/
+vitest-results/
+junit-*.xml
+test-results/
+*.test-results.json
+playwright-report/
+.playwright/
+
+# Build artifacts
 *.tsbuildinfo
+.vitest-cache/
+.turbo/
+*.js.map
+*.d.ts.map
+
+# Deployment artifacts
 deployments/*.json
 deployments/blue-green-state.txt
+
+# Migration state (legacy file-based state — superseded by schema_migrations table)
+.migration-state.json
+*.migration-state.json
+
+# Reports
+reports/
+
+# Secrets
 .secrets.local.json
 .secrets.local.enc
 logs/secrets-audit.jsonl
-
-# Test snapshots
-**/__snapshots__/
-**/*.snap
 
 # Python bytecode
 __pycache__/
@@ -38,21 +67,14 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Rust build artifacts
+# Rust build artefacts
 examples/rust/target/
 contracts/onboarding-bridge/target/
 contracts/onboarding-bridge/fuzz/target/
 *.lock.bak
 
-# Java / Maven build artifacts
+# Java / Maven build artefacts
 examples/java/target/
-
-# Test output / snapshots
-*.snap
-**/__snapshots__/
-vitest-results/
-junit-*.xml
-test-results/
 
 # OS / editor artefacts
 *.swp
@@ -63,4 +85,22 @@ test-results/
 # Temporary files
 *.tmp
 *.bak
-.nyc_output/
+
+# Debug and profiling
+*.cpuprofile
+*.heapsnapshot
+.clinic/
+0x/
+
+# Package manager caches
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+
+# Misc generated files
+WEBSOCKET_CACHE_FIX.md
+WEBHOOK_RATE_LIMIT_FIX.md
+WEBHOOK_RATE_LIMIT_FIX_IMPLEMENTATION.md
+OPENAPI_DOCUMENTATION_GAP.md
+CORS_METHODS_FIX.md

@@ -1,4 +1,4 @@
-import { PaginatedResponse, PaginatedRequestParams, AutoPaginateOptions, PageFetcher } from './types';
+import { PaginatedResponse, PaginatedRequestParams, AutoPaginateOptions, PageFetcher } from './types.js';
 
 export class PaginationHelper<T> {
   constructor(
@@ -37,6 +37,7 @@ export class PaginationHelper<T> {
             reject(sig!.reason instanceof Error ? sig!.reason : new DOMException('Aborted', 'AbortError'));
           }, { once: true });
         });
+        await this.delayWithSignal(throttleMs, sig);
       }
     } while (cursor && !sig?.aborted);
   }
@@ -70,6 +71,35 @@ export class PaginationHelper<T> {
     }
 
     return results;
+  }
+
+  /**
+   * Wait `ms` milliseconds, or reject early if `signal` is (or becomes) aborted.
+   *
+   * The abort listener is removed in both the resolve and reject paths so that
+   * repeated throttled iterations do not accumulate listeners on a shared
+   * `AbortSignal`. Using `{ once: true }` is insufficient because the listener
+   * is only auto-removed when it actually fires.
+   */
+  private delayWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.reject(new Error('Aborted'));
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        reject(new Error('Aborted'));
+      };
+
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+
+      signal?.addEventListener('abort', onAbort);
+    });
   }
 }
 

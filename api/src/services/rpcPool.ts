@@ -1,7 +1,8 @@
 import { SorobanRpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
-import { logger } from '../index';
+import { logger } from '../logger';
 import { applyKeepAliveAgents } from './httpAgent';
+import { getCircuitBreaker } from '../circuit-breaker';
 
 interface ProviderState {
   url: string;
@@ -42,9 +43,9 @@ export class RpcPool {
       totalFailures: 0,
     }));
 
-    if (this.providers.length > 1) {
-      this.startHealthChecks(rpc.healthCheckIntervalMs);
-    }
+    // Run for single-provider pools too, otherwise a provider marked
+    // unhealthy is never re-checked and stays flagged forever.
+    this.startHealthChecks(rpc.healthCheckIntervalMs);
   }
 
   private startHealthChecks(intervalMs: number): void {
@@ -120,29 +121,22 @@ export class RpcPool {
     }
   }
 
+  /** Runs `fn` against a healthy provider (failing over between them) behind the soroban circuit breaker. */
   async execute<T>(fn: (_server: SorobanRpc.Server) => Promise<T>): Promise<T> {
+    return getCircuitBreaker('soroban').execute(() => this.executeWithFailover(fn));
+  }
+
+  private async executeWithFailover<T>(fn: (_server: SorobanRpc.Server) => Promise<T>): Promise<T> {
     const tried = new Set<string>();
     const allProviders = [...this.providers];
 
     let lastError: unknown;
     for (let attempt = 0; attempt < allProviders.length; attempt++) {
-      const provider = this.selectProvider();
+      let provider = this.selectProvider();
       if (tried.has(provider.url)) {
         const untried = allProviders.find((p) => !tried.has(p.url));
         if (!untried) break;
-        tried.add(untried.url);
-        provider.totalRequests++;
-        const start = Date.now();
-        try {
-          const result = await fn(untried.server);
-          untried.consecutiveFailures = 0;
-          untried.lastLatencyMs = Date.now() - start;
-          return result;
-        } catch (err) {
-          lastError = err;
-          this.markFailure(untried);
-          continue;
-        }
+        provider = untried;
       }
 
       tried.add(provider.url);

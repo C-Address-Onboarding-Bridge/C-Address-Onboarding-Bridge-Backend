@@ -10,12 +10,19 @@ after a soroban-sdk version bump or a storage schema change.
 | Term | Meaning |
 |------|---------|
 | `Version` | User-visible contract version stored in `DataKey::Version`. Increment per release. |
-| `SchemaVersion` | On-chain storage schema version stored in `DataKey::SchemaVersion`. Increment only when a storage key or its value type changes. |
-| `SCHEMA_VERSION` | Compile-time constant in `lib.rs`. Must match the highest schema version the code understands. |
+| `ProposalAction::Upgrade` | Governed proposal action that replaces the live WASM in-place via `env.deployer().update_current_contract_wasm()`. |
 
 Soroban's `env.deployer().update_current_contract_wasm()` replaces WASM in-place
-while keeping all instance storage intact. The `upgrade()` function wraps this
-call and requires admin auth.
+while keeping all instance storage intact. The contract does **not** expose a
+direct `upgrade()` entrypoint; instead, an upgrade is performed through the
+governed proposal flow: an admin proposes `ProposalAction::Upgrade(new_wasm_hash)`,
+approvers approve it, and once the approval threshold is met anyone can `execute`
+it. Execution calls `update_current_contract_wasm` with the new hash.
+
+There is no `migrate()` entrypoint and no on-chain `schema_version` /
+`SCHEMA_VERSION` / `DataKey::SchemaVersion`. Storage layout changes must be
+handled by the new WASM itself (e.g. lazily writing defaults on read) or by a
+redeploy, since the contract has no migration hook.
 
 ---
 
@@ -41,57 +48,73 @@ call and requires admin auth.
      --network-passphrase "<passphrase>"
    # outputs: <new_wasm_hash>
    ```
-4. Call `upgrade` on the live contract (admin only):
+4. Propose the upgrade on the live contract (admin only):
    ```bash
    stellar contract invoke \
      --id <contract-id> \
      --source <admin-secret> \
      --rpc-url <rpc-url> \
      --network-passphrase "<passphrase>" \
-     -- upgrade --new_wasm_hash <new_wasm_hash>
+     -- propose \
+        --proposer <admin-address> \
+        --action '{"Upgrade": "<new_wasm_hash>"}'
+   # outputs: <proposal_id>
    ```
-5. Verify the contract still works:
+5. Approve the proposal until the threshold is met (each approver):
+   ```bash
+   stellar contract invoke \
+     --id <contract-id> \
+     --source <approver-secret> \
+     --rpc-url <rpc-url> \
+     --network-passphrase "<passphrase>" \
+     -- approve --approver <approver-address> --proposal_id <proposal_id>
+   ```
+6. Execute the proposal once approved:
+   ```bash
+   stellar contract invoke \
+     --id <contract-id> \
+     --source <any-secret> \
+     --rpc-url <rpc-url> \
+     --network-passphrase "<passphrase>" \
+     -- execute --proposal_id <proposal_id>
+   ```
+7. Verify the contract still works:
    ```bash
    stellar contract invoke --id <contract-id> ... -- version
-   stellar contract invoke --id <contract-id> ... -- schema_version
    ```
 
-No `migrate` call is needed when the schema has not changed.
+No migration call is needed when the storage schema has not changed.
+
+### Restoring archived state
+
+The contract renews instance and persistent entries before they approach their
+archive threshold. If an entry has already been archived, include it in the
+transaction footprint and restore it before invoking the contract:
+
+Build a transaction with a `RestoreFootprint` operation for the archived
+entries, submit it with the administrator source account, and then retry the
+contract invocation.
+
+Restore the instance entry before any getter or mutating call that depends on
+contract configuration. Restore individual persistent funding, proposal, or
+analytics entries only when replaying or querying those records; normal calls
+renew entries that are still live.
 
 ---
 
 ### 2. Storage schema change (new or renamed keys / changed value types)
 
-Follow all steps in §1, then additionally:
+The contract has no `migrate()` entrypoint and no on-chain schema version, so
+there is no in-place migration hook. Choose one of:
 
-1. Bump `SCHEMA_VERSION` in `lib.rs`:
-   ```rust
-   pub const SCHEMA_VERSION: u32 = 2; // was 1
-   ```
-2. Add migration logic in `migrate()`:
-   ```rust
-   if on_chain < 2 {
-       // e.g. write default value for a new key
-       env.storage().instance().set(&DataKey::NewKey, &default_value);
-   }
-   ```
-3. After calling `upgrade`, call `migrate` (admin only):
-   ```bash
-   stellar contract invoke \
-     --id <contract-id> \
-     --source <admin-secret> \
-     --rpc-url <rpc-url> \
-     --network-passphrase "<passphrase>" \
-     -- migrate
-   ```
-4. Confirm `schema_version` returns the new value:
-   ```bash
-   stellar contract invoke --id <contract-id> ... -- schema_version
-   # expect: 2
-   ```
-
-`migrate` is idempotent — calling it again on an already-migrated contract is
-safe (it writes the same schema version and returns `Ok`).
+- **Lazy defaults in the new WASM.** Ship code that treats a missing key as its
+default value on read and writes it on the next mutation. Follow all steps in
+§1 to roll the new WASM out through the governed upgrade flow.
+- **Redeploy.** If the change cannot be handled lazily, deploy a fresh contract
+with `stellar contract deploy`, re-run `initialize`, and migrate off-chain state
+(funding records, proposals) out of band. Soroban contracts are immutable once
+deployed, so a redeploy is the only way to change storage layout that the new
+WASM cannot reconcile.
 
 ---
 
@@ -127,12 +150,11 @@ steps:
 | `InvalidFeeBps` | 4 | `fee_bps > 10000` |
 | `ZeroAmount` | 5 | `amount <= 0` in `fund_c_address` |
 | `InsufficientFees` | 6 | Withdrawal exceeds accumulated fees |
-| `IncompatibleSchema` | 7 | On-chain schema version > code's `SCHEMA_VERSION` |
 
 ---
 
 ## Changelog
 
-| Contract Version | Schema Version | soroban-sdk | Notes |
-|-----------------|---------------|-------------|-------|
-| 1 | 1 | 26.0.1 | Initial release |
+| Contract Version | soroban-sdk | Notes |
+|-----------------|-------------|-------|
+| 1 | 26.0.1 | Initial release |

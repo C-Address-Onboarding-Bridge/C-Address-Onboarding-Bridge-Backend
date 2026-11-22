@@ -55,7 +55,8 @@ async function refreshBackpressure(): Promise<void> {
 }
 
 export function isBackpressured(): boolean {
-  throw new Error('Not implemented: isBackpressured');
+  void refreshBackpressure();
+  return _backpressured;
 }
 
 // ─── In-process analytics buffer ─────────────────────────────────────────────
@@ -106,7 +107,11 @@ async function flushAnalyticsBuffer(): Promise<void> {
 
 /** Flush remaining buffer immediately; intended for graceful shutdown. */
 export async function drainAnalyticsBuffer(): Promise<void> {
-  throw new Error('Not implemented: drainAnalyticsBuffer');
+  if (_flushTimer !== null) {
+    clearTimeout(_flushTimer);
+    _flushTimer = null;
+  }
+  await flushAnalyticsBuffer();
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -130,7 +135,27 @@ export function enqueueAudit(
   actor: string,
   syncFallback?: () => void,
 ): void {
-  throw new Error('Not implemented: enqueueAudit');
+  const fallback = syncFallback ?? (() => {});
+
+  if (!config.asyncPipeline.enabled) {
+    fallback();
+    return;
+  }
+
+  const data: AuditLogJobData = { type, payload, actor };
+
+  enqueueAuditLog(data)
+    .then(() => {
+      asyncPipelineEnqueueCounter.inc({ queue: 'async-critical', job: 'audit-log' });
+    })
+    .catch(() => {
+      asyncPipelineDroppedCounter.inc({ queue: 'async-critical', job: 'audit-log' });
+      try {
+        fallback();
+      } catch {
+        // Never let a fallback failure propagate to the caller.
+      }
+    });
 }
 
 /**
@@ -148,7 +173,26 @@ export function bufferAnalytics(
   labels: Record<string, string>,
   syncFallback?: () => void,
 ): void {
-  throw new Error('Not implemented: bufferAnalytics');
+  if (!config.asyncPipeline.enabled) {
+    syncFallback?.();
+    return;
+  }
+
+  // Analytics are explicitly best-effort: once backpressure is observed,
+  // discard the increment rather than allowing an unbounded in-process buffer.
+  if (isBackpressured()) {
+    asyncPipelineDroppedCounter.inc({ job: 'async-analytics' });
+    return;
+  }
+
+  const key = bufferKey(event, labels);
+  const existing = analyticsBuffer.get(key);
+  if (existing) {
+    existing.value += 1;
+  } else {
+    analyticsBuffer.set(key, { event, labels: { ...labels }, value: 1 });
+  }
+  scheduleFlush();
 }
 
 /**
@@ -164,7 +208,18 @@ export function enqueueFundingMetrics(
   input: FundingMetricInput,
   syncFallback?: () => void,
 ): void {
-  throw new Error('Not implemented: enqueueFundingMetrics');
+  if (!config.asyncPipeline.enabled || isBackpressured()) {
+    syncFallback?.();
+    return;
+  }
+
+  void enqueuePipelineMetrics({ operation: 'funding', data: input as unknown as Record<string, unknown> })
+    .then(() => {
+      asyncPipelineEnqueueCounter.inc({ queue: 'async-pipeline', job: 'pipeline-metrics' });
+    })
+    .catch(() => {
+      syncFallback?.();
+    });
 }
 
 /**
@@ -178,17 +233,18 @@ export function enqueueCounterIncrement(
   labels: Record<string, string>,
   syncFallback?: () => void,
 ): void {
-  throw new Error('Not implemented: enqueueCounterIncrement');
+  bufferAnalytics(event, labels, syncFallback);
 }
 
 // ─── Exported test helpers ────────────────────────────────────────────────────
 
 /** Force-set the backpressure state. For tests only. */
 export function _setBackpressuredForTest(value: boolean): void {
-  throw new Error('Not implemented: _setBackpressuredForTest');
+  _backpressured = value;
+  _lastBackpressureCheck = Date.now();
 }
 
 /** Expose current buffer size. For tests only. */
 export function _getBufferSizeForTest(): number {
-  throw new Error('Not implemented: _getBufferSizeForTest');
+  return analyticsBuffer.size;
 }

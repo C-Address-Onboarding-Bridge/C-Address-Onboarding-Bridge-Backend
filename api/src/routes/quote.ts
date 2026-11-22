@@ -2,7 +2,8 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
 import { sorobanService } from '../services/soroban';
-import { buildCacheKey, CACHE_TTL, getOrCompute, cacheDelPattern } from '../services/cache';
+import { buildCacheKey, cacheDelPattern, CACHE_TTL } from '../services/cache';
+import { cacheMiddleware } from '../middleware/cache';
 import { setFeeRateBps } from '../services/metrics';
 
 /** Express router for quote endpoints. Mounted at `/api/v1/quote`. */
@@ -12,36 +13,61 @@ const getQuoteSchema = z.object({
   sourceAsset: z.string().min(1),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
   targetAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid target Stellar address'),
+  sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid source Stellar address').optional(),
+  token: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid token Stellar address').optional(),
 });
 
-quoteRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const params = getQuoteSchema.parse(req.query);
-    const cacheKey = buildCacheKey(
-      'quote',
-      `${params.sourceAsset}:${params.amount}:${params.targetAddress}`,
-    );
+async function computeQuote(req: Request) {
+  const params = getQuoteSchema.parse(req.query);
+  const quote = await sorobanService.getQuote(
+    params.sourceAsset,
+    params.amount,
+    params.targetAddress,
+  );
+  setFeeRateBps(quote.feeBps);
+  return quote;
+}
 
-    const quote = await getOrCompute(
-      cacheKey,
-      CACHE_TTL.quote,
-      () => sorobanService.getQuote(params.sourceAsset, params.amount, params.targetAddress),
-    );
+quoteRouter.get(
+  '/',
+  cacheMiddleware({
+    ttl: CACHE_TTL.quote,
+    keyFn: (req) => {
+      const params = getQuoteSchema.parse(req.query);
+      return buildCacheKey(
+        'quote',
+        `${params.sourceAsset}:${params.amount}:${params.targetAddress}:${params.sourceAddress ?? ''}:${params.token ?? ''}`,
+      );
+    },
+    revalidate: computeQuote,
+  }),
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const params = getQuoteSchema.parse(_req.query);
+      const quote = await sorobanService.getQuote(
+        params.sourceAsset,
+        params.amount,
+        params.targetAddress,
+        params.sourceAddress,
+        params.token,
+      );
 
-    setFeeRateBps(quote.feeBps);
-
-    // X-Cache header is set inside getOrCompute via SWR logic; signal the outcome here.
-    res.setHeader('X-Cache', res.getHeader('X-Cache') ?? 'MISS');
-    res.json(quote);
-  } catch (err) {
-    next(err);
-  }
-});
+      setFeeRateBps(quote.feeBps);
+      res.json(quote);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 /**
  * Invalidate all quote cache entries for a given asset.
  * Called when a new ledger / block is detected.
  */
 export async function invalidateQuoteCache(sourceAsset?: string): Promise<void> {
-  throw new Error('Not implemented: invalidateQuoteCache');
+  if (sourceAsset) {
+    await cacheDelPattern(buildCacheKey('quote', `${sourceAsset}:*`));
+  } else {
+    await cacheDelPattern(buildCacheKey('quote', '*'));
+  }
 }

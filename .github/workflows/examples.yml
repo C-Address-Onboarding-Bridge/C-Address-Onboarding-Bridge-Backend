@@ -2,15 +2,14 @@ name: Multi-Language Examples
 
 on:
   push:
-    branches: [main]
     paths:
       - 'examples/**'
       - '.github/workflows/examples.yml'
   pull_request:
-    branches: [main]
     paths:
       - 'examples/**'
       - '.github/workflows/examples.yml'
+  workflow_dispatch:
 
 jobs:
   examples:

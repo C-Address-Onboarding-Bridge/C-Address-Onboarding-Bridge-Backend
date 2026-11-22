@@ -1,5 +1,5 @@
-export { BridgeMockServer, RouteBuilder, createMockServer } from './mock-server';
-export type { RecordedRequest } from './mock-server';
+export { BridgeMockServer, RouteBuilder, createMockServer } from './mock-server.js';
+export type { RecordedRequest } from './mock-server.js';
 export {
   fixtures,
   MOCK_C_ADDRESS,
@@ -11,4 +11,4 @@ export {
   MOCK_NATIVE_TOKEN,
   MOCK_SAC_TOKEN,
   MOCK_TOKEN_METADATA,
-} from './fixtures';
+} from './fixtures.js';

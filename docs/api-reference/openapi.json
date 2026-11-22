@@ -43,6 +43,38 @@
     {
       "name": "API Keys",
       "description": "Manage API keys and permissions"
+    },
+    {
+      "name": "Token",
+      "description": "Token metadata"
+    },
+    {
+      "name": "Transactions",
+      "description": "Transaction history and CSV export"
+    },
+    {
+      "name": "Webhooks",
+      "description": "Manage outgoing webhook registrations and the dead letter queue"
+    },
+    {
+      "name": "Provider Webhooks",
+      "description": "Inbound MoonPay and Transak callbacks (HMAC-signed)"
+    },
+    {
+      "name": "Admin",
+      "description": "Fees, statistics and the integrity audit log"
+    },
+    {
+      "name": "Observability",
+      "description": "Cache metrics, Prometheus metrics and SDK telemetry"
+    },
+    {
+      "name": "Docs",
+      "description": "OpenAPI document and Swagger UI"
+    },
+    {
+      "name": "WebSocket",
+      "description": "Live transaction status push"
     }
   ],
   "components": {
@@ -240,6 +272,49 @@
         ],
         "title": "FundPrepareRequest"
       },
+      "BatchFundRequest": {
+        "type": "object",
+        "properties": {
+          "signedXdr": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Base64-encoded signed batch_fund_c_address transaction XDR (max 65536 chars)",
+            "example": "AAAAAgAAAABxy..."
+          },
+          "recipients": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "pattern": "^[GC][A-Z2-7]{55}$",
+                  "description": "Stellar/C-Address (56-char base32)",
+                  "example": "GABCDE...WXYZ"
+                },
+                "amount": {
+                  "type": "string",
+                  "pattern": "^\\d+$",
+                  "description": "Amount in stroops (1 XLM = 10,000,000 stroops)",
+                  "example": "1000000"
+                }
+              },
+              "required": [
+                "target",
+                "amount"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 100,
+            "description": "Must match the recipients encoded in signedXdr, in order"
+          }
+        },
+        "required": [
+          "signedXdr",
+          "recipients"
+        ],
+        "title": "BatchFundRequest"
+      },
       "MoonpayOfframpRequest": {
         "type": "object",
         "properties": {
@@ -334,6 +409,83 @@
         ],
         "title": "WidgetUrlResponse"
       },
+      "MoonpayQuoteQuery": {
+        "type": "object",
+        "properties": {
+          "baseCurrency": {
+            "type": "string",
+            "example": "USD"
+          },
+          "baseCurrencyAmount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "example": 100
+          },
+          "quoteCurrency": {
+            "type": "string",
+            "default": "xlm",
+            "example": "xlm"
+          }
+        },
+        "required": [
+          "baseCurrency",
+          "baseCurrencyAmount"
+        ],
+        "title": "MoonpayQuoteQuery"
+      },
+      "MoonpayQuoteResponse": {
+        "type": "object",
+        "properties": {
+          "quoteCurrencyAmount": {
+            "type": "number"
+          },
+          "feeAmount": {
+            "type": "number"
+          },
+          "totalAmount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "quoteCurrencyAmount",
+          "feeAmount",
+          "totalAmount"
+        ],
+        "title": "MoonpayQuoteResponse"
+      },
+      "OfframpQuoteQuery": {
+        "type": "object",
+        "properties": {
+          "fiatAmount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "example": 100
+          },
+          "fiatCurrency": {
+            "type": "string",
+            "minLength": 1,
+            "example": "USD"
+          },
+          "cryptoCurrency": {
+            "type": "string",
+            "minLength": 1,
+            "default": "xlm",
+            "example": "xlm"
+          },
+          "cAddress": {
+            "type": "string",
+            "pattern": "^[GC][A-Z2-7]{55}$",
+            "description": "Stellar/C-Address (56-char base32)",
+            "example": "GABCDE...WXYZ"
+          }
+        },
+        "required": [
+          "fiatAmount",
+          "fiatCurrency",
+          "cAddress"
+        ],
+        "title": "OfframpQuoteQuery"
+      },
       "CexRouteRequest": {
         "type": "object",
         "properties": {
@@ -380,6 +532,107 @@
           "targetCAddress"
         ],
         "title": "CexRouteRequest"
+      },
+      "WebhookRegisterRequest": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "example": "https://example.com/webhook"
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 16,
+            "description": "HMAC secret used to sign deliveries"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "default": [
+              "*"
+            ],
+            "example": [
+              "funding.confirmed"
+            ]
+          }
+        },
+        "required": [
+          "url",
+          "secret"
+        ],
+        "title": "WebhookRegisterRequest"
+      },
+      "WebhookRegistration": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "events",
+          "createdAt"
+        ],
+        "title": "WebhookRegistration"
+      },
+      "WebhookDeliveryAttempt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "registrationId": {
+            "type": "string"
+          },
+          "webhookUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "event": {
+            "type": "string"
+          },
+          "statusCode": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "attemptNumber": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "registrationId",
+          "webhookUrl",
+          "event",
+          "timestamp",
+          "attemptNumber"
+        ],
+        "title": "WebhookDeliveryAttempt"
       },
       "CreateKeyRequest": {
         "type": "object",
@@ -440,6 +693,239 @@
           "scopes"
         ],
         "title": "CreateKeyRequest"
+      },
+      "ApiKeyRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "updatedAt": {
+            "type": "number"
+          },
+          "lastUsedAt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ipWhitelist": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expiresAt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rateLimit": {
+            "type": "string",
+            "enum": [
+              "low",
+              "standard",
+              "high"
+            ]
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "createdBy",
+          "createdAt",
+          "updatedAt",
+          "lastUsedAt",
+          "scopes",
+          "ipWhitelist",
+          "expiresAt",
+          "rateLimit",
+          "revoked"
+        ],
+        "title": "ApiKeyRecord"
+      },
+      "TransactionRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "txHash": {
+            "type": "string"
+          },
+          "sourceAddr": {
+            "type": "string"
+          },
+          "targetAddr": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "success",
+              "failed"
+            ]
+          },
+          "amount": {
+            "type": "string"
+          },
+          "fee": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "txHash",
+          "sourceAddr",
+          "targetAddr",
+          "status",
+          "amount",
+          "fee",
+          "createdAt",
+          "currency"
+        ],
+        "title": "TransactionRecord"
+      },
+      "AuditCheckpoint": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "integer"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "publisher": {
+            "type": "string",
+            "enum": [
+              "local",
+              "trusted-timestamp"
+            ]
+          },
+          "publicationRef": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "hash",
+          "timestamp",
+          "publisher",
+          "publicationRef"
+        ],
+        "title": "AuditCheckpoint"
+      },
+      "AuditLogEntry": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "type": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "previousHash": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "retentionUntil": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "sequence",
+          "id",
+          "timestamp",
+          "type",
+          "actor",
+          "payload",
+          "previousHash",
+          "hash",
+          "retentionUntil"
+        ],
+        "title": "AuditLogEntry"
+      },
+      "AuditVerification": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "entryCount": {
+            "type": "integer"
+          },
+          "checkpointCount": {
+            "type": "integer"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sequence": {
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ]
+            }
+          }
+        },
+        "required": [
+          "valid",
+          "entryCount",
+          "checkpointCount",
+          "errors"
+        ],
+        "title": "AuditVerification"
       }
     },
     "parameters": {}
@@ -610,7 +1096,7 @@
       "post": {
         "operationId": "prepareFunding",
         "summary": "Prepare an unsigned funding transaction for signing",
-        "description": "Simulates the contract call and returns an unsigned transaction XDR for the client to sign. Sign this with your wallet and POST it to /api/v2/fund.",
+        "description": "Simulates the contract call and returns an unsigned transaction XDR for the client to sign. Sign this with your wallet and POST it to /api/v2/fund. No transaction is submitted and no metrics are recorded.",
         "tags": [
           "Fund"
         ],
@@ -638,19 +1124,253 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "instruction": {
-                      "type": "string"
+                    "unsignedXdr": {
+                      "type": "string",
+                      "description": "Base64-encoded unsigned transaction XDR ready to sign"
                     },
-                    "simulation": {},
-                    "params": {
-                      "$ref": "#/components/schemas/FundPrepareRequest"
+                    "footprint": {
+                      "type": "string",
+                      "description": "Base64-encoded Soroban ledger footprint"
+                    },
+                    "fee": {
+                      "type": "string",
+                      "description": "Estimated fee in stroops"
+                    },
+                    "sourceAddress": {
+                      "type": "string",
+                      "pattern": "^[GC][A-Z2-7]{55}$",
+                      "description": "Stellar/C-Address (56-char base32)",
+                      "example": "GABCDE...WXYZ"
+                    },
+                    "targetAddress": {
+                      "type": "string",
+                      "pattern": "^[GC][A-Z2-7]{55}$",
+                      "description": "Stellar/C-Address (56-char base32)",
+                      "example": "GABCDE...WXYZ"
+                    },
+                    "tokenAddress": {
+                      "type": "string",
+                      "pattern": "^[GC][A-Z2-7]{55}$",
+                      "description": "Stellar/C-Address (56-char base32)",
+                      "example": "GABCDE...WXYZ"
+                    },
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d+$",
+                      "description": "Amount in stroops (1 XLM = 10,000,000 stroops)",
+                      "example": "1000000"
+                    },
+                    "memo": {
+                      "type": "string"
                     }
                   },
                   "required": [
-                    "instruction",
-                    "params"
+                    "unsignedXdr",
+                    "footprint",
+                    "fee",
+                    "sourceAddress",
+                    "targetAddress",
+                    "tokenAddress",
+                    "amount"
                   ],
                   "title": "FundPrepareResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or simulation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/fund/batch": {
+      "post": {
+        "operationId": "submitBatchFunding",
+        "summary": "Submit a signed batch funding transaction",
+        "description": "Submits a pre-signed transaction that funds up to 100 C-addresses. The recipients in the body are cross-checked against those decoded from signedXdr. Funding bodies may be up to 128 KB.",
+        "tags": [
+          "Fund"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "fund:write"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchFundRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Batch transaction submitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "transactionHash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$",
+                      "description": "64-char hex transaction hash",
+                      "example": "a1b2c3d4..."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "success",
+                        "failed"
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "recipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "target": {
+                            "type": "string",
+                            "pattern": "^[GC][A-Z2-7]{55}$",
+                            "description": "Stellar/C-Address (56-char base32)",
+                            "example": "GABCDE...WXYZ"
+                          },
+                          "amount": {
+                            "type": "string",
+                            "pattern": "^\\d+$",
+                            "description": "Amount in stroops (1 XLM = 10,000,000 stroops)",
+                            "example": "1000000"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "target",
+                          "amount",
+                          "status"
+                        ]
+                      }
+                    },
+                    "explorerUrl": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "explorerUrls": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uri"
+                      }
+                    }
+                  },
+                  "required": [
+                    "transactionHash",
+                    "status",
+                    "recipients"
+                  ],
+                  "title": "BatchFundResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid XDR (e.g. XDR_TOO_LARGE), xdr_decode_failed, recipient_mismatch or validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds the funding limit (XDR_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/fund/direct": {
+      "post": {
+        "operationId": "submitDirectFunding",
+        "summary": "Build, sign and submit a funding transaction server-side",
+        "description": "Submits a funding transaction using the server-side signer for the given parameters.",
+        "tags": [
+          "Fund"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "fund:write"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/FundPrepareRequest"
+                  },
+                  {
+                    "title": "FundDirectRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Transaction submitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TxStatusResponse"
                 }
               }
             }
@@ -667,6 +1387,124 @@
           },
           "401": {
             "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/fund/timelocked": {
+      "post": {
+        "operationId": "createTimelockedFunding",
+        "summary": "Create a timelocked funding transaction (not implemented)",
+        "description": "Timelocked funding requires on-chain contract support that has not yet been implemented. Always returns 501 Not Implemented.",
+        "tags": [
+          "Fund"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "fund:write"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "title": "TimelockedFundRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "501": {
+            "description": "Not implemented — contract lacks timelock support",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/fund/timelocked/{id}": {
+      "get": {
+        "operationId": "getTimelockedFunding",
+        "summary": "Get timelocked funding status (not implemented)",
+        "description": "Timelocked funding status requires on-chain contract support that has not yet been implemented. Always returns 501 Not Implemented.",
+        "tags": [
+          "Fund"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "fund:write"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented — contract lacks timelock support",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/fund/timelocked/{id}/claim": {
+      "post": {
+        "operationId": "claimTimelockedFunding",
+        "summary": "Claim timelocked funds (not implemented)",
+        "description": "Claiming timelocked funds requires on-chain contract support that has not yet been implemented. Always returns 501 Not Implemented.",
+        "tags": [
+          "Fund"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "fund:write"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented — contract lacks timelock support",
             "content": {
               "application/json": {
                 "schema": {
@@ -740,6 +1578,137 @@
         }
       }
     },
+    "/api/v2/status/queues": {
+      "get": {
+        "operationId": "getQueueStats",
+        "summary": "Background queue statistics",
+        "description": "Returns queue depth and processing statistics for the background job queues.",
+        "tags": [
+          "Status"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "status:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Queue statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "title": "QueueStatsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Queue statistics unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/status/health": {
+      "get": {
+        "operationId": "getStatusHealth",
+        "summary": "Status router health probe",
+        "tags": [
+          "Status"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "status:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status router is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ok"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "status"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "title": "StatusHealthResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/offramp/moonpay": {
       "post": {
         "operationId": "moonpayOfframp",
@@ -771,6 +1740,86 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WidgetUrlResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/offramp/moonpay/quote": {
+      "get": {
+        "operationId": "moonpayBuyQuote",
+        "summary": "Fetch a real-time MoonPay buy quote",
+        "description": "Returns quote, fee, and total amounts for converting a fiat base currency to a crypto quote currency via MoonPay.",
+        "tags": [
+          "Offramp"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "offramp:write"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "example": "USD"
+            },
+            "required": true,
+            "name": "baseCurrency",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "example": 100
+            },
+            "required": true,
+            "name": "baseCurrencyAmount",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "default": "xlm",
+              "example": "xlm"
+            },
+            "required": false,
+            "name": "quoteCurrency",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Buy quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoonpayQuoteResponse"
                 }
               }
             }
@@ -856,6 +1905,249 @@
         }
       }
     },
+    "/api/v2/offramp/quote": {
+      "get": {
+        "operationId": "compareOnrampQuotes",
+        "summary": "Compare MoonPay and Transak quotes",
+        "description": "Fetches quotes from every provider and returns them sorted by net amount, best first.",
+        "tags": [
+          "Offramp"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "offramp:write"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "example": 100
+            },
+            "required": true,
+            "name": "fiatAmount",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "USD"
+            },
+            "required": true,
+            "name": "fiatCurrency",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "default": "xlm",
+              "example": "xlm"
+            },
+            "required": false,
+            "name": "cryptoCurrency",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[GC][A-Z2-7]{55}$",
+              "description": "Stellar/C-Address (56-char base32)",
+              "example": "GABCDE...WXYZ"
+            },
+            "required": true,
+            "name": "cAddress",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Quotes sorted best first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "best": {
+                      "type": "object",
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "enum": [
+                            "moonpay",
+                            "transak"
+                          ]
+                        },
+                        "fiatAmount": {
+                          "type": "number"
+                        },
+                        "cryptoAmount": {
+                          "type": "number"
+                        },
+                        "feeAmount": {
+                          "type": "number"
+                        },
+                        "netAmount": {
+                          "type": "number"
+                        },
+                        "estimatedRate": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "provider",
+                        "fiatAmount",
+                        "cryptoAmount",
+                        "feeAmount",
+                        "netAmount",
+                        "estimatedRate"
+                      ],
+                      "title": "ProviderQuote"
+                    },
+                    "alternatives": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "type": "string",
+                            "enum": [
+                              "moonpay",
+                              "transak"
+                            ]
+                          },
+                          "fiatAmount": {
+                            "type": "number"
+                          },
+                          "cryptoAmount": {
+                            "type": "number"
+                          },
+                          "feeAmount": {
+                            "type": "number"
+                          },
+                          "netAmount": {
+                            "type": "number"
+                          },
+                          "estimatedRate": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "fiatAmount",
+                          "cryptoAmount",
+                          "feeAmount",
+                          "netAmount",
+                          "estimatedRate"
+                        ],
+                        "title": "ProviderQuote"
+                      }
+                    },
+                    "comparison": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "type": "string",
+                            "enum": [
+                              "moonpay",
+                              "transak"
+                            ]
+                          },
+                          "fiatAmount": {
+                            "type": "number"
+                          },
+                          "cryptoAmount": {
+                            "type": "number"
+                          },
+                          "feeAmount": {
+                            "type": "number"
+                          },
+                          "netAmount": {
+                            "type": "number"
+                          },
+                          "estimatedRate": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "fiatAmount",
+                          "cryptoAmount",
+                          "feeAmount",
+                          "netAmount",
+                          "estimatedRate"
+                        ],
+                        "title": "ProviderQuote"
+                      }
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "type": "string"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "error"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "best",
+                    "alternatives",
+                    "comparison"
+                  ],
+                  "title": "OfframpQuoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No provider returned a quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/cex/route": {
       "post": {
         "operationId": "cexRoute",
@@ -921,6 +2213,806 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/token/{contractId}/metadata": {
+      "get": {
+        "operationId": "getTokenMetadata",
+        "summary": "Get token metadata",
+        "description": "Returns decimals, name and symbol for a token contract. Use `native` for XLM.",
+        "tags": [
+          "Token"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "quote:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "example": "native"
+            },
+            "required": true,
+            "name": "contractId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "decimals": {
+                          "type": "integer"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "symbol": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "decimals",
+                        "name",
+                        "symbol"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "title": "TokenMetadataResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Metadata lookup failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webhook/moonpay": {
+      "post": {
+        "operationId": "moonpayWebhook",
+        "summary": "Receive a MoonPay order webhook",
+        "description": "Inbound callback from the provider. Authenticated by the provider HMAC signature header instead of an API key; replays are rejected.",
+        "tags": [
+          "Provider Webhooks"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "status"
+                    ]
+                  }
+                },
+                "required": [
+                  "data"
+                ],
+                "title": "ProviderWebhookPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "title": "ProviderWebhookAck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid signature, or replayed delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Processing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webhook/transak": {
+      "post": {
+        "operationId": "transakWebhook",
+        "summary": "Receive a Transak order webhook",
+        "description": "Inbound callback from the provider. Authenticated by the provider HMAC signature header instead of an API key; replays are rejected.",
+        "tags": [
+          "Provider Webhooks"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "status"
+                    ]
+                  }
+                },
+                "required": [
+                  "data"
+                ],
+                "title": "ProviderWebhookPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "title": "ProviderWebhookAck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid signature, or replayed delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Processing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/register": {
+      "post": {
+        "operationId": "registerWebhook",
+        "summary": "Register a webhook callback URL",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookRegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Webhook registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookRegistration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/registrations": {
+      "get": {
+        "operationId": "listWebhooks",
+        "summary": "List the calling key's webhook registrations",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registrations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "registrations": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WebhookRegistration"
+                      }
+                    }
+                  },
+                  "required": [
+                    "registrations"
+                  ],
+                  "title": "WebhookRegistrationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/registrations/{id}": {
+      "delete": {
+        "operationId": "deleteWebhook",
+        "summary": "Delete a webhook registration",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registration deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "deleted"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "title": "DeletedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or owned by another key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/dlq": {
+      "get": {
+        "operationId": "listWebhookDlq",
+        "summary": "List failed deliveries in the dead letter queue",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "DLQ entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "registrationId": {
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string",
+                            "format": "uri"
+                          },
+                          "event": {
+                            "type": "string"
+                          },
+                          "failedAt": {
+                            "type": "number"
+                          },
+                          "attemptCount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "registrationId",
+                          "url",
+                          "event",
+                          "failedAt",
+                          "attemptCount"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "entries"
+                  ],
+                  "title": "WebhookDlqList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/dlq/{id}": {
+      "get": {
+        "operationId": "getWebhookDlqEntry",
+        "summary": "Get a DLQ entry with payload and attempt history",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "DLQ entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "registration": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "createdAt": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "url",
+                        "events",
+                        "createdAt"
+                      ]
+                    },
+                    "payload": {},
+                    "event": {
+                      "type": "string"
+                    },
+                    "attempts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WebhookDeliveryAttempt"
+                      }
+                    },
+                    "failedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "registration",
+                    "event",
+                    "attempts",
+                    "failedAt"
+                  ],
+                  "title": "WebhookDlqEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or owned by another key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWebhookDlqEntry",
+        "summary": "Remove a DLQ entry after resolution",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entry deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "deleted"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "title": "DeletedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or owned by another key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/stats": {
+      "get": {
+        "operationId": "getWebhookStats",
+        "summary": "Webhook delivery statistics",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "registered": {
+                      "type": "integer"
+                    },
+                    "dlqSize": {
+                      "type": "integer"
+                    },
+                    "totalAttempts": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "registered",
+                    "dlqSize",
+                    "totalAttempts"
+                  ],
+                  "title": "WebhookStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/log": {
+      "get": {
+        "operationId": "getWebhookDeliveryLog",
+        "summary": "Delivery attempts for the calling key's webhooks",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attempts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WebhookDeliveryAttempt"
+                      }
+                    }
+                  },
+                  "required": [
+                    "attempts"
+                  ],
+                  "title": "WebhookDeliveryLog"
                 }
               }
             }
@@ -1134,6 +3226,1463 @@
             }
           }
         }
+      },
+      "get": {
+        "operationId": "getApiKey",
+        "summary": "Get an API key record",
+        "tags": [
+          "API Keys"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "API key record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Key not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateApiKey",
+        "summary": "Update an API key",
+        "tags": [
+          "API Keys"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "quote:read",
+                        "fund:write",
+                        "status:read",
+                        "offramp:write",
+                        "cex:read",
+                        "admin:keys"
+                      ]
+                    },
+                    "minItems": 1,
+                    "example": [
+                      "quote:read",
+                      "fund:write",
+                      "status:read"
+                    ]
+                  },
+                  "ipWhitelist": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "expiresAt": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "rateLimit": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "standard",
+                      "high"
+                    ]
+                  }
+                },
+                "title": "UpdateKeyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Key updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "updated"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "title": "UpdateKeyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Key not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/keys/audit": {
+      "get": {
+        "operationId": "getApiKeyAuditLog",
+        "summary": "API key usage audit log",
+        "tags": [
+          "API Keys"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "ts": {
+                            "type": "number"
+                          },
+                          "keyId": {
+                            "type": "string"
+                          },
+                          "ip": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "method": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ts",
+                          "keyId",
+                          "ip",
+                          "path",
+                          "method"
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "entries",
+                    "total",
+                    "offset",
+                    "limit"
+                  ],
+                  "title": "ApiKeyAuditResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/transactions": {
+      "get": {
+        "operationId": "listTransactions",
+        "summary": "Transaction history",
+        "description": "Lists transactions with filtering and cursor pagination. Pass `format=csv` for a CSV export (not cached).",
+        "tags": [
+          "Transactions"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "transactions:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "success",
+                "failed"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "example": "2026-01-01T00:00:00Z"
+            },
+            "required": false,
+            "name": "fromDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "toDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "minAmount",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "maxAmount",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "csv"
+              ],
+              "default": "json"
+            },
+            "required": false,
+            "name": "format",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transactions (JSON) or CSV export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TransactionRecord"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "nextCursor",
+                    "hasMore"
+                  ],
+                  "title": "TransactionListResponse"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/stats": {
+      "get": {
+        "operationId": "getAdminStats",
+        "summary": "Transaction statistics",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Counts by status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "byStatus": {
+                      "type": "object",
+                      "properties": {
+                        "pending": {
+                          "type": "integer"
+                        },
+                        "success": {
+                          "type": "integer"
+                        },
+                        "failed": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "pending",
+                        "success",
+                        "failed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "byStatus"
+                  ],
+                  "title": "AdminStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/fees": {
+      "get": {
+        "operationId": "getFeeConfig",
+        "summary": "Current fee configuration",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fee configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "feeBps": {
+                      "type": "integer"
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    },
+                    "pendingFeeBps": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "timelockUntil": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "feeBps",
+                    "updatedAt",
+                    "pendingFeeBps",
+                    "timelockUntil"
+                  ],
+                  "title": "FeeConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "updateFeeConfig",
+        "summary": "Propose a new fee rate (timelocked)",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "feeBps": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000,
+                    "example": 30
+                  },
+                  "timelockMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 60000
+                  }
+                },
+                "required": [
+                  "feeBps"
+                ],
+                "title": "FeeUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fee change scheduled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pendingFeeBps": {
+                      "type": "integer"
+                    },
+                    "timelockUntil": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "pendingFeeBps",
+                    "timelockUntil"
+                  ],
+                  "title": "FeeUpdateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "feeBps outside [0, 1000] or invalid timelockMs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/fees/withdraw": {
+      "post": {
+        "operationId": "withdrawFees",
+        "summary": "Create a governance proposal to withdraw accumulated fees",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "recipientAddress": {
+                    "type": "string",
+                    "pattern": "^[GC][A-Z2-7]{55}$",
+                    "description": "Stellar/C-Address (56-char base32)",
+                    "example": "GABCDE...WXYZ"
+                  },
+                  "tokenAddress": {
+                    "type": "string",
+                    "pattern": "^[GC][A-Z2-7]{55}$",
+                    "description": "Stellar/C-Address (56-char base32)",
+                    "example": "GABCDE...WXYZ"
+                  }
+                },
+                "title": "FeeWithdrawRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Withdrawal proposal created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "proposalId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "proposal_created"
+                      ]
+                    },
+                    "recipient": {
+                      "type": "string"
+                    },
+                    "token": {
+                      "type": "string"
+                    },
+                    "note": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "proposalId",
+                    "status",
+                    "recipient",
+                    "token",
+                    "note"
+                  ],
+                  "title": "FeeWithdrawResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/health": {
+      "get": {
+        "operationId": "getAdminHealth",
+        "summary": "Detailed health including circuit breakers and cache",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Healthy or degraded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "title": "AdminHealth"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unhealthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/audit": {
+      "get": {
+        "operationId": "getAdminAuditLog",
+        "summary": "Admin action log",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Admin actions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "log": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "ts": {
+                            "type": "number"
+                          },
+                          "action": {
+                            "type": "string"
+                          },
+                          "actor": {
+                            "type": "string"
+                          },
+                          "details": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": [
+                          "ts",
+                          "action",
+                          "actor",
+                          "details"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "log"
+                  ],
+                  "title": "AdminAuditLog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/audit/integrity": {
+      "get": {
+        "operationId": "listIntegrityAuditEntries",
+        "summary": "Hash-chained audit log entries",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "type",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuditLogEntry"
+                      }
+                    }
+                  },
+                  "required": [
+                    "entries"
+                  ],
+                  "title": "AuditEntryList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/audit/integrity/checkpoints": {
+      "get": {
+        "operationId": "listAuditCheckpoints",
+        "summary": "List audit checkpoints",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Checkpoints",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "checkpoints": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuditCheckpoint"
+                      }
+                    }
+                  },
+                  "required": [
+                    "checkpoints"
+                  ],
+                  "title": "AuditCheckpointList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAuditCheckpoint",
+        "summary": "Publish a checkpoint for the latest entry",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Checkpoint created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditCheckpoint"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No audit entries to checkpoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/audit/integrity/verify": {
+      "get": {
+        "operationId": "verifyAuditLog",
+        "summary": "Verify the audit hash chain",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chain is valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerification"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Chain is broken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerification"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/audit/integrity/export": {
+      "get": {
+        "operationId": "exportAuditLog",
+        "summary": "Export the audit log as JSON or NDJSON",
+        "tags": [
+          "Admin"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": [
+              "admin:keys"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "ndjson"
+              ],
+              "default": "json"
+            },
+            "required": false,
+            "name": "format",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "enum": [
+                        "c-address-bridge.audit.v1"
+                      ]
+                    },
+                    "exportedAt": {
+                      "type": "number"
+                    },
+                    "retentionPolicy": {
+                      "type": "string"
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuditLogEntry"
+                      }
+                    },
+                    "checkpoints": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuditCheckpoint"
+                      }
+                    },
+                    "verification": {
+                      "$ref": "#/components/schemas/AuditVerification"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "exportedAt",
+                    "retentionPolicy",
+                    "entries",
+                    "checkpoints",
+                    "verification"
+                  ],
+                  "title": "AuditExport"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cache/metrics": {
+      "get": {
+        "operationId": "getCacheMetrics",
+        "summary": "Cache hit/miss statistics",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cache metrics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "redisEnabled": {
+                      "type": "boolean"
+                    },
+                    "hits": {
+                      "type": "integer"
+                    },
+                    "misses": {
+                      "type": "integer"
+                    },
+                    "hitRatio": {
+                      "type": "number"
+                    },
+                    "entryCount": {
+                      "type": "integer"
+                    },
+                    "memoryBytes": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "redisEnabled",
+                    "hits",
+                    "misses",
+                    "hitRatio",
+                    "entryCount",
+                    "memoryBytes"
+                  ],
+                  "title": "CacheMetrics"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/metrics": {
+      "get": {
+        "operationId": "getPrometheusMetrics",
+        "summary": "Prometheus metrics",
+        "tags": [
+          "Observability"
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition format",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Metrics unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/telemetry/telemetry": {
+      "post": {
+        "operationId": "submitTelemetry",
+        "summary": "Submit SDK telemetry",
+        "description": "Anonymous SDK usage telemetry. No API key required; rate limited per IP.",
+        "tags": [
+          "Observability"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sdkVersion": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "nodeVersion": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "platform": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "method": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "responseTimeMs": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "errorType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sdkVersion",
+                  "nodeVersion",
+                  "platform",
+                  "method",
+                  "responseTimeMs"
+                ],
+                "title": "TelemetryEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "accepted"
+                  ],
+                  "title": "TelemetryAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiSpec",
+        "summary": "This OpenAPI document",
+        "tags": [
+          "Docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/docs": {
+      "get": {
+        "operationId": "getSwaggerUi",
+        "summary": "Interactive Swagger UI",
+        "tags": [
+          "Docs"
+        ],
+        "responses": {
+          "200": {
+            "description": "Swagger UI page",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/health": {
@@ -1188,6 +4737,139 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "healthReady",
+        "summary": "Readiness probe",
+        "description": "Fails when a critical dependency is down or the server is shutting down.",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ready": {
+                      "type": "boolean"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ready"
+                  ],
+                  "title": "ReadinessResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ready": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ready"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "operationId": "healthLive",
+        "summary": "Liveness probe",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "alive": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "alive",
+                    "timestamp"
+                  ],
+                  "title": "LivenessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ws": {
+      "get": {
+        "operationId": "statusWebSocket",
+        "summary": "Live transaction status over WebSocket",
+        "description": "Upgrade to a WebSocket, passing the API key as the `Sec-WebSocket-Protocol` header. Client messages: `{\"action\":\"subscribe\",\"txHash\":\"...\",\"lastKnownStatus\":\"pending\"}`, `{\"action\":\"unsubscribe\",\"txHash\":\"...\"}` and `{\"action\":\"list\"}`. Server messages have a `type` of `connected`, `subscribed`, `unsubscribed`, `subscriptions`, `status_update`, `subscription_closed` or `error`.",
+        "tags": [
+          "WebSocket"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "API key"
+            },
+            "required": true,
+            "name": "sec-websocket-protocol",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching protocols"
+          },
+          "401": {
+            "description": "Missing, invalid, revoked or expired key"
+          },
+          "429": {
+            "description": "Too many connections for this key or IP"
           }
         }
       }

@@ -125,6 +125,37 @@ const status = await client.getStatus(result.hash);
 console.log(status.status); // 'pending' | 'success' | 'failed'
 ```
 
+#### React: the `useFund` hook
+
+`@c-address-bridge/react-hooks` wraps steps 2–5 in one hook. `prepare()` starts a funding attempt with its own idempotency key; calling `submit()` again for the same attempt (e.g. after a network error) reuses that key so the server can deduplicate it. After a successful submit the hook polls the transaction status until it is `success` or `failed`. `reset()` ends the attempt.
+
+```tsx
+import { useFund } from '@c-address-bridge/react-hooks';
+import { signTransaction } from '@stellar/freighter-api';
+
+function FundButton({ params }: { params: FundParams }) {
+  const fund = useFund({ baseUrl: 'https://bridge.example.com', apiKey });
+
+  const onClick = async () => {
+    try {
+      const prepared = await fund.prepare(params);
+      const { signedTxXdr } = await signTransaction(prepared.instruction, {
+        networkPassphrase: 'Test SDF Network ; September 2015',
+      });
+      await fund.submit(signedTxXdr);
+    } catch {
+      // fund.error holds the failure; fund.step is 'error'
+    }
+  };
+
+  if (fund.error) return <button onClick={fund.reset}>Funding failed: {fund.error.message} — retry</button>;
+  if (fund.status) return <p>Transaction {fund.status.hash}: {fund.status.status}</p>;
+  return <button onClick={onClick} disabled={fund.step !== 'idle'}>Fund</button>;
+}
+```
+
+`fund.step` moves through `idle` → `preparing` → `prepared` → `submitting` → `submitted` (or `error`).
+
 ---
 
 ### 2. CEX Withdrawal → C-Address

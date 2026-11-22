@@ -118,7 +118,7 @@ groups:
     rules:
       - alert: CircuitBreakerOpen
         expr: |
-          bridge_circuit_breaker_state{job="c-address-bridge"} == 1
+          circuit_breaker_state{job="c-address-bridge"} == 1
         for: 5m
         labels:
           severity: critical
@@ -132,7 +132,7 @@ groups:
 
       - alert: CircuitBreakerHalfOpen
         expr: |
-          bridge_circuit_breaker_state{job="c-address-bridge"} == 0.5
+          circuit_breaker_state{job="c-address-bridge"} == 0.5
         for: 10m
         labels:
           severity: warning
@@ -190,7 +190,7 @@ groups:
     rules:
       - alert: LowCacheHitRatio
         expr: |
-          bridge_cache_hit_ratio{job="c-address-bridge"} < 0.50
+          cache_hit_ratio{job="c-address-bridge"} < 0.5
         for: 15m
         labels:
           severity: warning
@@ -199,59 +199,5 @@ groups:
           summary: "Cache hit ratio below 50% ({{ $value | humanizePercentage }})"
           description: >
             The cache hit ratio has been below 50% for more than 15 minutes.
-            This may indicate cache misconfiguration or a cold-cache state.
-          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/low-cache-hit.md"
-
-  # ──────────────────────────────────────────────────────────────
-  # SLO burn rate (multi-window)
-  # ──────────────────────────────────────────────────────────────
-  - name: c-address-bridge.slo
-    interval: 60s
-    rules:
-      - alert: SLOFastBurn
-        expr: |
-          (
-            sum(rate(http_requests_total{job="c-address-bridge",status=~"5.."}[1h]))
-            /
-            sum(rate(http_requests_total{job="c-address-bridge"}[1h]))
-          ) > (14.4 * 0.001)
-          and
-          (
-            sum(rate(http_requests_total{job="c-address-bridge",status=~"5.."}[5m]))
-            /
-            sum(rate(http_requests_total{job="c-address-bridge"}[5m]))
-          ) > (14.4 * 0.001)
-        for: 2m
-        labels:
-          severity: critical
-          team: platform
-        annotations:
-          summary: "SLO fast burn — 99.9% availability at risk"
-          description: >
-            Error burn rate is consuming the monthly error budget at 14.4×
-            the allowed rate (1h + 5m windows both exceeded).
-          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/slo-burn.md"
-
-      - alert: SLOSlowBurn
-        expr: |
-          (
-            sum(rate(http_requests_total{job="c-address-bridge",status=~"5.."}[6h]))
-            /
-            sum(rate(http_requests_total{job="c-address-bridge"}[6h]))
-          ) > (6 * 0.001)
-          and
-          (
-            sum(rate(http_requests_total{job="c-address-bridge",status=~"5.."}[30m]))
-            /
-            sum(rate(http_requests_total{job="c-address-bridge"}[30m]))
-          ) > (6 * 0.001)
-        for: 15m
-        labels:
-          severity: warning
-          team: platform
-        annotations:
-          summary: "SLO slow burn — monthly error budget draining"
-          description: >
-            Error burn rate is consuming the monthly budget at 6× rate
-            (6h + 30m windows both exceeded).
-          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/slo-burn.md"
+            Current ratio: {{ $value | humanizePercentage }}.
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/low-cache-hit-ratio.md"

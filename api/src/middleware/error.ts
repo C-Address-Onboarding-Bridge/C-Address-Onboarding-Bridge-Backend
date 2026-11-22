@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { logger } from '../logger';
+import { CircuitOpenError } from '../circuit-breaker';
 
 /**
  * Application-level error with an explicit HTTP status code.
@@ -34,6 +35,15 @@ export function errorHandler(
     res.status(400).json({
       error: 'validation_error',
       details: err.errors,
+    });
+    return;
+  }
+
+  if (err instanceof CircuitOpenError) {
+    logger.warn({ service: err.service, message: err.message });
+    res.status(503).json({
+      error: 'service_unavailable',
+      message: `${err.service} is temporarily unavailable, please retry later`,
     });
     return;
   }

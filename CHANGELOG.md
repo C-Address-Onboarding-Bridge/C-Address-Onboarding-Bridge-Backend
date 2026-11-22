@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `BridgeClient.destroy()` and `TelemetryClient.destroy()`/`flush()`; the final flush no longer drops queued telemetry on shutdown
+- React hooks destroy their client when the component unmounts or the config changes
+
+### Fixed
+- SDK timers are `unref()`'d where supported, so Node scripts, test runners and SSR requests are no longer kept alive by a forgotten client
+- `OfflineBridgeClient.destroy()` now stops the telemetry timer as well as the offline queue poll
+- CloudFront CDN module applies successfully: no `Authorization` in an origin request policy, no cache-key settings on a zero-TTL cache policy, and the default certificate is used when no ACM ARN is supplied
+
 ---
 
 ## [0.1.0] — 2026-07-29

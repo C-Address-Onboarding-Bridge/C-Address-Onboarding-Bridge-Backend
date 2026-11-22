@@ -31,6 +31,13 @@ variable "acm_certificate_arn" {
   description = "ARN of the ACM certificate for the custom domain aliases (must be in us-east-1)"
   type        = string
   default     = ""
+
+  validation {
+    condition = var.acm_certificate_arn == "" || can(
+      regex("^arn:aws[a-z-]*:acm:us-east-1:[0-9]{12}:certificate/", var.acm_certificate_arn)
+    )
+    error_message = "acm_certificate_arn must be empty or an ACM certificate ARN in us-east-1 (CloudFront only accepts certificates from that region)."
+  }
 }
 
 variable "cloudfront_price_class" {

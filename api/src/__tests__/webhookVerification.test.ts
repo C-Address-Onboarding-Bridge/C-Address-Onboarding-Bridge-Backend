@@ -116,6 +116,21 @@ describe('transak webhook verifier', () => {
     expect(next).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(401);
   });
+
+  it('rejects a valid HMAC signed with an empty secret when unconfigured', () => {
+    registerWebhookVerifier('transak', transakVerifier, '');
+    const payload = JSON.stringify({ eventId: 'forged-order', status: 'completed' });
+    const sig = makeTransakSignature(payload, '');
+    const req = mockReq({ body: payload, headers: { 'x-webhook-signature': sig } });
+    const { res, status, json } = mockRes();
+    const next = vi.fn();
+
+    verifyTransakWebhook(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(503);
+    expect(json).toHaveBeenCalledWith({ error: 'provider_not_configured', provider: 'transak' });
+  });
 });
 
 describe('timestamp validation', () => {

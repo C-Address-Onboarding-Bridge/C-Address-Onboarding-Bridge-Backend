@@ -1,14 +1,26 @@
 /// Property-based fuzz test for fee calculation arithmetic.
-/// No soroban env needed — tests the pure formula directly.
+/// Tests the pure formula directly plus rebate tier interactions.
 ///
-/// Properties:
+/// Invariants:
 ///   1. fee <= amount
 ///   2. fee + net == amount  (conservation)
 ///   3. fee == 0 when fee_bps == 0
 ///   4. fee < amount when fee_bps < 10000 and amount > 0
+///   5. Rebate: effective_fee_bps = fee_bps - (fee_bps * discount / 10000)
+///   6. effective_fee_bps never goes negative (saturating_sub)
+///   7. With discount=10000 (100%), fee == 0
 
 fn fee(amount: i128, fee_bps: u32) -> i128 {
     (amount * fee_bps as i128) / 10000
+}
+
+fn fee_with_rebate(amount: i128, fee_bps: u32, discount_bps: u32) -> i128 {
+    let effective = fee_bps.saturating_sub(fee_bps * discount_bps / 10000);
+    if effective > 0 {
+        (amount * effective as i128) / 10000
+    } else {
+        0
+    }
 }
 
 /// Minimal LCG PRNG (Numerical Recipes parameters).
@@ -21,7 +33,6 @@ impl Lcg {
     }
 
     fn next_i128_bounded(&mut self, max: i128) -> i128 {
-        // Two 64-bit draws combined into a u128, then reduced.
         let hi = self.next() as u128;
         let lo = self.next() as u128;
         let wide = (hi << 64) | lo;
@@ -34,18 +45,21 @@ impl Lcg {
 }
 
 fn main() {
-    // Seed from first CLI arg (decimal), or use default.
     let seed: u64 = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(0xdeadbeef_cafebabe);
 
+    let iterations: u64 = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000);
+
     let mut rng = Lcg(seed);
-    // Bound so that amount * 10_000 never overflows i128.
     let max_amount = i128::MAX / 10_000;
     let mut failures = 0u64;
 
-    for i in 0u64..100_000 {
+    for i in 0..iterations {
         let amount = rng.next_i128_bounded(max_amount);
         let fee_bps = rng.next_u32_bounded(10000);
         let f = fee(amount, fee_bps);
@@ -72,10 +86,36 @@ fn main() {
             failures += 1;
         }
 
-        // Also test boundary: amount=0 always gives fee=0
+        // Zero amount always gives fee=0
         let f_zero = fee(0, fee_bps);
         if f_zero != 0 {
             eprintln!("[iter {i}] FAIL prop_zero: fee(0, {fee_bps}) = {f_zero}");
+            failures += 1;
+        }
+
+        // Rebate tier tests
+        let discount = rng.next_u32_bounded(10000);
+        let f_rebate = fee_with_rebate(amount, fee_bps, discount);
+        let net_rebate = amount - f_rebate;
+
+        // 5. Rebate fee <= amount
+        if f_rebate > amount {
+            eprintln!("[iter {i}] FAIL prop5: rebate_fee({f_rebate}) > amount({amount}), fee_bps={fee_bps} discount={discount}");
+            failures += 1;
+        }
+        // 6. Rebate conservation
+        if f_rebate + net_rebate != amount {
+            eprintln!("[iter {i}] FAIL prop6: rebate_fee({f_rebate}) + net({net_rebate}) != amount({amount})");
+            failures += 1;
+        }
+        // 7. 100% discount => fee == 0
+        if discount == 10000 && amount > 0 && f_rebate != 0 {
+            eprintln!("[iter {i}] FAIL prop7: 100% discount but fee={f_rebate}");
+            failures += 1;
+        }
+        // 8. effective_fee_bps never negative (fee should not increase)
+        if f_rebate > f {
+            eprintln!("[iter {i}] FAIL prop8: rebate_fee({f_rebate}) > base_fee({f})");
             failures += 1;
         }
     }
@@ -100,10 +140,25 @@ fn main() {
         }
     }
 
+    // Rebate edge cases
+    for &(amount, fee_bps, discount) in &[
+        (1000i128, 100u32, 0u32),
+        (1000, 100, 5000),
+        (1000, 100, 10000),
+        (1000, 0, 5000),
+        (1000, 10000, 10000),
+    ] {
+        let f = fee_with_rebate(amount, fee_bps, discount);
+        assert!(f <= amount, "rebate edge case fee({amount},{fee_bps},{discount}): {f} > {amount}");
+        if discount == 10000 {
+            assert_eq!(f, 0, "100% discount should yield zero fee");
+        }
+    }
+
     if failures == 0 {
-        println!("fuzz_fee_calculation: all 100_000 iterations passed.");
+        println!("fuzz_fee_calculation: all {iterations} iterations passed.");
     } else {
-        eprintln!("fuzz_fee_calculation: {failures} failures.");
+        eprintln!("fuzz_fee_calculation: {failures} failures out of {iterations}.");
         std::process::exit(1);
     }
 }

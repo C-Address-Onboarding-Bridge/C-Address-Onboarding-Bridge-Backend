@@ -10,12 +10,13 @@ export async function processAuditLog(job: Job<AuditLogJobData>): Promise<void> 
   const end = asyncPipelineJobDuration.startTimer();
   try {
     const { type, payload, actor, triggeredAt } = job.data;
-    integrityAuditLog.append({
-      type: type as AuditEventType,
-      payload,
-      actor,
-      triggeredAt,
-    });
+    // TODO(next-bounty): `append` takes positional (type, payload, actor) --
+    // this call site was written against an object-style signature that does
+    // not exist, so `triggeredAt` has nowhere to go and is currently dropped.
+    // Either add it as a parameter on IntegrityAuditLog.append or fold it into
+    // the payload; do not silently keep losing it once this is live.
+    void triggeredAt;
+    integrityAuditLog.append(type as AuditEventType, payload, actor);
     logger.debug({ jobId: job.id, type }, 'audit log processed');
   } catch (error) {
     asyncPipelineFailureCounter.inc();

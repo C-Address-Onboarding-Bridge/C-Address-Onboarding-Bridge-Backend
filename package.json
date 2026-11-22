@@ -9,7 +9,7 @@
     "hooks"
   ],
   "scripts": {
-    "prepare": "husky",
+    "prepare": "husky || true",
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "test:e2e": "npm run test:e2e --workspace api",
