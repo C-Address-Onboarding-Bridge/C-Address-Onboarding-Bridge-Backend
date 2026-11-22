@@ -108,3 +108,10 @@ volumes:
   grafana_data:
   loki_data:
   alertmanager_data:
+
+# Prometheus scrape credential. Create it before starting the stack with an API key
+# that has the metrics:read scope (the API accepts it as `Authorization: Bearer <key>`):
+#   mkdir -p secrets && printf '%s' "<api-key-with-metrics:read>" > secrets/prometheus_scrape_key
+secrets:
+  prometheus_scrape_key:
+    file: ./secrets/prometheus_scrape_key

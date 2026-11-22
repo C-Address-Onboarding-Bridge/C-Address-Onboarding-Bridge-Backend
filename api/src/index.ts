@@ -198,7 +198,7 @@ app.use('/api/webhook/transak', transakWebhookRouter);
 app.use('/api/cache-metrics', rbacAuth, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/metrics', rbacAuth, requireScopes('metrics:read'), metricsRouter);
+app.use('/metrics', metricsAuth, metricsRouter);
 
 // Error handler must be the last middleware
 app.use(xssErrorSanitizer);
