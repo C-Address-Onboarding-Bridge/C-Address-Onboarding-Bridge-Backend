@@ -25,8 +25,19 @@ export const migration005: Migration = {
     const schema = `
       -- ─────────────────────────────────────────────────────────
       -- Enable query statistics extension
+      -- Needs superuser / rds_superuser and shared_preload_libraries
+      -- (infrastructure/postgres/postgresql-performance.conf). Guarded so a
+      -- non-superuser app role skips it instead of aborting the indexes
+      -- below (issue #1071). Already-applied databases are unaffected.
       -- ─────────────────────────────────────────────────────────
-      CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+      DO $$
+      BEGIN
+        CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+      EXCEPTION
+        WHEN insufficient_privilege OR undefined_file OR feature_not_supported THEN
+          RAISE NOTICE 'pg_stat_statements not enabled (%); ask a DBA to create it', SQLERRM;
+      END
+      $$;
 
       -- ─────────────────────────────────────────────────────────
       -- Slow query logging (100ms threshold)
