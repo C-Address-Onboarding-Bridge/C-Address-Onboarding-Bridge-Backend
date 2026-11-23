@@ -15,7 +15,7 @@ const DELIVERY_TIMEOUT_MS = 10_000;
  * registrations, so everything needed for delivery is carried in the job.
  */
 export async function processWebhookRetry(job: Job<WebhookRetryData>): Promise<void> {
-  const { registrationId, url, event, timestamp, payload, signature, attemptNumber } = job.data;
+  const { registrationId, deliveryId, url, event, timestamp, payload, signature, attemptNumber } = job.data;
   let lastError: string;
 
   try {
@@ -26,6 +26,8 @@ export async function processWebhookRetry(job: Job<WebhookRetryData>): Promise<v
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        // Jobs enqueued before deliveryId existed fall back to a per-job id.
+        'X-Webhook-Id': deliveryId ?? String(job.id),
         'X-Webhook-Signature': `sha256=${signature}`,
         'X-Webhook-Timestamp': String(timestamp),
         'X-Webhook-Event': event,

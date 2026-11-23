@@ -28,6 +28,7 @@ function makeJob(overrides: Partial<WebhookRetryData> = {}): Job<WebhookRetryDat
     id: 'webhook-retry-job-1',
     data: {
       registrationId: 'webhook-reg-123',
+      deliveryId: 'delivery-abc',
       url: 'https://example.com/webhook',
       event: 'funding.submitted',
       timestamp: 1_700_000_000_000,
@@ -58,6 +59,7 @@ describe('processWebhookRetry', () => {
         body: JSON.stringify({ txId: 'tx-456' }),
         headers: {
           'Content-Type': 'application/json',
+          'X-Webhook-Id': 'delivery-abc',
           'X-Webhook-Signature': 'sha256=sig123',
           'X-Webhook-Timestamp': '1700000000000',
           'X-Webhook-Event': 'funding.submitted',
@@ -67,6 +69,17 @@ describe('processWebhookRetry', () => {
     );
     expect(enqueueWebhookRetry).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it('carries the same deliveryId into the next attempt (#1057)', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 500 });
+
+    await processWebhookRetry(makeJob({ attemptNumber: 1 }));
+
+    expect(enqueueWebhookRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryId: 'delivery-abc', attemptNumber: 2 }),
+      60_000,
+    );
   });
 
   it('re-enqueues the next attempt with the next delay on failure', async () => {
