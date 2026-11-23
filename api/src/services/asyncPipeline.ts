@@ -11,8 +11,8 @@
  *  - Prometheus instrumentation for all operations
  *
  * Two queues:
- *  - async-critical   priority 10, 5 attempts — tamper-evident audit logs
- *  - async-pipeline   priority 1,  3 attempts — analytics, metrics, admin records
+ *  - async-critical   priority 10, 5 attempts - tamper-evident audit logs
+ *  - async-pipeline   priority 1,  3 attempts - analytics, metrics, admin records
  */
 
 import { config } from '../config';
@@ -33,7 +33,7 @@ import {
 import type { AuditEventType } from './auditLog';
 import type { FundingMetricInput } from './metrics';
 
-// ─── Backpressure state ───────────────────────────────────────────────────────
+// ---- Backpressure state ---------------------------------------------------
 
 let _backpressured = false;
 let _lastBackpressureCheck = 0;
@@ -50,7 +50,7 @@ async function refreshBackpressure(): Promise<void> {
     _backpressured = depth > config.asyncPipeline.backpressureThreshold;
     asyncPipelineQueueDepth.set({ queue: 'async-pipeline' }, depth);
   } catch {
-    // Redis temporarily unavailable — keep the previous backpressure state.
+    // Redis temporarily unavailable - keep the previous backpressure state.
   }
 }
 
@@ -59,7 +59,7 @@ export function isBackpressured(): boolean {
   return _backpressured;
 }
 
-// ─── In-process analytics buffer ─────────────────────────────────────────────
+// ---- In-process analytics buffer ------------------------------------------
 
 interface BufferEntry {
   event: string;
@@ -67,7 +67,7 @@ interface BufferEntry {
   value: number;
 }
 
-/** key → accumulated count; flushed every bufferFlushMs */
+/** key -> accumulated count; flushed every bufferFlushMs */
 const analyticsBuffer = new Map<string, BufferEntry>();
 let _flushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -101,7 +101,7 @@ async function flushAnalyticsBuffer(): Promise<void> {
     asyncPipelineEnqueueCounter.inc({ queue: 'async-pipeline', job: 'async-analytics' });
     asyncPipelineQueueDepth.set({ queue: 'async-pipeline' }, await getQueueWaitingCount('async-pipeline').catch(() => 0));
   } catch {
-    // If Redis is down the batch is lost — acceptable for best-effort analytics.
+    // If Redis is down the batch is lost - acceptable for best-effort analytics.
   }
 }
 
@@ -114,14 +114,26 @@ export async function drainAnalyticsBuffer(): Promise<void> {
   await flushAnalyticsBuffer();
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ---- Public API -----------------------------------------------------------
+
+/**
+ * Returns true when enqueuing into the async pipeline is safe: the pipeline is
+ * enabled AND the background workers that drain the queues are enabled.
+ *
+ * #1050: previously only `asyncPipeline.enabled` was checked, so with workers
+ * off the API would keep enqueuing forever. Both flags must be on.
+ */
+function canEnqueue(): boolean {
+  return config.asyncPipeline.enabled && config.jobs.enabled;
+}
 
 /**
  * Enqueue an audit log entry on the high-priority async-critical queue.
  *
- * This is "fire and forget" from the caller's perspective — the Promise is
- * never awaited on the response path. If Redis is unavailable the synchronous
- * fallback is called instead so the audit entry is never silently lost.
+ * This is "fire and forget" from the caller's perspective - the Promise is
+ * never awaited on the response path. If Redis is unavailable, the background
+ * workers are disabled, or the pipeline is disabled, the synchronous fallback
+ * is called instead so the audit entry is never silently lost.
  *
  * @param type     Audit event type
  * @param payload  Event payload
@@ -137,12 +149,12 @@ export function enqueueAudit(
 ): void {
   const fallback = syncFallback ?? (() => {});
 
-  if (!config.asyncPipeline.enabled) {
+  if (!canEnqueue()) {
     fallback();
     return;
   }
 
-  const data: AuditLogJobData = { type, payload, actor };
+  const data: AuditLogJobData = { type, payload, actor, triggeredAt: Date.now() };
 
   enqueueAuditLog(data)
     .then(() => {
@@ -161,8 +173,9 @@ export function enqueueAudit(
 /**
  * Buffer an analytics counter increment for batched delivery to BullMQ.
  *
- * If the pipeline is backpressured or disabled, the operation is either
- * dropped (best-effort) or the optional sync fallback is called.
+ * If the pipeline is disabled, workers are disabled, or the queue is
+ * backpressured, the operation is either dropped (best-effort) or the optional
+ * sync fallback is called.
  *
  * @param event       Metric event name
  * @param labels      Label key-value pairs
@@ -173,7 +186,7 @@ export function bufferAnalytics(
   labels: Record<string, string>,
   syncFallback?: () => void,
 ): void {
-  if (!config.asyncPipeline.enabled) {
+  if (!canEnqueue()) {
     syncFallback?.();
     return;
   }
@@ -199,7 +212,8 @@ export function bufferAnalytics(
  * Enqueue a funding metrics recording job on the best-effort async-pipeline queue.
  *
  * Falls back to the synchronous `recordFundingMetrics` call if the pipeline
- * is disabled or backpressured, so no data is ever lost under light load.
+ * is disabled, workers are disabled, or the queue is backpressured, so no
+ * data is ever lost under light load.
  *
  * @param input         Standard funding metrics input
  * @param syncFallback  Called when the pipeline degrades to sync mode
@@ -208,7 +222,7 @@ export function enqueueFundingMetrics(
   input: FundingMetricInput,
   syncFallback?: () => void,
 ): void {
-  if (!config.asyncPipeline.enabled || isBackpressured()) {
+  if (!canEnqueue() || isBackpressured()) {
     syncFallback?.();
     return;
   }
@@ -236,7 +250,7 @@ export function enqueueCounterIncrement(
   bufferAnalytics(event, labels, syncFallback);
 }
 
-// ─── Exported test helpers ────────────────────────────────────────────────────
+// ---- Exported test helpers ------------------------------------------------
 
 /** Force-set the backpressure state. For tests only. */
 export function _setBackpressuredForTest(value: boolean): void {

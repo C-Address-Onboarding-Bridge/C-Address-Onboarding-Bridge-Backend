@@ -17,7 +17,7 @@ export interface MetricsData {
   period: 'hourly' | 'daily';
 }
 
-// ─── Async pipeline job payloads ─────────────────────────────────────────────
+// ---- Async pipeline job payloads ------------------------------------------
 
 export interface AuditLogJobData {
   /** Maps to AuditEventType in auditLog.ts */
@@ -158,10 +158,33 @@ export async function closeQueues(): Promise<void> {
   _queues = null;
 }
 
+/**
+ * Registers the recurring (repeatable) jobs.
+ *
+ * #1050: this must be called once from the worker entry point, guarded by
+ * `config.jobs.enabled`. Each call is idempotent across restarts because the
+ * repeat key is stable - BullMQ will not create a duplicate schedule.
+ */
 export async function scheduleRecurringJobs(): Promise<void> {
+  if (!config.jobs.enabled) return;
+
   const queues = getQueues();
-  await queues.cacheWarmup.add('cache-warmup', { assets: [] }, { repeat: { pattern: '*/30 * * * * *' } });
-  await queues.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { pattern: '0 * * * * *' } });
+  await queues.cacheWarmup.add(
+    'cache-warmup',
+    { assets: [] },
+    {
+      repeat: { pattern: '*/30 * * * * *', key: 'recurring:cache-warmup' },
+      jobId: 'recurring:cache-warmup',
+    },
+  );
+  await queues.metrics.add(
+    'metrics-compute',
+    { period: 'hourly' },
+    {
+      repeat: { pattern: '0 * * * * *', key: 'recurring:metrics-compute' },
+      jobId: 'recurring:metrics-compute',
+    },
+  );
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
@@ -180,6 +203,12 @@ export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Prom
 }
 
 export async function enqueueWebhookRetry(data: WebhookRetryData, delayMs: number): Promise<void> {
+  // #1050: if background workers are disabled there is nothing to drain this
+  // queue, so reject instead of piling jobs up forever. Callers
+  // (webhookDelivery.ts) already catch this and move the delivery to the DLQ.
+  if (!config.jobs.enabled) {
+    throw new Error('jobs disabled: webhook-retry queue is not being drained');
+  }
   const queues = getQueues();
   await queues.webhookRetry.add('webhook-retry', data, { delay: delayMs });
 }

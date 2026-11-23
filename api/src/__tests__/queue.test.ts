@@ -118,3 +118,35 @@ describe('Queue operations', () => {
     });
   });
 });
+
+// #1050: with jobs disabled, enqueuing a webhook retry must reject so the
+// caller (webhookDelivery.ts) falls through to the DLQ instead of stranding
+// the retry in Redis.
+describe('enqueueWebhookRetry when jobs disabled (#1050)', () => {
+  it('rejects so callers can fall back to the DLQ', async () => {
+    const { config } = await import('../config');
+    const original = config.jobs.enabled;
+    config.jobs.enabled = false;
+
+    try {
+      const { enqueueWebhookRetry } = await import('../jobs/queue');
+      await expect(
+        enqueueWebhookRetry(
+          {
+            registrationId: 'r1',
+            url: 'https://example.com/hook',
+            event: 'tx.failed',
+            timestamp: Date.now(),
+            payload: '{}',
+            signature: 'sig',
+            data: {},
+            attemptNumber: 1,
+          },
+          10_000,
+        ),
+      ).rejects.toThrow(/jobs disabled/i);
+    } finally {
+      config.jobs.enabled = original;
+    }
+  });
+});
