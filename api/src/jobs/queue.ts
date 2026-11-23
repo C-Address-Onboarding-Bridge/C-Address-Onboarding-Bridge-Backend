@@ -1,5 +1,6 @@
 import { Queue, QueueOptions } from 'bullmq';
 import { config } from '../config';
+import { createRedisConnection } from './connection';
 
 export type JobName =
   | 'cache-warmup'
@@ -75,19 +76,13 @@ export type JobData =
   | PipelineMetricsJobData
   | WebhookRetryData;
 
-function parseRedisUrl(url: string): { host: string; port: number; password?: string; db?: number } {
-  const parsed = new URL(url);
-  return {
-    host: parsed.hostname || 'localhost',
-    port: parseInt(parsed.port || '6379', 10),
-    password: parsed.password || undefined,
-    db: parsed.pathname ? parseInt(parsed.pathname.slice(1) || '0', 10) : 0,
-  };
-}
-
+// #1051: previously this module carried a hand-rolled `parseRedisUrl` that
+// dropped `rediss://` TLS, the ACL username, and (in some cases) the db.
+// Connections are now built by the shared factory in ./connection, which
+// passes the raw URL to ioredis.
 function makeBaseOptions(): QueueOptions {
   return {
-    connection: parseRedisUrl(config.redis.url),
+    connection: createRedisConnection(),
     defaultJobOptions: {
       attempts: 3,
       backoff: { type: 'exponential', delay: 5000 },
@@ -99,7 +94,7 @@ function makeBaseOptions(): QueueOptions {
 
 function makeCriticalOptions(): QueueOptions {
   return {
-    connection: parseRedisUrl(config.redis.url),
+    connection: createRedisConnection(),
     defaultJobOptions: {
       attempts: 5,
       backoff: { type: 'exponential', delay: 2000 },
@@ -128,7 +123,7 @@ function getQueues() {
     const asyncCritical = new Queue<AuditLogJobData>('async-critical', criticalOpts);
     const asyncPipeline = new Queue<AnalyticsJobData | PipelineMetricsJobData>('async-pipeline', opts);
     const webhookRetry = new Queue<WebhookRetryData>('webhook-retry', {
-      connection: parseRedisUrl(config.redis.url),
+      connection: createRedisConnection(),
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: 'fixed', delay: 10_000 },

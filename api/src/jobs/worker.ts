@@ -2,6 +2,7 @@ import { Worker, WorkerOptions } from 'bullmq';
 import pino from 'pino';
 import { config } from '../config';
 import { closeQueues, scheduleRecurringJobs } from './queue';
+import { createRedisConnection } from './connection';
 import { processCacheWarmup } from './processors/cacheWarmup';
 import { processMetrics } from './processors/metrics';
 import { processAuditLog } from './processors/asyncAuditLog';
@@ -10,18 +11,11 @@ import { processWebhookRetry } from './processors/webhookRetry';
 
 const logger = pino({ level: config.logLevel });
 
-function parseRedisUrl(url: string): { host: string; port: number; password?: string; db?: number } {
-  const parsed = new URL(url);
-  return {
-    host: parsed.hostname || 'localhost',
-    port: parseInt(parsed.port || '6379', 10),
-    password: parsed.password || undefined,
-    db: parsed.pathname ? parseInt(parsed.pathname.slice(1) || '0', 10) : 0,
-  };
-}
-
+// #1051: `parseRedisUrl` used to live here too. Workers now use the same
+// shared ioredis factory as Queue, so `rediss://`, ACL username, and db are
+// all handled by ioredis' own URL parser.
 function makeWorkerOptions(concurrency: number): WorkerOptions {
-  return { connection: parseRedisUrl(config.redis.url), concurrency };
+  return { connection: createRedisConnection(), concurrency };
 }
 
 /**
