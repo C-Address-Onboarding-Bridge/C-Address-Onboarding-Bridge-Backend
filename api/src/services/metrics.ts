@@ -309,6 +309,27 @@ export const asyncPipelineJobDuration = new Histogram({
   registers: [register],
 });
 
+/**
+ * Jobs handed to the async pipeline. asyncPipeline.ts has always imported this
+ * and the dropped counter below; without them, the `.inc()` after a successful
+ * enqueue threw, which sent enqueueAudit into its catch and ran the sync
+ * fallback too, so a queued audit entry was also written a second time.
+ */
+export const asyncPipelineEnqueueCounter = new Counter({
+  name: 'async_pipeline_enqueued_total',
+  help: 'Total number of jobs enqueued on the async pipeline',
+  labelNames: ['queue', 'job'],
+  registers: [register],
+});
+
+/** Jobs that could not be enqueued (Redis down, backpressure) and fell back or were dropped. */
+export const asyncPipelineDroppedCounter = new Counter({
+  name: 'async_pipeline_dropped_total',
+  help: 'Total number of async pipeline jobs dropped or run through the sync fallback',
+  labelNames: ['queue', 'job'],
+  registers: [register],
+});
+
 /** Cumulative count of async pipeline job failures. */
 export const asyncPipelineFailureCounter = new Counter({
   name: 'async_pipeline_failures_total',

@@ -259,17 +259,28 @@ export class IntegrityAuditLogService {
     }
   }
 
-  append(type: AuditEventType, payload: Record<string, unknown>, actor = 'system'): AuditLogEntry {
+  /**
+   * @param timestamp When the event happened, in epoch ms. Defaults to now;
+   *   the async pipeline passes the time the event was triggered on the
+   *   request path, so a queued entry is not stamped with whenever the worker
+   *   got to it. Retention is measured from this time too.
+   */
+  append(
+    type: AuditEventType,
+    payload: Record<string, unknown>,
+    actor = 'system',
+    timestamp: number = Date.now(),
+  ): AuditLogEntry {
     const previousHash = this.entries.at(-1)?.hash ?? GENESIS_HASH;
     const entryWithoutHash: Omit<AuditLogEntry, 'hash'> = {
       sequence: this.entries.length + 1,
       id: crypto.randomUUID(),
-      timestamp: Date.now(),
+      timestamp,
       type,
       actor,
       payload,
       previousHash,
-      retentionUntil: Date.now() + SEVEN_YEARS_MS,
+      retentionUntil: timestamp + SEVEN_YEARS_MS,
     };
     const entry: AuditLogEntry = {
       ...entryWithoutHash,
