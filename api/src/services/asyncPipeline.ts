@@ -40,6 +40,15 @@ let _lastBackpressureCheck = 0;
 /** Re-check the queue depth at most once per second to avoid hammering Redis. */
 const BACKPRESSURE_CHECK_INTERVAL_MS = 1_000;
 
+/**
+ * #1052: bounded wait before taking the sync fallback. Even with
+ * `enableOfflineQueue: false` on the producer connection, a misbehaving DNS
+ * or TCP path can still delay `Queue.add()`. 2s is well under any request
+ * timeout the API uses and short enough that a Redis outage surfaces in the
+ * audit trail promptly.
+ */
+const ENQUEUE_TIMEOUT_MS = 2_000;
+
 async function refreshBackpressure(): Promise<void> {
   const now = Date.now();
   if (now - _lastBackpressureCheck < BACKPRESSURE_CHECK_INTERVAL_MS) return;
@@ -118,13 +127,43 @@ export async function drainAnalyticsBuffer(): Promise<void> {
 
 /**
  * Returns true when enqueuing into the async pipeline is safe: the pipeline is
- * enabled AND the background workers that drain the queues are enabled.
+ * enabled, a Redis URL is configured, AND the background workers that drain
+ * the queues are enabled.
  *
  * #1050: previously only `asyncPipeline.enabled` was checked, so with workers
  * off the API would keep enqueuing forever. Both flags must be on.
+ * #1052: `config.asyncPipeline.enabled` is now itself gated on REDIS_URL, but
+ * we keep the explicit redis.enabled check here for defence in depth.
  */
 function canEnqueue(): boolean {
-  return config.asyncPipeline.enabled && config.jobs.enabled;
+  return config.asyncPipeline.enabled && config.redis.enabled && config.jobs.enabled;
+}
+
+/**
+ * Race a promise against ENQUEUE_TIMEOUT_MS.
+ *
+ * @returns `true` when the promise resolved before the timeout, `false` on
+ *          rejection or timeout. Never throws.
+ */
+async function enqueueWithTimeout(promise: Promise<unknown>): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`enqueue timed out after ${ENQUEUE_TIMEOUT_MS}ms`)),
+          ENQUEUE_TIMEOUT_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -132,8 +171,9 @@ function canEnqueue(): boolean {
  *
  * This is "fire and forget" from the caller's perspective - the Promise is
  * never awaited on the response path. If Redis is unavailable, the background
- * workers are disabled, or the pipeline is disabled, the synchronous fallback
- * is called instead so the audit entry is never silently lost.
+ * workers are disabled, the pipeline is disabled, or the enqueue takes longer
+ * than ENQUEUE_TIMEOUT_MS, the synchronous fallback is called instead so the
+ * audit entry is never silently lost.
  *
  * @param type     Audit event type
  * @param payload  Event payload
@@ -156,18 +196,20 @@ export function enqueueAudit(
 
   const data: AuditLogJobData = { type, payload, actor, triggeredAt: Date.now() };
 
-  enqueueAuditLog(data)
-    .then(() => {
+  void (async () => {
+    const ok = await enqueueWithTimeout(enqueueAuditLog(data));
+    if (ok) {
       asyncPipelineEnqueueCounter.inc({ queue: 'async-critical', job: 'audit-log' });
-    })
-    .catch(() => {
-      asyncPipelineDroppedCounter.inc({ queue: 'async-critical', job: 'audit-log' });
-      try {
-        fallback();
-      } catch {
-        // Never let a fallback failure propagate to the caller.
-      }
-    });
+      return;
+    }
+
+    asyncPipelineDroppedCounter.inc({ queue: 'async-critical', job: 'audit-log' });
+    try {
+      fallback();
+    } catch {
+      // Never let a fallback failure propagate to the caller.
+    }
+  })();
 }
 
 /**
@@ -212,8 +254,8 @@ export function bufferAnalytics(
  * Enqueue a funding metrics recording job on the best-effort async-pipeline queue.
  *
  * Falls back to the synchronous `recordFundingMetrics` call if the pipeline
- * is disabled, workers are disabled, or the queue is backpressured, so no
- * data is ever lost under light load.
+ * is disabled, workers are disabled, the queue is backpressured, or the
+ * enqueue times out.
  *
  * @param input         Standard funding metrics input
  * @param syncFallback  Called when the pipeline degrades to sync mode
@@ -227,13 +269,16 @@ export function enqueueFundingMetrics(
     return;
   }
 
-  void enqueuePipelineMetrics({ operation: 'funding', data: input as unknown as Record<string, unknown> })
-    .then(() => {
+  void (async () => {
+    const ok = await enqueueWithTimeout(
+      enqueuePipelineMetrics({ operation: 'funding', data: input as unknown as Record<string, unknown> }),
+    );
+    if (ok) {
       asyncPipelineEnqueueCounter.inc({ queue: 'async-pipeline', job: 'pipeline-metrics' });
-    })
-    .catch(() => {
-      syncFallback?.();
-    });
+      return;
+    }
+    syncFallback?.();
+  })();
 }
 
 /**
@@ -262,3 +307,6 @@ export function _setBackpressuredForTest(value: boolean): void {
 export function _getBufferSizeForTest(): number {
   return analyticsBuffer.size;
 }
+
+/** Expose the bounded-enqueue timeout. For tests only. */
+export const _ENQUEUE_TIMEOUT_MS_FOR_TEST = ENQUEUE_TIMEOUT_MS;

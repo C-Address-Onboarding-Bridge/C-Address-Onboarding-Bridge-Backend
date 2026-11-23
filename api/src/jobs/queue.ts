@@ -1,6 +1,6 @@
 import { Queue, QueueOptions } from 'bullmq';
 import { config } from '../config';
-import { createRedisConnection } from './connection';
+import { createProducerRedisConnection } from './connection';
 
 export type JobName =
   | 'cache-warmup'
@@ -76,13 +76,14 @@ export type JobData =
   | PipelineMetricsJobData
   | WebhookRetryData;
 
-// #1051: previously this module carried a hand-rolled `parseRedisUrl` that
-// dropped `rediss://` TLS, the ACL username, and (in some cases) the db.
-// Connections are now built by the shared factory in ./connection, which
-// passes the raw URL to ioredis.
+// #1051: connections are built by the shared factory in ./connection, which
+// passes the raw URL to ioredis (rediss://, ACL username, /db all work).
+// #1052: producer connections are created with enableOfflineQueue: false so
+// Queue.add() rejects immediately when Redis is unreachable, instead of
+// parking in ioredis' offline queue and starving the sync fallback.
 function makeBaseOptions(): QueueOptions {
   return {
-    connection: createRedisConnection(),
+    connection: createProducerRedisConnection(),
     defaultJobOptions: {
       attempts: 3,
       backoff: { type: 'exponential', delay: 5000 },
@@ -94,7 +95,7 @@ function makeBaseOptions(): QueueOptions {
 
 function makeCriticalOptions(): QueueOptions {
   return {
-    connection: createRedisConnection(),
+    connection: createProducerRedisConnection(),
     defaultJobOptions: {
       attempts: 5,
       backoff: { type: 'exponential', delay: 2000 },
@@ -123,7 +124,7 @@ function getQueues() {
     const asyncCritical = new Queue<AuditLogJobData>('async-critical', criticalOpts);
     const asyncPipeline = new Queue<AnalyticsJobData | PipelineMetricsJobData>('async-pipeline', opts);
     const webhookRetry = new Queue<WebhookRetryData>('webhook-retry', {
-      connection: createRedisConnection(),
+      connection: createProducerRedisConnection(),
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: 'fixed', delay: 10_000 },

@@ -215,7 +215,12 @@ export const config = {
     },
   },
   asyncPipeline: {
-    enabled: process.env.ASYNC_PIPELINE_ENABLED !== 'false',
+    // #1052: the pipeline can only work when a Redis URL is configured.
+    // Previously it was 'on' by default and enqueued to localhost:6379
+    // against machines that have no Redis, parking jobs in ioredis's
+    // offline queue indefinitely. Match the same guard used by
+    // config.redis.enabled / config.jobs.enabled.
+    enabled: process.env.ASYNC_PIPELINE_ENABLED !== 'false' && process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== '',
     backpressureThreshold: parseInt(process.env.ASYNC_BACKPRESSURE_THRESHOLD || '1000', 10),
     /**
      * How long (ms) the in-process analytics buffer accumulates events before
