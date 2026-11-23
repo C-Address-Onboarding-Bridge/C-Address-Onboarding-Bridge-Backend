@@ -1,215 +1,267 @@
-import { Pool } from 'pg';
+import type { Pool } from 'pg';
+import crypto from 'crypto';
+import type { DLQEntry, DeliveryAttempt, WebhookRegistration, WebhookStore } from './webhookDelivery';
 
-export interface WebhookRegistration {
+interface RegistrationRow {
   id: string;
+  api_key_id: string | null;
   url: string;
-  secret: string;
-  events: string[];
-  active: boolean;
-  createdAt: string;
+  secret: string | null;
+  events: string | string[] | null;
+  created_at: number | string;
 }
 
-export interface WebhookDeliveryLogEntry {
+interface DeliveryAttemptRow {
   id: string;
-  registrationId: string;
+  registration_id: string;
+  webhook_url: string;
   event: string;
-  status: 'success' | 'failure';
-  attempts: number;
-  responseStatus?: number;
-  error?: string;
-  createdAt: string;
+  status_code: number | null;
+  error: string | null;
+  delivered_at: number | string;
+  attempt_number: number;
 }
 
-export interface WebhookDlqEntry {
+interface DLQRow {
   id: string;
-  registrationId: string;
+  registration_id: string;
   event: string;
   payload: unknown;
-  attempts: number;
-  lastError?: string;
-  createdAt: string;
+  attempts: unknown;
+  failed_at: number | string;
+  registration_url: string;
+  registration_secret: string | null;
+  registration_api_key_id: string | null;
+  registration_events: string | string[] | null;
+  registration_created_at: number | string;
 }
 
-/**
- * Postgres-backed persistence for webhook registrations, DLQ entries and the
- * delivery log. Replaces the previous in-memory maps/arrays so state survives
- * restarts and is shared across API instances.
- */
-export class WebhookDeliveryRepository {
-  constructor(private readonly pool: Pool) {}
+function parseEvents(events: RegistrationRow['events']): string[] {
+  if (Array.isArray(events)) return events;
+  if (!events) return [];
+  try {
+    const parsed: unknown = JSON.parse(events);
+    if (Array.isArray(parsed) && parsed.every((event) => typeof event === 'string')) return parsed;
+  } catch {
+    return events.split(',').filter(Boolean);
+  }
+  return [];
+}
 
-  async init(): Promise<void> {
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS webhook_registrations (
-        id TEXT PRIMARY KEY,
-        url TEXT NOT NULL,
-        secret TEXT NOT NULL,
-        events TEXT[] NOT NULL DEFAULT '{}',
-        active BOOLEAN NOT NULL DEFAULT TRUE,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS webhook_dlq (
-        id TEXT PRIMARY KEY,
-        registration_id TEXT NOT NULL,
-        event TEXT NOT NULL,
-        payload JSONB NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS webhook_delivery_log (
-        id TEXT PRIMARY KEY,
-        registration_id TEXT NOT NULL,
-        event TEXT NOT NULL,
-        status TEXT NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        response_status INTEGER,
-        error TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
+function parseJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+export class WebhookDeliveryRepository implements WebhookStore {
+  private readonly pool: Pool;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+  }
+
+  async saveRegistration(registration: WebhookRegistration): Promise<void> {
+    const secretHash = crypto.createHash('sha256').update(registration.secret).digest('hex');
     await this.pool.query(
-      `CREATE INDEX IF NOT EXISTS webhook_delivery_log_created_at_idx ON webhook_delivery_log (created_at);`,
+      `INSERT INTO webhook_registrations
+         (id, api_key, secret_hash, api_key_id, url, secret, events, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (id) DO UPDATE SET
+         api_key = EXCLUDED.api_key,
+         secret_hash = EXCLUDED.secret_hash,
+         api_key_id = EXCLUDED.api_key_id,
+         url = EXCLUDED.url,
+         secret = EXCLUDED.secret,
+         events = EXCLUDED.events`,
+      [
+        registration.id,
+        registration.apiKeyId,
+        secretHash,
+        registration.apiKeyId,
+        registration.url,
+        registration.secret,
+        JSON.stringify(registration.events),
+        registration.createdAt,
+      ],
     );
   }
 
-  // --- Registrations -------------------------------------------------------
-
-  async listRegistrations(): Promise<WebhookRegistration[]> {
-    const { rows } = await this.pool.query(
-      `SELECT id, url, secret, events, active, created_at FROM webhook_registrations ORDER BY created_at ASC`,
-    );
-    return rows.map(this.mapRegistration);
+  async deleteRegistration(id: string): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM webhook_delivery_log WHERE registration_id = $1', [id]);
+      await client.query('DELETE FROM webhook_dlq WHERE registration_id = $1', [id]);
+      const result = await client.query('DELETE FROM webhook_registrations WHERE id = $1 RETURNING id', [id]);
+      await client.query('COMMIT');
+      return (result.rowCount ?? 0) > 0;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async getRegistration(id: string): Promise<WebhookRegistration | undefined> {
-    const { rows } = await this.pool.query(
-      `SELECT id, url, secret, events, active, created_at FROM webhook_registrations WHERE id = $1`,
+    const { rows } = await this.pool.query<RegistrationRow>(
+      `SELECT id, api_key_id, url, secret, events, created_at
+       FROM webhook_registrations WHERE id = $1`,
       [id],
     );
     return rows[0] ? this.mapRegistration(rows[0]) : undefined;
   }
 
-  async saveRegistration(reg: WebhookRegistration): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO webhook_registrations (id, url, secret, events, active, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (id) DO UPDATE SET url = EXCLUDED.url, secret = EXCLUDED.secret,
-         events = EXCLUDED.events, active = EXCLUDED.active`,
-      [reg.id, reg.url, reg.secret, reg.events, reg.active, reg.createdAt],
+  async listRegistrations(): Promise<WebhookRegistration[]> {
+    const { rows } = await this.pool.query<RegistrationRow>(
+      `SELECT id, api_key_id, url, secret, events, created_at
+       FROM webhook_registrations ORDER BY created_at ASC`,
     );
+    return rows.map((row) => this.mapRegistration(row));
   }
 
-  async deleteRegistration(id: string): Promise<void> {
-    await this.pool.query(`DELETE FROM webhook_registrations WHERE id = $1`, [id]);
-  }
-
-  // --- DLQ -----------------------------------------------------------------
-
-  async listDlq(): Promise<WebhookDlqEntry[]> {
-    const { rows } = await this.pool.query(
-      `SELECT id, registration_id, event, payload, attempts, last_error, created_at FROM webhook_dlq ORDER BY created_at ASC`,
+  async getRegistrationsByApiKeyId(apiKeyId: string): Promise<WebhookRegistration[]> {
+    const { rows } = await this.pool.query<RegistrationRow>(
+      `SELECT id, api_key_id, url, secret, events, created_at
+       FROM webhook_registrations WHERE api_key_id = $1 ORDER BY created_at ASC`,
+      [apiKeyId],
     );
-    return rows.map(this.mapDlq);
+    return rows.map((row) => this.mapRegistration(row));
   }
 
-  async addDlq(entry: WebhookDlqEntry): Promise<void> {
+  async appendDeliveryAttempt(attempt: DeliveryAttempt): Promise<void> {
     await this.pool.query(
-      `INSERT INTO webhook_dlq (id, registration_id, event, payload, attempts, last_error, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (id) DO UPDATE SET attempts = EXCLUDED.attempts, last_error = EXCLUDED.last_error`,
-      [
-        entry.id,
-        entry.registrationId,
-        entry.event,
-        JSON.stringify(entry.payload),
-        entry.attempts,
-        entry.lastError ?? null,
-        entry.createdAt,
-      ],
-    );
-  }
-
-  async removeDlq(id: string): Promise<void> {
-    await this.pool.query(`DELETE FROM webhook_dlq WHERE id = $1`, [id]);
-  }
-
-  // --- Delivery log --------------------------------------------------------
-
-  async appendDeliveryLog(entry: WebhookDeliveryLogEntry, retentionLimit = 1000): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO webhook_delivery_log (id, registration_id, event, status, attempts, response_status, error, created_at)
+      `INSERT INTO webhook_delivery_log
+         (id, registration_id, webhook_url, event, attempt_number, status_code, error, delivered_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
-        entry.id,
-        entry.registrationId,
-        entry.event,
-        entry.status,
-        entry.attempts,
-        entry.responseStatus ?? null,
-        entry.error ?? null,
-        entry.createdAt,
+        attempt.id,
+        attempt.registrationId,
+        attempt.webhookUrl,
+        attempt.event,
+        attempt.attemptNumber,
+        attempt.statusCode ?? null,
+        attempt.error ?? null,
+        attempt.timestamp,
       ],
     );
-    // Retention: keep only the most recent `retentionLimit` entries so the log
-    // does not grow without bound.
+  }
+
+  async listDeliveryAttempts(): Promise<DeliveryAttempt[]> {
+    const { rows } = await this.pool.query<DeliveryAttemptRow>(
+      `SELECT id, registration_id, webhook_url, event, status_code, error, delivered_at, attempt_number
+       FROM webhook_delivery_log ORDER BY delivered_at ASC`,
+    );
+    return rows.map((row) => this.mapAttempt(row));
+  }
+
+  async pruneDeliveryLog(maxEntries: number): Promise<void> {
     await this.pool.query(
       `DELETE FROM webhook_delivery_log
        WHERE id IN (
          SELECT id FROM webhook_delivery_log
-         ORDER BY created_at DESC
+         ORDER BY delivered_at DESC
          OFFSET $1
        )`,
-      [retentionLimit],
+      [Math.max(0, Math.floor(maxEntries))],
     );
   }
 
-  async listDeliveryLog(limit = 100): Promise<WebhookDeliveryLogEntry[]> {
-    const { rows } = await this.pool.query(
-      `SELECT id, registration_id, event, status, attempts, response_status, error, created_at
-       FROM webhook_delivery_log ORDER BY created_at DESC LIMIT $1`,
-      [limit],
+  async saveDLQEntry(entry: DLQEntry): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO webhook_dlq (id, registration_id, event, payload, attempts, failed_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         attempts = EXCLUDED.attempts,
+         failed_at = EXCLUDED.failed_at`,
+      [
+        entry.id,
+        entry.registration.id,
+        entry.event,
+        JSON.stringify(entry.payload),
+        JSON.stringify(entry.attempts),
+        entry.failedAt,
+      ],
     );
-    return rows.map(this.mapDeliveryLog);
   }
 
-  private mapRegistration(row: any): WebhookRegistration {
+  async listDLQEntries(): Promise<DLQEntry[]> {
+    const { rows } = await this.pool.query<DLQRow>(
+      `SELECT d.id, d.registration_id, d.event, d.payload, d.attempts, d.failed_at,
+              r.url AS registration_url, r.secret AS registration_secret,
+              r.api_key_id AS registration_api_key_id, r.events AS registration_events,
+              r.created_at AS registration_created_at
+       FROM webhook_dlq d
+       JOIN webhook_registrations r ON r.id = d.registration_id
+       ORDER BY d.failed_at ASC`,
+    );
+    return rows.map((row) => this.mapDLQEntry(row));
+  }
+
+  async getDLQEntry(id: string): Promise<DLQEntry | undefined> {
+    const { rows } = await this.pool.query<DLQRow>(
+      `SELECT d.id, d.registration_id, d.event, d.payload, d.attempts, d.failed_at,
+              r.url AS registration_url, r.secret AS registration_secret,
+              r.api_key_id AS registration_api_key_id, r.events AS registration_events,
+              r.created_at AS registration_created_at
+       FROM webhook_dlq d
+       JOIN webhook_registrations r ON r.id = d.registration_id
+       WHERE d.id = $1`,
+      [id],
+    );
+    return rows[0] ? this.mapDLQEntry(rows[0]) : undefined;
+  }
+
+  async deleteDLQEntry(id: string): Promise<boolean> {
+    const result = await this.pool.query('DELETE FROM webhook_dlq WHERE id = $1 RETURNING id', [id]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private mapRegistration(row: RegistrationRow): WebhookRegistration {
     return {
       id: row.id,
       url: row.url,
-      secret: row.secret,
-      events: row.events ?? [],
-      active: row.active,
-      createdAt: new Date(row.created_at).toISOString(),
+      secret: row.secret ?? '',
+      apiKeyId: row.api_key_id ?? '',
+      events: parseEvents(row.events),
+      createdAt: Number(row.created_at),
     };
   }
 
-  private mapDlq(row: any): WebhookDlqEntry {
+  private mapAttempt(row: DeliveryAttemptRow): DeliveryAttempt {
     return {
       id: row.id,
       registrationId: row.registration_id,
+      webhookUrl: row.webhook_url,
       event: row.event,
-      payload: row.payload,
-      attempts: row.attempts,
-      lastError: row.last_error ?? undefined,
-      createdAt: new Date(row.created_at).toISOString(),
-    };
-  }
-
-  private mapDeliveryLog(row: any): WebhookDeliveryLogEntry {
-    return {
-      id: row.id,
-      registrationId: row.registration_id,
-      event: row.event,
-      status: row.status,
-      attempts: row.attempts,
-      responseStatus: row.response_status ?? undefined,
+      statusCode: row.status_code ?? undefined,
       error: row.error ?? undefined,
-      createdAt: new Date(row.created_at).toISOString(),
+      timestamp: Number(row.delivered_at),
+      attemptNumber: row.attempt_number,
+    };
+  }
+
+  private mapDLQEntry(row: DLQRow): DLQEntry {
+    const attempts = parseJson(row.attempts);
+    return {
+      id: row.id,
+      registration: {
+        id: row.registration_id,
+        url: row.registration_url,
+        secret: row.registration_secret ?? '',
+        apiKeyId: row.registration_api_key_id ?? '',
+        events: parseEvents(row.registration_events),
+        createdAt: Number(row.registration_created_at),
+      },
+      payload: parseJson(row.payload),
+      event: row.event,
+      attempts: Array.isArray(attempts) ? attempts as DeliveryAttempt[] : [],
+      failedAt: Number(row.failed_at),
     };
   }
 }

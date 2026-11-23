@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response } from 'express';
 import { createApiKey } from '../middleware/rbacAuth';
 import { webhookAdminRouter } from '../routes/webhookAdmin';
 
@@ -18,40 +18,48 @@ vi.mock('../services/webhookDelivery', () => ({
  * programme has an exact worklist: un-skip one, implement it, repeat.
  */
   webhookDeliveryService: {
-    register: vi.fn(() => ({
+    register: vi.fn(async () => ({
       id: 'webhook-1',
       url: 'https://example.com/webhook',
       secret: 'secret123456789',
       events: ['*'],
-      apiKey: 'test-key',
-      createdAt: new Date(),
+      apiKeyId: 'test-key',
+      createdAt: Date.now(),
     })),
-    getRegistrationsByApiKey: vi.fn((apiKey) => [
+    getRegistrationsByApiKeyId: vi.fn(async (apiKeyId) => [
       {
         id: 'webhook-1',
         url: 'https://example.com/webhook',
         secret: 'secret123456789',
         events: ['*'],
-        apiKey,
-        createdAt: new Date(),
+        apiKeyId,
+        createdAt: Date.now(),
       },
     ]),
-    unregister: vi.fn(() => true),
-    getDLQ: vi.fn(() => [
+    getRegistration: vi.fn(async (id) => ({
+      id,
+      url: 'https://example.com/webhook',
+      secret: 'secret123456789',
+      events: ['*'],
+      apiKeyId: 'other-key',
+      createdAt: Date.now(),
+    })),
+    unregister: vi.fn(async () => true),
+    getDLQ: vi.fn(async () => [
       {
         id: 'dlq-1',
         registration: {
           id: 'webhook-1',
           url: 'https://example.com/webhook',
           secret: 'secret',
-          apiKey: 'test-key',
+          apiKeyId: 'test-key',
         },
         event: 'funding.completed',
-        failedAt: new Date(),
+        failedAt: Date.now(),
         attempts: [{ status: 500, timestamp: new Date() }],
       },
     ]),
-    getDLQEntry: vi.fn((id) =>
+    getDLQEntry: vi.fn(async (id) =>
       id === 'dlq-1'
         ? {
             id: 'dlq-1',
@@ -59,15 +67,17 @@ vi.mock('../services/webhookDelivery', () => ({
               id: 'webhook-1',
               url: 'https://example.com/webhook',
               secret: 'secret',
-              apiKey: 'test-key',
+              apiKeyId: 'test-key',
             },
             event: 'funding.completed',
-            failedAt: new Date(),
+            failedAt: Date.now(),
             attempts: [{ status: 500, timestamp: new Date() }],
           }
         : null,
     ),
-    deleteDLQEntry: vi.fn(() => true),
+    deleteDLQEntry: vi.fn(async () => true),
+    getStats: vi.fn(async () => ({ registered: 1, dlqSize: 1, totalAttempts: 1 })),
+    getDeliveryLog: vi.fn(async () => []),
   },
 }));
 
@@ -281,16 +291,14 @@ describe('Webhook Admin Router - Scope Enforcement', () => {
   describe('Tenant scoping', () => {
     it('returns 404 when deleting another tenant\'s registration', async () => {
       const { webhookDeliveryService } = await import('../services/webhookDelivery');
-      (webhookDeliveryService.getRegistrationsByApiKey as any).mockReturnValueOnce([
-        {
-          id: 'webhook-1',
-          url: 'https://example.com/webhook',
-          secret: 'secret123456789',
-          events: ['*'],
-          apiKey: 'other-key',
-          createdAt: new Date(),
-        },
-      ]);
+      (webhookDeliveryService.getRegistration as any).mockResolvedValueOnce({
+        id: 'webhook-1',
+        url: 'https://example.com/webhook',
+        secret: 'secret123456789',
+        events: ['*'],
+        apiKeyId: 'other-key',
+        createdAt: Date.now(),
+      });
 
       const req = createMockRequest({
         path: '/api/v1/webhooks/registrations/webhook-1',
@@ -304,7 +312,7 @@ describe('Webhook Admin Router - Scope Enforcement', () => {
 
       const handler = (webhookAdminRouter as any).stack
         .find((l: any) => l.route?.path === '/registrations/:id' && l.route?.methods?.delete)
-        ?.route.stack[0].handle;
+        ?.route.stack[1].handle;
 
       await handler(req, res, next);
 
@@ -314,16 +322,16 @@ describe('Webhook Admin Router - Scope Enforcement', () => {
 
     it('returns 404 when reading another tenant\'s DLQ entry', async () => {
       const { webhookDeliveryService } = await import('../services/webhookDelivery');
-      (webhookDeliveryService.getDLQEntry as any).mockReturnValueOnce({
+      (webhookDeliveryService.getDLQEntry as any).mockResolvedValueOnce({
         id: 'dlq-1',
         registration: {
           id: 'webhook-1',
           url: 'https://example.com/webhook',
           secret: 'secret',
-          apiKey: 'other-key',
+          apiKeyId: 'other-key',
         },
         event: 'funding.completed',
-        failedAt: new Date(),
+        failedAt: Date.now(),
         attempts: [{ status: 500, timestamp: new Date() }],
       });
 
@@ -339,7 +347,7 @@ describe('Webhook Admin Router - Scope Enforcement', () => {
 
       const handler = (webhookAdminRouter as any).stack
         .find((l: any) => l.route?.path === '/dlq/:id' && l.route?.methods?.get)
-        ?.route.stack[0].handle;
+        ?.route.stack[1].handle;
 
       await handler(req, res, next);
 
