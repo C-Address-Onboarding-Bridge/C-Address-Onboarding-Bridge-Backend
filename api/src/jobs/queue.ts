@@ -17,7 +17,7 @@ export interface MetricsData {
   period: 'hourly' | 'daily';
 }
 
-// ─── Async pipeline job payloads ─────────────────────────────────────────────
+// --- Async pipeline job payloads -------------------------------------------
 
 export interface AuditLogJobData {
   /** Maps to AuditEventType in auditLog.ts */
@@ -52,17 +52,27 @@ export interface PipelineMetricsJobData {
 export const WEBHOOK_RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
 
 /**
- * Everything the worker needs to redeliver a webhook. The registration lives
- * in the API process, so the job must be self-contained.
+ * Everything the worker needs to redeliver a webhook.
+ *
+ * Issue #1061: the retry job carries only what the worker needs to re-sign
+ * the payload with a FRESH timestamp on every attempt. Neither the original
+ * signature nor the original timestamp is stored, because the final retry
+ * fires ~370 s after signing and would breach a 300 s replay window if we
+ * reused them. The worker re-fetches the registration secret from the DB at
+ * send time and recomputes HMAC-SHA256(secret, `${now}.${payload}`).
+ *
+ * `webhookId` is one UUID per logical delivery. It is stamped on every
+ * attempt (first delivery and every retry) as X-Webhook-Id so receivers can
+ * dedupe across attempts without trusting the timestamp.
  */
 export interface WebhookRetryData {
   registrationId: string;
   url: string;
   event: string;
-  /** Timestamp bound into the signature; resent as X-Webhook-Timestamp. */
-  timestamp: number;
+  /** Stable identifier for this delivery; sent as X-Webhook-Id on every attempt. */
+  webhookId: string;
+  /** Raw JSON body from the first attempt; re-signed on every retry. */
   payload: string;
-  signature: string;
   data: unknown;
   attemptNumber: number;
 }

@@ -448,8 +448,17 @@ import crypto from "crypto";
 
 // Verify webhook signature (example for Express)
 function verifyWebhookSignature(req, webhookSecret) {
-  const signature = req.headers["x-bridge-signature"];
-  const timestamp = req.headers["x-bridge-timestamp"];
+  const signature = req.headers["
+> **Headers sent on every attempt** (first delivery and every retry):
+>
+> - `X-Webhook-Signature: sha256=<hex>` - HMAC-SHA256 of `${X-Webhook-Timestamp}.${rawBody}`
+> - `X-Webhook-Timestamp: <unix seconds>` - refreshed per attempt; reject if older than 300 s
+> - `X-Webhook-Event: <event name>`
+> - `X-Webhook-Attempt: <n>` - 1-indexed
+> - `X-Webhook-Id: <uuid>` - stable across all attempts; use as the dedupe key
+
+X-Webhook-Signature"];
+  const timestamp = req.headers["X-Webhook-Timestamp"];
   const body = JSON.stringify(req.body);
 
   // Check timestamp is recent (within 5 minutes)
