@@ -60,6 +60,37 @@ import { sorobanService } from '../services/soroban';
 import { explorerService } from '../services/explorer';
 import { getOrCompute } from '../services/cache';
 import { IncomingMessage } from 'http';
+import { config } from '../config';
+
+const connectedClients: EventEmitter[] = [];
+
+function createMockRequest(url?: string): IncomingMessage {
+  return {
+    url,
+    headers: {},
+    socket: { remoteAddress: '127.0.0.1' },
+  } as IncomingMessage;
+}
+
+function createTestWebSocketServer(): WebSocketServer {
+  const wss = createWebSocketServer();
+  const emit = wss.emit.bind(wss);
+  wss.emit = ((event: string | symbol, ...args: any[]) => {
+    if (event === 'connection') {
+      if (args.length === 1) args.push(createMockRequest());
+      connectedClients.push(args[0]);
+    }
+    return emit(event, ...args);
+  }) as typeof wss.emit;
+  return wss;
+}
+
+afterEach(() => {
+  config.websocket.authRequired = true;
+  for (const client of connectedClients.splice(0)) {
+    client.emit('close');
+  }
+});
 
 // Helper to wait for message
 function waitForMessage(
@@ -112,7 +143,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
       vi.mocked(sorobanService.getTransactionStatus).mockClear();
       vi.mocked(explorerService.txUrl).mockClear();
     });
@@ -265,7 +296,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -350,7 +381,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -460,7 +491,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -509,7 +540,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -522,9 +553,7 @@ describe('WebSocket Service', () => {
         destroy: vi.fn(),
       } as any;
 
-      const mockReq = {
-        url: 'ws://localhost/ws',
-      } as IncomingMessage;
+      const mockReq = createMockRequest('ws://localhost/ws');
 
       handleUpgrade(wss, mockReq, mockSocket, Buffer.alloc(0));
 
@@ -538,9 +567,7 @@ describe('WebSocket Service', () => {
         destroy: vi.fn(),
       } as any;
 
-      const mockReq = {
-        url: 'ws://localhost/ws?token=invalid-token',
-      } as IncomingMessage;
+      const mockReq = createMockRequest('ws://localhost/ws?token=invalid-token');
 
       handleUpgrade(wss, mockReq, mockSocket, Buffer.alloc(0));
 
@@ -554,9 +581,7 @@ describe('WebSocket Service', () => {
         destroy: vi.fn(),
       } as any;
 
-      const mockReq = {
-        url: 'ws://localhost/ws?token=revoked-token',
-      } as IncomingMessage;
+      const mockReq = createMockRequest('ws://localhost/ws?token=revoked-token');
 
       handleUpgrade(wss, mockReq, mockSocket, Buffer.alloc(0));
 
@@ -570,9 +595,7 @@ describe('WebSocket Service', () => {
         destroy: vi.fn(),
       } as any;
 
-      const mockReq = {
-        url: 'ws://localhost/ws?token=expired-token',
-      } as IncomingMessage;
+      const mockReq = createMockRequest('ws://localhost/ws?token=expired-token');
 
       handleUpgrade(wss, mockReq, mockSocket, Buffer.alloc(0));
 
@@ -593,7 +616,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -677,7 +700,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
       vi.mocked(sorobanService.getTransactionStatus).mockClear();
       vi.mocked(explorerService.txUrl).mockClear();
       vi.mocked(getOrCompute).mockClear();
@@ -779,6 +802,31 @@ describe('WebSocket Service', () => {
       });
     });
 
+    it('sends status updates to tokenless clients when authentication is disabled', async () => {
+      config.websocket.authRequired = false;
+      const mockWs = new EventEmitter() as any;
+      mockWs.readyState = WebSocket.OPEN;
+      mockWs.send = vi.fn();
+
+      vi.mocked(sorobanService.getTransactionStatus).mockResolvedValue({
+        status: 'success',
+        hash: 'a'.repeat(64),
+      });
+
+      wss.emit('connection', mockWs);
+      mockWs.emit('message', JSON.stringify({
+        action: 'subscribe',
+        txHash: 'a'.repeat(64),
+      }));
+
+      const statusUpdate = await waitForMessage(mockWs, (msg) => msg.type === 'status_update');
+      expect(statusUpdate).toMatchObject({
+        type: 'status_update',
+        status: 'success',
+        txHash: 'a'.repeat(64),
+      });
+    });
+
     it('auto-closes subscription on terminal status', async () => {
       const mockWs = new EventEmitter() as any;
       mockWs.readyState = WebSocket.OPEN;
@@ -848,7 +896,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
       vi.useFakeTimers();
     });
 
