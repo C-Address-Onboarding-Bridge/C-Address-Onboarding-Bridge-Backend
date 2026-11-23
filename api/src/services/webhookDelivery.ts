@@ -408,8 +408,7 @@ export class WebhookDeliveryService {
         'webhook_delivery',
         deliveryAuditPayload,
         registration.apiKey,
-        () => integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKey),
-      );
+        () => { void integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKey)); };
 
       if (response.ok) {
         logger.info(
@@ -440,7 +439,7 @@ export class WebhookDeliveryService {
         'webhook_delivery',
         errorAuditPayload,
         registration.apiKey,
-        () => integrityAuditLog.append('webhook_delivery', errorAuditPayload, registration.apiKey),
+        () => { void integrityAuditLog.append('webhook_delivery', errorAuditPayload, registration.apiKey),
       );
       logger.warn(
         { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
@@ -623,7 +622,7 @@ export class WebhookDeliveryService {
         error: attempt.error,
       };
 
-      integrityAuditLog(deliveryAuditPayload);
+      void integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKey);
       enqueueAudit({ type: 'webhook.delivery.failed', ...deliveryAuditPayload });
 
       if (attemptNumber < RETRY_DELAYS_MS.length) {
