@@ -198,6 +198,10 @@ export const config = {
   websocket: {
     authRequired: process.env.WS_AUTH_REQUIRED !== 'false',
     maxSubscriptionsPerConnection: parseInt(process.env.WS_MAX_SUBSCRIPTIONS || '10', 10),
+    /** Concurrent WebSocket connections allowed per API key. */
+    maxConnectionsPerKey: parseInt(process.env.WS_MAX_CONNECTIONS_PER_KEY || '10', 10),
+    /** Concurrent WebSocket connections allowed per client IP (as derived with trustProxy). */
+    maxConnectionsPerIp: parseInt(process.env.WS_MAX_CONNECTIONS_PER_IP || '50', 10),
   },
   jobs: {
     enabled: process.env.JOBS_ENABLED !== 'false' && (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),

@@ -1,5 +1,6 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import { IncomingMessage } from 'http';
+import proxyaddr from 'proxy-addr';
 import { parse as parseUrl } from 'url';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -12,8 +13,16 @@ const TX_HASH_RE = /^[a-f0-9]{64}$/;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const POLL_INTERVAL_MS = 5_000;
 const STATUS_CACHE_NAMESPACE = 'status';
-const MAX_CONNECTIONS_PER_KEY = 10;
-const MAX_CONNECTIONS_PER_IP = 50;
+const DEFAULT_MAX_CONNECTIONS_PER_KEY = 10;
+const DEFAULT_MAX_CONNECTIONS_PER_IP = 50;
+
+function maxConnectionsPerKey(): number {
+  return config.websocket.maxConnectionsPerKey ?? DEFAULT_MAX_CONNECTIONS_PER_KEY;
+}
+
+function maxConnectionsPerIp(): number {
+  return config.websocket.maxConnectionsPerIp ?? DEFAULT_MAX_CONNECTIONS_PER_IP;
+}
 
 interface Subscription {
   txHash: string;
@@ -28,10 +37,81 @@ interface ClientState {
   isAlive: boolean;
   token: string | null;
   clientIp: string | null;
+  slot: Slot | null;
 }
 
 const connectionsByToken = new Map<string, Set<ClientState>>();
 const connectionsByIp = new Map<string, Set<ClientState>>();
+
+/**
+ * Slots counted against the per-key and per-IP limits: live connections plus
+ * handshakes still in flight. Kept apart from the maps above, which only ever
+ * hold real clients (the status poller walks them).
+ *
+ * A slot is taken synchronously in handleUpgrade, before the asynchronous
+ * handshake, so parallel upgrades cannot all see the old count; it is given
+ * back when the handshake fails or the connection ends.
+ */
+const slotsByToken = new Map<string, number>();
+const slotsByIp = new Map<string, number>();
+
+interface Slot {
+  token: string | null;
+  ip: string;
+  release(): void;
+}
+
+function takeSlot(token: string | null, ip: string): Slot {
+  if (token) slotsByToken.set(token, (slotsByToken.get(token) ?? 0) + 1);
+  slotsByIp.set(ip, (slotsByIp.get(ip) ?? 0) + 1);
+  let released = false;
+  return {
+    token,
+    ip,
+    // Idempotent: 'error' and 'close' can both reach cleanup().
+    release() {
+      if (released) return;
+      released = true;
+      if (token) decrement(slotsByToken, token);
+      decrement(slotsByIp, ip);
+    },
+  };
+}
+
+function decrement(map: Map<string, number>, key: string): void {
+  const next = (map.get(key) ?? 0) - 1;
+  if (next > 0) map.set(key, next);
+  else map.delete(key);
+}
+
+type TrustFn = (addr: string, hop: number) => boolean;
+
+/** Same as Express's compileTrust, so `trust proxy` means one thing on both paths. */
+function compileTrust(value: unknown): TrustFn {
+  if (typeof value === 'function') return value as TrustFn;
+  if (value === true) return () => true;
+  if (typeof value === 'number') return (_addr, hop) => hop < value;
+  const list = typeof value === 'string' ? value.split(',').map((v) => v.trim()) : value;
+  return proxyaddr.compile((list as string[] | undefined) || []);
+}
+
+let compiledTrust: { source: unknown; fn: TrustFn } | undefined;
+
+/**
+ * The client address for a WebSocket upgrade, using `config.trustProxy`
+ * exactly as Express's `req.ip` does. Upgrades never pass through Express, so
+ * without this every client behind the load balancer looked like the load
+ * balancer. With nothing trusted (the default) X-Forwarded-For is ignored, so
+ * a client cannot pick its own address.
+ */
+export function clientIpOf(req: IncomingMessage): string {
+  const source = config.trustProxy;
+  if (!compiledTrust || compiledTrust.source !== source) {
+    compiledTrust = { source, fn: compileTrust(source) };
+  }
+  if (!req.socket?.remoteAddress) return '0.0.0.0';
+  return proxyaddr(req, compiledTrust.fn) || '0.0.0.0';
+}
 const sharedPollers = new Map<string, NodeJS.Timeout>();
 
 function send(ws: WebSocket, payload: unknown): void {
@@ -147,6 +227,7 @@ function unsubscribe(client: ClientState, txHash: string): void {
 
 function cleanup(client: ClientState): void {
   clearInterval(client.heartbeatId);
+  client.slot?.release();
 
   if (client.token) {
     const clients = connectionsByToken.get(client.token);
@@ -216,8 +297,11 @@ export function createWebSocketServer(): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    const token = (ws as any).__wsToken || null;
-    const clientIp = req.socket.remoteAddress || req.headers['x-forwarded-for'] || '0.0.0.0';
+    // handleUpgrade hands over the slot it reserved, with the token and IP it
+    // was reserved under, so the bookkeeping cannot disagree with the check.
+    const slot: Slot | null = (ws as any).__wsSlot ?? null;
+    const token: string | null = slot?.token ?? (ws as any).__wsToken ?? null;
+    const clientIp = slot?.ip ?? (req ? clientIpOf(req) : '0.0.0.0');
 
     const client: ClientState = {
       ws,
@@ -225,6 +309,7 @@ export function createWebSocketServer(): WebSocketServer {
       isAlive: true,
       token,
       clientIp,
+      slot,
       heartbeatId: setInterval(() => {
         if (!client.isAlive) {
           ws.terminate();
@@ -269,9 +354,8 @@ export function createWebSocketServer(): WebSocketServer {
 }
 
 export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket: import('net').Socket, head: Buffer): void {
-  const protocol = req.headers['sec-websocket-protocol'];
+  const protocol = req.headers?.['sec-websocket-protocol'];
   const token = typeof protocol === 'string' ? protocol : null;
-  const clientIp = req.socket.remoteAddress || req.headers['x-forwarded-for'] || '0.0.0.0';
 
   if (!validateToken(token)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nUnauthorized');
@@ -279,24 +363,40 @@ export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket
     return;
   }
 
+  const clientIp = clientIpOf(req);
+
+  // Check and reserve with no await in between, so the next upgrade sees this one.
   if (token) {
-    const tokenConnections = connectionsByToken.get(token)?.size ?? 0;
-    if (tokenConnections >= MAX_CONNECTIONS_PER_KEY) {
+    if ((slotsByToken.get(token) ?? 0) >= maxConnectionsPerKey()) {
       socket.write('HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nToo many connections for this key');
       socket.destroy();
       return;
     }
   }
 
-  const ipConnections = connectionsByIp.get(clientIp)?.size ?? 0;
-  if (ipConnections >= MAX_CONNECTIONS_PER_IP) {
+  if ((slotsByIp.get(clientIp) ?? 0) >= maxConnectionsPerIp()) {
     socket.write('HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nToo many connections from this IP');
     socket.destroy();
     return;
   }
 
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    (ws as any).__wsToken = token;
-    wss.emit('connection', ws, req);
+  const slot = takeSlot(token, clientIp);
+  let handedOver = false;
+  // ws calls back only on a successful handshake; a failed one just destroys
+  // the socket, so that is where an unclaimed slot is given back.
+  socket.once('close', () => {
+    if (!handedOver) slot.release();
   });
+
+  try {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      handedOver = true;
+      (ws as any).__wsToken = token;
+      (ws as any).__wsSlot = slot;
+      wss.emit('connection', ws, req);
+    });
+  } catch (err) {
+    slot.release();
+    throw err;
+  }
 }
