@@ -268,6 +268,26 @@ export function createWebSocketServer(): WebSocketServer {
   return wss;
 }
 
+export function closeWebSocketServer(wss: WebSocketServer): Promise<void> {
+  for (const client of wss.clients) {
+    client.terminate();
+  }
+  for (const pollerId of sharedPollers.values()) {
+    clearInterval(pollerId);
+  }
+  sharedPollers.clear();
+
+  return new Promise((resolve, reject) => {
+    wss.close((err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket: import('net').Socket, head: Buffer): void {
   const protocol = req.headers['sec-websocket-protocol'];
   const token = typeof protocol === 'string' ? protocol : null;

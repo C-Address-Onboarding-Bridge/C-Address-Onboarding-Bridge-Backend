@@ -40,7 +40,8 @@ import { closePool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
-import { createWebSocketServer, handleUpgrade } from './services/websocket';
+import { closeWebSocketServer } from './services/websocket';
+import { createApiServer } from './services/httpServer';
 import { integrityAuditLog } from './services/auditLog';
 import { cacheMetricsRouter } from './routes/cacheMetrics';
 
@@ -204,21 +205,22 @@ app.use('/metrics', rbacAuth, requireScopes('metrics:read'), metricsRouter);
 app.use(xssErrorSanitizer);
 app.use(errorHandler);
 
-const server = createWebSocketServer(app);
-server.on('upgrade', handleUpgrade);
+const { server, wss } = createApiServer(app);
 
 const port = config.port;
-server.listen(port, () => {
-  logger.info(`API listening on port ${port}`);
-  integrityAuditLog('server_start', { port });
-});
+if (require.main === module) {
+  server.listen(port, () => {
+    logger.info(`API listening on port ${port}`);
+    integrityAuditLog('server_start', { port });
+  });
 
-gracefulShutdown.attach(server, async () => {
-  await closePool();
-  await shutdownTracing();
-});
-
-registerSignalHandlers();
+  gracefulShutdown.attach(server, logger);
+  registerSignalHandlers(async () => {
+    await closeWebSocketServer(wss);
+    await closePool();
+    await shutdownTracing();
+  });
+}
 
 export { app };
 export default app;
