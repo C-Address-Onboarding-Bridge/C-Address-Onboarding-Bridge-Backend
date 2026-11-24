@@ -359,3 +359,110 @@ describe('BridgeClient request signing', () => {
     expect(headers['X-Signature']).toBeDefined();
   });
 });
+
+// ─── #1100: API error-body shapes ──────────────────────────────────────────────
+
+describe('parseHttpError with the API error shapes (#1100)', () => {
+  it('maps zod validation details to ValidationError.fields', () => {
+    const err = parseHttpError(400, {
+      error: 'validation_error',
+      details: [
+        { path: ['amount'], message: 'Amount must be positive' },
+        { path: ['target', 'address'], message: 'Invalid C-address' },
+      ],
+    });
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.code).toBe('validation_error');
+    expect((err as ValidationError).fields).toEqual({
+      amount: 'Amount must be positive',
+      'target.address': 'Invalid C-address',
+    });
+  });
+
+  it('uses { error, message } from route errors', () => {
+    const err = parseHttpError(404, { error: 'not_found', message: 'Transaction not found' });
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(err.message).toBe('Transaction not found');
+    expect(err.code).toBe('not_found');
+  });
+
+  it('keeps the localized default message when only an error code is sent', () => {
+    const err = parseHttpError(401, { error: 'expired_api_key' }, undefined, 'es');
+    expect(err).toBeInstanceOf(AuthError);
+    expect(err.code).toBe('expired_api_key');
+    expect(err.message).toBe(new AuthError(undefined, { locale: 'es' }).message);
+  });
+
+  it('uses the error code as the message for errors without a localized default', () => {
+    expect(parseHttpError(409, { error: 'duplicate_request' }).message).toBe('duplicate_request');
+  });
+
+  it('builds every 4xx error without a ReferenceError', () => {
+    for (const status of [400, 401, 403, 404, 409, 422]) {
+      expect(() => parseHttpError(status, {})).not.toThrow();
+      expect(parseHttpError(status, {})).toBeInstanceOf(BridgeError);
+    }
+  });
+
+  it('reads the code and message the same way in the 429/503/5xx branches', () => {
+    expect(parseHttpError(429, { error: 'rate_limited' }).code).toBe('rate_limited');
+    expect(parseHttpError(503, { error: 'maintenance', message: 'Down' }).message).toBe('Down');
+    expect(parseHttpError(503, { error: 'maintenance' }).message).toBe('maintenance');
+    expect(parseHttpError(502, { error: 'bad_gateway' }).code).toBe('bad_gateway');
+  });
+});
+
+describe('BridgeClient error handling (#1100)', () => {
+  let client: BridgeClient;
+
+  beforeEach(() => {
+    client = new BridgeClient({
+      baseUrl: 'http://localhost:3000',
+      retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1 },
+    } as ConstructorParameters<typeof BridgeClient>[0]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('throws AuthError for a 401 and fetches exactly once', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: new Headers(),
+      json: () => Promise.resolve({ error: 'invalid_api_key', message: 'Invalid API key' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const err = await client.health().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(AuthError);
+    expect((err as AuthError).code).toBe('invalid_api_key');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces zod field errors from a 400', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        headers: new Headers(),
+        json: () =>
+          Promise.resolve({
+            error: 'validation_error',
+            details: [{ path: ['amount'], message: 'Amount must be positive' }],
+          }),
+      }),
+    );
+
+    const err = await client.health().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ValidationError);
+    expect((err as ValidationError).fields?.amount).toBe('Amount must be positive');
+  });
+});

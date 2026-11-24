@@ -218,6 +218,31 @@ jobs:
             prom/alertmanager:v0.27.0 \
             check-config /a/alertmanager.yaml
 
+  terraform:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive infrastructure
+
+      - name: terraform validate (infrastructure)
+        working-directory: infrastructure
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: terraform validate (infrastructure/cdn)
+        working-directory: infrastructure/cdn
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
   deploy-testnet:
     name: Deploy to Testnet
     runs-on: ubuntu-latest
