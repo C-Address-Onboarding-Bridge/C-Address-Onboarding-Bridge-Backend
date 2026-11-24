@@ -21,31 +21,62 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        # Full history so the secret scan can diff the PR / pushed range.
+        fetch-depth: 0
 
     - name: Setup Node.js environment
       uses: ./.github/actions/setup-node-env
 
-    - name: Run staged secrets scanner
-      run: npm run secrets:scan
+    # A fresh checkout has nothing staged, so `secrets:scan` (--staged) always
+    # checked 0 files here. Scan the files this PR / push actually changed and
+    # fail if that set is empty (#1097). Scheduled runs rely on TruffleHog.
+    - name: Run secrets scanner on changed files
+      if: github.event_name == 'pull_request' || github.event_name == 'push'
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_REF: ${{ github.base_ref }}
+        BEFORE_SHA: ${{ github.event.before }}
+        HEAD_SHA: ${{ github.sha }}
+      run: |
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          range="origin/${BASE_REF}...HEAD"
+        elif [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+          # New branch: no previous tip, scan the head commit.
+          range="${HEAD_SHA}~1..${HEAD_SHA}"
+        else
+          range="${BEFORE_SHA}..${HEAD_SHA}"
+        fi
+        node scripts/secrets.mjs scan --diff "$range" --require-files
 
+    # Fails on critical advisories (set AUDIT_FAIL_ON=high to include high).
     - name: Run NPM Audit
+      id: audit
+      if: ${{ !cancelled() }}
       run: npm run audit:dependencies
 
     - name: Upload dependency audit report
+      if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
         name: dependency-audit-summary
         path: |
           reports/dependency-audit.json
           reports/dependency-audit-summary.md
+          reports/dependency-audit-counts.json
+        if-no-files-found: warn
         retention-days: 30
 
+    # The remaining scanners still run when an earlier gate failed, so one
+    # red step does not hide the others' findings.
     - name: Initialize CodeQL
+      if: ${{ !cancelled() }}
       uses: github/codeql-action/init@v3
       with:
         languages: typescript
 
     - name: Perform CodeQL Analysis
+      if: ${{ !cancelled() }}
       uses: github/codeql-action/analyze@v3
 
     # No base/head: on pushes to main BASE == HEAD and the action errors.
@@ -56,12 +87,14 @@ jobs:
     # and docs/developer-setup.md. TruffleHog's recommended CI setting still fails
     # this step on any credential it can verify is live.
     - name: TruffleHog Secrets Scan
+      if: ${{ !cancelled() }}
       uses: trufflesecurity/trufflehog@main
       with:
         path: ./
         extra_args: --only-verified
 
     - name: Run OWASP Dependency-Check
+      if: ${{ !cancelled() }}
       uses: dependency-check/Dependency-Check_Action@main
       env:
         JAVA_HOME: /opt/jdk
@@ -71,15 +104,36 @@ jobs:
         format: 'HTML'
         out: 'reports'
 
+  # Runs whatever `analyze` concluded (previously it was skipped exactly when
+  # analyze failed) and reports the result plus the audit counts (#1097).
   notify:
     name: Vulnerability Alerts
     needs: analyze
-    if: github.event_name != 'pull_request'
+    if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      ANALYZE_RESULT: ${{ needs.analyze.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - name: Notify Slack for critical findings
+      - name: Download dependency audit report
+        if: env.SLACK_WEBHOOK_URL != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-audit-summary
+          path: reports
+
+      - name: Notify Slack
         if: env.SLACK_WEBHOOK_URL != ''
         run: |
-          curl -X POST -H 'Content-type: application/json' --data '{"text":"Dependency vulnerability scan completed for C-Address Onboarding Bridge."}' "$SLACK_WEBHOOK_URL"
+          counts=reports/dependency-audit-counts.json
+          if [ -f "$counts" ]; then
+            summary=$(jq -r '"critical: \(.critical), high: \(.high), moderate: \(.moderate), low: \(.low)"' "$counts")
+          else
+            summary="audit counts unavailable (the audit step did not produce a report)"
+          fi
+          if [ "$ANALYZE_RESULT" = "success" ]; then icon=":white_check_mark:"; else icon=":rotating_light:"; fi
+          text="${icon} Security scan ${ANALYZE_RESULT} for C-Address Onboarding Bridge. Dependencies: ${summary}. ${RUN_URL}"
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -fsS -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK_URL"
