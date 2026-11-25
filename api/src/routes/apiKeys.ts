@@ -43,6 +43,13 @@ const createApiKeySchema = z.object({
   rateLimit: z.enum(['low', 'standard', 'high']).optional(),
 });
 
+// A caller may only grant scopes it itself holds. Without this, any
+// admin:keys holder could mint a key with cex:withdraw or admin:keys even
+// though it never held those scopes to begin with (privilege escalation).
+function disallowedScopes(requested: PermissionScope[], granted: PermissionScope[]): PermissionScope[] {
+  return requested.filter((scope) => !granted.includes(scope));
+}
+
 apiKeysRouter.post('/', requireScopes('admin:keys'), (req: Request, res: Response, next: NextFunction) => {
   let parsed: z.infer<typeof createApiKeySchema>;
   try {
@@ -53,28 +60,55 @@ apiKeysRouter.post('/', requireScopes('admin:keys'), (req: Request, res: Respons
   }
 
   const { name, scopes, ipWhitelist, expiresAt, rateLimit } = parsed;
+  const granted = req.resolvedScopes ?? [];
+  const disallowed = disallowedScopes(scopes, granted);
+  if (disallowed.length > 0) {
+    res.status(403).json({ error: 'insufficient_scope', message: 'cannot grant scopes you do not hold', disallowed });
+    return;
+  }
+
   const createdBy = req.apiKeyRecord?.id ?? 'unknown';
   const { rawKey, record } = createApiKey({ name, scopes, ipWhitelist, expiresAt, rateLimit, createdBy });
 
   res.status(201).json({ rawKey, id: record.id, name: record.name, scopes: record.scopes });
 });
 
-apiKeysRouter.get('/', requireScopes('admin:keys'), (_req: Request, res: Response) => {
-  res.json({ keys: listApiKeys() });
+// Keys are tenant-scoped: an admin:keys holder can administer only keys it
+// created itself, not every tenant's keys platform-wide.
+apiKeysRouter.get('/', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const callerId = req.apiKeyRecord?.id ?? '';
+  res.json({ keys: listApiKeys().filter((k) => k.createdBy === callerId) });
 });
 
 apiKeysRouter.get('/audit', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const callerId = req.apiKeyRecord?.id ?? '';
   const rawOffset = parseInt(req.query.offset as string, 10);
   const rawLimit = parseInt(req.query.limit as string, 10);
   const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100;
-  const result = getAuditLog(offset, limit);
-  res.json(result);
+  // Pull a generously sized window from the full log, then filter and
+  // re-paginate so the caller only ever sees its own key's activity.
+  const ownKeyIds = new Set(listApiKeys().filter((k) => k.createdBy === callerId).map((k) => k.id));
+  ownKeyIds.add(callerId);
+  const full = getAuditLog(0, 1_000_000);
+  const filtered = full.entries.filter((e) => ownKeyIds.has(e.keyId));
+  res.json({
+    entries: filtered.slice(offset, offset + limit),
+    total: filtered.length,
+    offset,
+    limit,
+  });
 });
+
+function ownsKey(req: Request, id: string): boolean {
+  const record = getApiKey(id);
+  if (!record) return false;
+  return record.createdBy === (req.apiKeyRecord?.id ?? '');
+}
 
 apiKeysRouter.get('/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
   const record = getApiKey(req.params.id);
-  if (!record) {
+  if (!record || record.createdBy !== (req.apiKeyRecord?.id ?? '')) {
     res.status(404).json({ error: 'not_found' });
     return;
   }
@@ -83,7 +117,19 @@ apiKeysRouter.get('/:id', requireScopes('admin:keys'), (req: Request, res: Respo
 
 apiKeysRouter.patch('/:id', requireScopes('admin:keys'), (req: Request, res: Response, next: NextFunction) => {
   try {
+    if (!ownsKey(req, req.params.id)) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
     const patch = patchApiKeySchema.parse(req.body);
+    if (patch.scopes !== undefined) {
+      const granted = req.resolvedScopes ?? [];
+      const disallowed = disallowedScopes(patch.scopes, granted);
+      if (disallowed.length > 0) {
+        res.status(403).json({ error: 'insufficient_scope', message: 'cannot grant scopes you do not hold', disallowed });
+        return;
+      }
+    }
     const updated = updateApiKey(req.params.id, patch);
     if (!updated) {
       res.status(404).json({ error: 'not_found' });
@@ -96,6 +142,10 @@ apiKeysRouter.patch('/:id', requireScopes('admin:keys'), (req: Request, res: Res
 });
 
 apiKeysRouter.delete('/:id', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  if (!ownsKey(req, req.params.id)) {
+    res.status(404).json({ error: 'not_found' });
+    return;
+  }
   const revoked = revokeApiKey(req.params.id);
   if (!revoked) {
     res.status(404).json({ error: 'not_found' });

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { logger } from '../logger';
-import { cacheGet, cacheSet } from '../services/cache';
+import { cacheSetNX } from '../services/cache';
 import { config } from '../config';
 import { resolveRecord } from './rbacAuth';
 
@@ -51,23 +51,55 @@ export function buildSigningPayload(
   return `${method.toUpperCase()}.${path}.${sortedQuery}.${bodyStr}.${timestamp}.${nonce}`;
 }
 
+/** Max allowed clock skew between client timestamp and server time, in seconds. */
+const MAX_CLOCK_SKEW_SECONDS = 300;
+
+/** How long a used nonce is remembered to reject replays, in seconds. */
+const NONCE_CACHE_TTL = MAX_CLOCK_SKEW_SECONDS * 2;
+
+/** Paths that must never require request signing (provider webhooks, docs, telemetry). */
+const SIGNING_EXEMPT_PREFIXES = ['/api/webhook/', '/api/docs', '/api/openapi.json', '/api/telemetry'];
+
+function isSigningExempt(path: string): boolean {
+  return SIGNING_EXEMPT_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+function constantTimeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export function requestSigningMiddleware(
   req: Request,
   res: Response,
   next: NextFunction
 ): void {
+  if (isSigningExempt(req.originalUrl.split('?')[0] ?? req.path)) {
+    next();
+    return;
+  }
+
   const signature = req.header('X-Signature');
   const timestamp = req.header('X-Timestamp');
   const nonce = req.header('X-Nonce');
 
   if (!signature || !timestamp || !nonce) {
+    if (!config.requestSigningRequired) {
+      next();
+      return;
+    }
     res.status(401).json({ error: 'missing_signature' });
     return;
   }
 
-  const now = Math.floor(Date.now() / 1000);
+  // Timestamps are sent in milliseconds (matches sdk/src/bridge.ts: String(Date.now())).
+  const now = Date.now();
   const ts = Number(timestamp);
-  if (!Number.isFinite(ts) || Math.abs(now - ts) > MAX_CLOCK_SKEW_SECONDS) {
+  if (!Number.isFinite(ts) || Math.abs(now - ts) > MAX_CLOCK_SKEW_SECONDS * 1000) {
     res.status(401).json({ error: 'invalid_timestamp' });
     return;
   }
@@ -104,19 +136,20 @@ export function requestSigningMiddleware(
     return res.status(401).json({ error: 'invalid_signature' });
   }
 
-  // Signature verified — now cache the nonce to prevent replay.
-  // Scope nonce to the API key id so one client cannot burn another's nonces.
-  const keyId = (req as Request & { apiKey?: { id?: string } }).apiKey?.id ?? apiKey;
+  // Signature verified — now atomically reserve the nonce to prevent replay.
+  // Scope nonce to the hashed API key id so one client cannot burn another's
+  // nonces, and never store the raw key in Redis.
+  const keyId =
+    (req as Request & { apiKey?: { id?: string } }).apiKey?.id ??
+    crypto.createHash('sha256').update(apiKey).digest('hex');
   const nonceKey = `nonce:${keyId}:${nonce}`;
 
-  cacheGet(nonceKey)
-    .then((cached) => {
-      if (cached) {
-        return res.status(401).json({ error: 'replay_nonce' });
+  cacheSetNX(nonceKey, '1', NONCE_CACHE_TTL)
+    .then((reserved) => {
+      if (!reserved) {
+        res.status(401).json({ error: 'replay_nonce' });
+        return;
       }
-      return cacheSet(nonceKey, 'used', NONCE_CACHE_TTL);
-    })
-    .then(() => {
       next();
     })
     .catch((err) => {

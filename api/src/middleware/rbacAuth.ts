@@ -14,6 +14,7 @@ export type PermissionScope =
   | 'transactions:read'
   | 'transactions:read:all'
   | 'admin:keys'
+  | 'webhooks:manage'
   | 'metrics:read';
 
 export interface ApiKeyRecord {
@@ -451,8 +452,10 @@ export function getAuditLog(
 
 /**
  * Seed "legacy" plain-text API keys from the environment (e.g. config.apiKeys).
- * These are stored with full admin scopes so existing integrations keep working.
- * Calling this function multiple times with the same key is idempotent.
+ * These are stored with read-only scopes (quote:read, status:read, cex:read,
+ * transactions:read), NOT full admin scopes — they let existing integrations
+ * keep making read calls, but cannot create keys, manage webhooks, or reach
+ * /admin. Calling this function multiple times with the same key is idempotent.
  */
 export function seedLegacyKeys(rawKeys: string[]): void {
   const now = Date.now();
@@ -482,4 +485,40 @@ export function seedLegacyKeys(rawKeys: string[]): void {
     keyStore.set(record.id, record);
     keyHashIndex.set(keyHash, record);
   }
+}
+
+/**
+ * Bootstrap the very first admin:keys key from ADMIN_API_KEY.
+ *
+ * Every key-management, webhook and admin route requires admin:keys, and the
+ * only way to mint a key with that scope is POST /api/v1/api-keys, which
+ * itself requires admin:keys. Without an explicit bootstrap, a fresh
+ * deployment has no path to that first key — seedLegacyKeys() only grants
+ * read scopes. Set ADMIN_API_KEY to seed one key with admin:keys so an
+ * operator can create properly scoped keys afterward. Idempotent.
+ */
+export function seedAdminKey(rawKey: string | undefined): void {
+  if (typeof rawKey !== 'string') return;
+  const trimmed = rawKey.trim();
+  if (trimmed.length === 0) return;
+  const keyHash = hashKey(trimmed);
+  if (keyHashIndex.has(keyHash)) return;
+
+  const now = Date.now();
+  const record: ApiKeyRecord = {
+    id: crypto.randomUUID(),
+    keyHash,
+    name: 'Bootstrap admin key',
+    createdBy: 'system',
+    createdAt: now,
+    updatedAt: now,
+    lastUsedAt: null,
+    scopes: ['admin:keys'],
+    ipWhitelist: [],
+    expiresAt: null,
+    rateLimit: 'standard',
+    revoked: false,
+  };
+  keyStore.set(record.id, record);
+  keyHashIndex.set(keyHash, record);
 }
