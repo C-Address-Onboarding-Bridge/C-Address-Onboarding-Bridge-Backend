@@ -48,7 +48,8 @@ import { closePool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
-import { createWebSocketServer, handleUpgrade } from './services/websocket';
+import { closeWebSocketServer } from './services/websocket';
+import { createApiServer } from './services/httpServer';
 import { integrityAuditLog } from './services/auditLog';
 import { cacheMetricsRouter } from './routes/cacheMetrics';
 
@@ -231,29 +232,29 @@ app.use((req, res) => {
 app.use(xssErrorSanitizer);
 app.use(errorHandler);
 
-const server = createWebSocketServer(app);
-server.on('upgrade', handleUpgrade);
+const { server, wss } = createApiServer(app);
 
 const port = config.port;
-
-// Initialize the audit log chain from Postgres before accepting requests so
-// that sequences continue from where they left off on restart. Closes #908.
-integrityAuditLog.initialize().then(() => {
-  server.listen(port, () => {
-    logger.info(`API listening on port ${port}`);
-    integrityAuditLog.append('admin_operation', { event: 'server_start', port }, 'system');
+if (require.main === module) {
+  // Initialize the audit log chain from Postgres before accepting requests so
+  // that sequences continue from where they left off on restart. Closes #908.
+  integrityAuditLog.initialize().then(() => {
+    server.listen(port, () => {
+      logger.info(`API listening on port ${port}`);
+      integrityAuditLog.append('admin_operation', { event: 'server_start', port }, 'system');
+    });
+  }).catch((err) => {
+    logger.error({ err }, 'Failed to initialize audit log — aborting startup');
+    process.exit(1);
   });
-}).catch((err) => {
-  logger.error({ err }, 'Failed to initialize audit log — aborting startup');
-  process.exit(1);
-});
 
-gracefulShutdown.attach(server, async () => {
-  await closePool();
-  await shutdownTracing();
-});
-
-registerSignalHandlers();
+  gracefulShutdown.attach(server, logger);
+  registerSignalHandlers(async () => {
+    await closeWebSocketServer(wss);
+    await closePool();
+    await shutdownTracing();
+  });
+}
 
 export { app };
 export default app;
