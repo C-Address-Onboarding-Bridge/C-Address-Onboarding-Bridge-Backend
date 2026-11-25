@@ -15,6 +15,7 @@ import { migration005 } from '../src/migrations/005_query_optimization_indexes';
 import { migration006 } from '../src/migrations/006_provider_orders';
 import { migration007 } from '../src/migrations/007_audit_log_event_types';
 import { migration008 } from '../src/migrations/008_drop_redundant_indexes';
+import { migration009 } from '../src/migrations/009_transactions_api_key_id';
 
 migrationRunner
   .register(migration001)
@@ -24,7 +25,8 @@ migrationRunner
   .register(migration005)
   .register(migration006)
   .register(migration007)
-  .register(migration008);
+  .register(migration008)
+  .register(migration009);
 
 const [command = 'migrate', arg] = process.argv.slice(2);
 

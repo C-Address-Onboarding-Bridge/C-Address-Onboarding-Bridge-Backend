@@ -82,11 +82,13 @@ func (c *BridgeClient) request(method, path string, query url.Values, body any) 
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg, _ := out["message"].(string)
+		// The API emits { "error": "...", "details": [...] } or { "error": "..." }.
+		// Map "error" → Code and use it as the message fallback too.
+		code, _ := out["error"].(string)
+		msg := code
 		if msg == "" {
 			msg = resp.Status
 		}
-		code, _ := out["code"].(string)
 		return nil, &BridgeError{Status: resp.StatusCode, Message: msg, Code: code}
 	}
 	return out, nil
