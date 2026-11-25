@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { STELLAR_ADDRESS_REGEX, C_ADDRESS_REGEX } from '../utils/constants';
+import { STELLAR_ADDRESS_REGEX, C_ADDRESS_REGEX, isValidStellarAddress, isValidCAddress } from '../utils/constants';
 import { sorobanService } from '../services/soroban';
 import { explorerService } from '../services/explorer';
 import { idempotencyMiddleware } from '../middleware/idempotency';
@@ -43,17 +43,17 @@ const fundSchema = z.object({
 });
 
 const fundPrepareSchema = z.object({
-  sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid source Stellar address'),
-  targetAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
-  tokenAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid token contract address'),
+  sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX).refine(isValidStellarAddress, 'invalid source Stellar address'),
+  targetAddress: z.string().regex(C_ADDRESS_REGEX).refine(isValidCAddress, 'invalid target C-address'),
+  tokenAddress: z.string().regex(C_ADDRESS_REGEX).refine(isValidCAddress, 'invalid token contract address'),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
   memo: z.string().max(64).default(''),
 });
 
 const fundDirectSchema = z.object({
-  sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid source Stellar address'),
-  targetAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
-  tokenAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid token contract address'),
+  sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX).refine(isValidStellarAddress, 'invalid source Stellar address'),
+  targetAddress: z.string().regex(C_ADDRESS_REGEX).refine(isValidCAddress, 'invalid target C-address'),
+  tokenAddress: z.string().regex(C_ADDRESS_REGEX).refine(isValidCAddress, 'invalid token contract address'),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
   memo: z.string().max(64).default(''),
 });
@@ -63,9 +63,9 @@ const batchFundSchema = z.object({
   signedXdr: z.string().min(1, 'signed transaction XDR is required'),
   recipients: z.array(
     z.object({
-      target: z.string().regex(C_ADDRESS_REGEX, 'invalid target C-address'),
+      target: z.string().regex(C_ADDRESS_REGEX).refine(isValidCAddress, 'invalid target C-address'),
       amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
-      tokenAddress: z.string().regex(C_ADDRESS_REGEX, 'invalid token contract address').optional(),
+      tokenAddress: z.string().regex(C_ADDRESS_REGEX).refine(isValidCAddress, 'invalid token contract address').optional(),
     }),
   ).min(1, 'at least one recipient is required').max(100, 'maximum 100 recipients per batch'),
 });
@@ -102,7 +102,7 @@ fundingRouter.post('/prepare', fundEndpointRateLimit, idempotencyMiddleware, asy
         fee: prepared.fee,
       },
       actor,
-      () => integrityAuditLog.append(
+      () => { void integrityAuditLog.append(
         'transaction_prepared',
         {
           sourceAddress: body.sourceAddress,
@@ -154,7 +154,7 @@ fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req
       },
       actor,
       // Sync fallback: run inline when pipeline unavailable.
-      () => integrityAuditLog.append(
+      () => { void integrityAuditLog.append(
         'transaction_submission_result',
         { txHash: result.hash, status: result.status, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
         actor,
@@ -252,7 +252,7 @@ fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async
         recipientCount: body.recipients.length,
       },
       actor,
-      () => integrityAuditLog.append(
+      () => { void integrityAuditLog.append(
         'transaction_submission_result',
         {
           txHash: result.hash,
@@ -314,7 +314,7 @@ fundingRouter.post('/direct', fundEndpointRateLimit, idempotencyMiddleware, asyn
         error: result.error,
       },
       actor,
-      () => integrityAuditLog.append(
+      () => { void integrityAuditLog.append(
         'transaction_submission_result',
         {
           txHash: result.hash,

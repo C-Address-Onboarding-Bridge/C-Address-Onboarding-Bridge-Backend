@@ -10,6 +10,3 @@ datasources:
     editable: false
     jsonData:
       httpMethod: POST
-      exemplarTraceIdDestinations:
-        - name: trace_id
-          datasourceUid: tempo-uid

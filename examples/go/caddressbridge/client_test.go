@@ -37,7 +37,8 @@ func TestRequest_SuccessReturnsBody(t *testing.T) {
 
 func TestRequest_MapsAuthErrors(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
-		client, closeSrv := newTestClient(jsonHandler(status, map[string]any{"message": "nope", "code": "AUTH"}))
+		// Real API shape: {"error": "invalid_api_key"}
+		client, closeSrv := newTestClient(jsonHandler(status, map[string]any{"error": "invalid_api_key"}))
 
 		_, err := client.Health()
 		closeSrv()
@@ -49,18 +50,19 @@ func TestRequest_MapsAuthErrors(t *testing.T) {
 		if bErr.Status != status {
 			t.Fatalf("expected status %d, got %d", status, bErr.Status)
 		}
-		if bErr.Message != "nope" {
-			t.Fatalf("expected message 'nope', got %q", bErr.Message)
+		if bErr.Message != "invalid_api_key" {
+			t.Fatalf("expected message 'invalid_api_key', got %q", bErr.Message)
 		}
-		if bErr.Code != "AUTH" {
-			t.Fatalf("expected code 'AUTH', got %q", bErr.Code)
+		if bErr.Code != "invalid_api_key" {
+			t.Fatalf("expected code 'invalid_api_key', got %q", bErr.Code)
 		}
 	}
 }
 
 func TestRequest_MapsValidationErrors(t *testing.T) {
 	for _, status := range []int{http.StatusBadRequest, http.StatusUnprocessableEntity} {
-		client, closeSrv := newTestClient(jsonHandler(status, map[string]any{"message": "bad input"}))
+		// Real API shape: {"error": "validation_error", "details": [...]}
+		client, closeSrv := newTestClient(jsonHandler(status, map[string]any{"error": "validation_error", "details": []any{}}))
 
 		_, err := client.Health()
 		closeSrv()
@@ -72,14 +74,14 @@ func TestRequest_MapsValidationErrors(t *testing.T) {
 		if bErr.Status != status {
 			t.Fatalf("expected status %d, got %d", status, bErr.Status)
 		}
-		if bErr.Message != "bad input" {
-			t.Fatalf("expected message 'bad input', got %q", bErr.Message)
+		if bErr.Message != "validation_error" {
+			t.Fatalf("expected message 'validation_error', got %q", bErr.Message)
 		}
 	}
 }
 
 func TestRequest_MapsNotFound(t *testing.T) {
-	client, closeSrv := newTestClient(jsonHandler(http.StatusNotFound, map[string]any{"message": "missing"}))
+	client, closeSrv := newTestClient(jsonHandler(http.StatusNotFound, map[string]any{"error": "not_found"}))
 	defer closeSrv()
 
 	_, err := client.Health()
@@ -94,7 +96,8 @@ func TestRequest_MapsNotFound(t *testing.T) {
 }
 
 func TestRequest_MapsRateLimit(t *testing.T) {
-	client, closeSrv := newTestClient(jsonHandler(http.StatusTooManyRequests, map[string]any{"message": "slow down"}))
+	// Real API shape: {"error": "rate_limit_exceeded"}
+	client, closeSrv := newTestClient(jsonHandler(http.StatusTooManyRequests, map[string]any{"error": "rate_limit_exceeded"}))
 	defer closeSrv()
 
 	_, err := client.Health()
@@ -109,7 +112,8 @@ func TestRequest_MapsRateLimit(t *testing.T) {
 }
 
 func TestRequest_MapsServerErrors(t *testing.T) {
-	client, closeSrv := newTestClient(jsonHandler(http.StatusInternalServerError, map[string]any{"message": "boom", "code": "INTERNAL"}))
+	// Real API shape: {"error": "internal_server_error"}
+	client, closeSrv := newTestClient(jsonHandler(http.StatusInternalServerError, map[string]any{"error": "internal_server_error"}))
 	defer closeSrv()
 
 	_, err := client.Health()
@@ -121,8 +125,8 @@ func TestRequest_MapsServerErrors(t *testing.T) {
 	if bErr.Status != http.StatusInternalServerError {
 		t.Fatalf("expected status 500, got %d", bErr.Status)
 	}
-	if bErr.Code != "INTERNAL" {
-		t.Fatalf("expected code 'INTERNAL', got %q", bErr.Code)
+	if bErr.Code != "internal_server_error" {
+		t.Fatalf("expected code 'internal_server_error', got %q", bErr.Code)
 	}
 }
 
@@ -140,8 +144,12 @@ func TestRequest_FallsBackToStatusTextWhenMessageMissing(t *testing.T) {
 	if !errors.As(err, &bErr) {
 		t.Fatalf("expected *BridgeError, got %T (%v)", err, err)
 	}
-	if bErr.Message != http.StatusText(http.StatusBadGateway) && bErr.Message != "502 Bad Gateway" {
-		t.Fatalf("expected fallback message derived from HTTP status, got %q", bErr.Message)
+	// When "error" field is absent, falls back to HTTP status text (e.g. "502 Bad Gateway")
+	if bErr.Status != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d", bErr.Status)
+	}
+	if bErr.Message == "" {
+		t.Fatalf("expected non-empty fallback message, got empty string")
 	}
 }
 

@@ -79,26 +79,26 @@ groups:
     rules:
       - alert: HighMemoryUsage
         expr: |
-          process_resident_memory_bytes{job="c-address-bridge"}
+          nodejs_heap_size_used_bytes{job="c-address-bridge"}
           /
-          node_memory_MemTotal_bytes
+          nodejs_heap_size_total_bytes{job="c-address-bridge"}
           > 0.85
         for: 10m
         labels:
           severity: warning
           team: platform
         annotations:
-          summary: "Memory usage above 85% on {{ $labels.instance }}"
+          summary: "Node.js heap usage above 85% on {{ $labels.instance }}"
           description: >
-            Process memory usage has exceeded 85% of total available memory
+            Node.js heap usage has exceeded 85% of the allocated heap
             for more than 10 minutes. Current usage: {{ $value | humanizePercentage }}.
           runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/high-memory.md"
 
       - alert: HighMemoryUsageCritical
         expr: |
-          process_resident_memory_bytes{job="c-address-bridge"}
+          nodejs_heap_size_used_bytes{job="c-address-bridge"}
           /
-          node_memory_MemTotal_bytes
+          nodejs_heap_size_total_bytes{job="c-address-bridge"}
           > 0.95
         for: 5m
         labels:
@@ -132,7 +132,7 @@ groups:
 
       - alert: CircuitBreakerHalfOpen
         expr: |
-          circuit_breaker_state{job="c-address-bridge"} == 0.5
+          circuit_breaker_state{job="c-address-bridge"} == 2
         for: 10m
         labels:
           severity: warning
@@ -200,4 +200,4 @@ groups:
           description: >
             The cache hit ratio has been below 50% for more than 15 minutes.
             Current ratio: {{ $value | humanizePercentage }}.
-          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/low-cache-hit-ratio.md"
+          runbook_url: "https://github.com/C-Address-Onboarding-Bridge/C-Address-Onboarding-Bridge-Backend/blob/main/docs/runbooks/low-cache-hit.md"

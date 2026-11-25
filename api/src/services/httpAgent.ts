@@ -20,6 +20,7 @@ interface AgentOptions {
   maxSockets: number;
   maxFreeSockets: number;
   keepAliveMsecs: number;
+  timeoutMs: number;
 }
 
 function buildAgents(opts: AgentOptions): { httpAgent: http.Agent; httpsAgent: https.Agent } {
@@ -42,6 +43,7 @@ const agentConfig: AgentOptions = config.httpAgent ?? {
   maxSockets: 50,
   maxFreeSockets: 10,
   keepAliveMsecs: 15000,
+  timeoutMs: 10000,
 };
 
 const { httpAgent, httpsAgent } = buildAgents(agentConfig);
@@ -54,9 +56,12 @@ let applied = false;
  */
 export function applyKeepAliveAgents(): void {
   if (applied) return;
-  const client = SorobanRpc.AxiosClient as { defaults: { httpAgent?: http.Agent; httpsAgent?: https.Agent } };
+  const client = SorobanRpc.AxiosClient as {
+    defaults: { httpAgent?: http.Agent; httpsAgent?: https.Agent; timeout?: number };
+  };
   client.defaults.httpAgent = httpAgent;
   client.defaults.httpsAgent = httpsAgent;
+  client.defaults.timeout = agentConfig.timeoutMs;
   applied = true;
   // `logger` may be undefined if this runs during the index module's cyclic
   // initialization; the log line is non-essential, so guard it.

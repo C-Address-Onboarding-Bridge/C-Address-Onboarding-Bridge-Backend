@@ -13,7 +13,9 @@ export type PermissionScope =
   | 'cex:read'
   | 'cex:withdraw'
   | 'transactions:read'
+  | 'transactions:read:all'
   | 'admin:keys'
+  | 'webhooks:manage'
   | 'metrics:read';
 
 export interface ApiKeyRecord {
@@ -29,6 +31,13 @@ export interface ApiKeyRecord {
   expiresAt: number | null;
   rateLimit: 'low' | 'standard' | 'high';
   revoked: boolean;
+  /**
+   * Per-key HMAC secret for request signing (#1026). Generated once at key
+   * creation and returned to the caller like rawKey; never exposed again
+   * after that. Used instead of a single platform-wide secret so one
+   * tenant's key cannot sign requests as another tenant.
+   */
+  signingSecret: string;
 }
 
 export interface CreateKeyInput {
@@ -261,6 +270,7 @@ export function createApiKey(input: CreateKeyInput): { rawKey: string; record: A
     expiresAt: input.expiresAt ?? null,
     rateLimit: input.rateLimit ?? 'standard',
     revoked: false,
+    signingSecret: crypto.randomBytes(32).toString('hex'),
   };
   keyStore.set(record.id, record);
   keyHashIndex.set(record.keyHash, record);
@@ -281,9 +291,9 @@ export function revokeApiKey(id: string): boolean {
 /**
  * List all keys without exposing keyHash.
  */
-export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {
+export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash' | 'signingSecret'>[] {
   // Copy the arrays so callers cannot change a stored key's scopes or IP whitelist.
-  return Array.from(keyStore.values()).map(({ keyHash, ...rest }) => ({
+  return Array.from(keyStore.values()).map(({ keyHash, signingSecret, ...rest }) => ({
     ...rest,
     scopes: [...rest.scopes],
     ipWhitelist: [...rest.ipWhitelist],
@@ -291,12 +301,12 @@ export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {
 }
 
 /**
- * Get a single key by ID without exposing keyHash.
+ * Get a single key by ID without exposing keyHash or signingSecret.
  */
-export function getApiKey(id: string): Omit<ApiKeyRecord, 'keyHash'> | undefined {
+export function getApiKey(id: string): Omit<ApiKeyRecord, 'keyHash' | 'signingSecret'> | undefined {
   const record = keyStore.get(id);
   if (!record) return undefined;
-  const { keyHash, ...rest } = record;
+  const { keyHash, signingSecret, ...rest } = record;
   // Copy the arrays so callers cannot change the stored key's scopes or IP whitelist.
   return { ...rest, scopes: [...rest.scopes], ipWhitelist: [...rest.ipWhitelist] };
 }
@@ -443,8 +453,10 @@ export function getAuditLog(
 
 /**
  * Seed "legacy" plain-text API keys from the environment (e.g. config.apiKeys).
- * These are stored with full admin scopes so existing integrations keep working.
- * Calling this function multiple times with the same key is idempotent.
+ * These are stored with read-only scopes (quote:read, status:read, cex:read,
+ * transactions:read), NOT full admin scopes — they let existing integrations
+ * keep making read calls, but cannot create keys, manage webhooks, or reach
+ * /admin. Calling this function multiple times with the same key is idempotent.
  */
 export function seedLegacyKeys(rawKeys: string[]): void {
   const now = Date.now();
@@ -474,4 +486,40 @@ export function seedLegacyKeys(rawKeys: string[]): void {
     keyStore.set(record.id, record);
     keyHashIndex.set(keyHash, record);
   }
+}
+
+/**
+ * Bootstrap the very first admin:keys key from ADMIN_API_KEY.
+ *
+ * Every key-management, webhook and admin route requires admin:keys, and the
+ * only way to mint a key with that scope is POST /api/v1/api-keys, which
+ * itself requires admin:keys. Without an explicit bootstrap, a fresh
+ * deployment has no path to that first key — seedLegacyKeys() only grants
+ * read scopes. Set ADMIN_API_KEY to seed one key with admin:keys so an
+ * operator can create properly scoped keys afterward. Idempotent.
+ */
+export function seedAdminKey(rawKey: string | undefined): void {
+  if (typeof rawKey !== 'string') return;
+  const trimmed = rawKey.trim();
+  if (trimmed.length === 0) return;
+  const keyHash = hashKey(trimmed);
+  if (keyHashIndex.has(keyHash)) return;
+
+  const now = Date.now();
+  const record: ApiKeyRecord = {
+    id: crypto.randomUUID(),
+    keyHash,
+    name: 'Bootstrap admin key',
+    createdBy: 'system',
+    createdAt: now,
+    updatedAt: now,
+    lastUsedAt: null,
+    scopes: ['admin:keys'],
+    ipWhitelist: [],
+    expiresAt: null,
+    rateLimit: 'standard',
+    revoked: false,
+  };
+  keyStore.set(record.id, record);
+  keyHashIndex.set(keyHash, record);
 }

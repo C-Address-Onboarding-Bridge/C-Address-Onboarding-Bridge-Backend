@@ -2,8 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 
 process.env.NODE_ENV = 'test';
 
+const networkError = (message: string) => Object.assign(new Error(message), { code: 'ECONNRESET' });
+
 vi.mock('../index', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock('../logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 vi.mock('../config', () => ({
@@ -54,7 +59,7 @@ describe('RpcPool', () => {
     const fn = async (_server: unknown) => {
       callCount++;
       // fail the first 2 calls (threshold = 2)
-      if (callCount <= 2) throw new Error('fail');
+      if (callCount <= 2) throw networkError('fail');
       return 'ok';
     };
 
@@ -77,7 +82,7 @@ describe('RpcPool', () => {
 
     const result = await pool.execute(async (_server) => {
       attempts++;
-      if (attempts === 1) throw new Error('primary down');
+      if (attempts === 1) throw networkError('primary down');
       return 'fallback-result';
     });
 
@@ -91,7 +96,7 @@ describe('RpcPool', () => {
 
     await expect(
       pool.execute(async () => {
-        throw new Error('all down');
+        throw networkError('all down');
       }),
     ).rejects.toThrow('all down');
 

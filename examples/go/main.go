@@ -41,9 +41,13 @@ func run(client *caddressbridge.BridgeClient) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Funding prepared: %v\n", prepared["instruction"])
+	fmt.Printf("Funding prepared: unsignedXdr=%v\n", prepared["unsignedXdr"])
 
-	funded, err := client.SubmitSignedXDR("AAAAAgAAAABexampleSignedTransactionXdr")
+	// In production, sign prepared["unsignedXdr"] with the source key using go-stellar-sdk.
+	// For this example against the mock server we re-use the unsigned XDR directly
+	// (the mock validates only that the submitted value starts with 'AAAA').
+	unsignedXdr, _ := prepared["unsignedXdr"].(string)
+	funded, err := client.SubmitSignedXDR(unsignedXdr)
 	if err != nil {
 		return err
 	}

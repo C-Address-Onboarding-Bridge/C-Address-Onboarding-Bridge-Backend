@@ -1,5 +1,6 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import { IncomingMessage } from 'http';
+import proxyaddr from 'proxy-addr';
 import { parse as parseUrl } from 'url';
 import { config } from '../config';
 import { logger } from '../logger';
@@ -14,11 +15,17 @@ const POLL_INTERVAL_MS = 5_000;
 const STATUS_CACHE_NAMESPACE = 'status';
 const MAX_CONNECTIONS_PER_KEY = 10;
 const MAX_CONNECTIONS_PER_IP = 50;
+/** Valid messages are tiny `{action, txHash}` objects; ws closes larger frames with 1009. */
+export const MAX_PAYLOAD_BYTES = 4 * 1024;
+/** Per-connection token bucket: RATE_LIMIT_MESSAGES per RATE_LIMIT_WINDOW_MS. */
+export const RATE_LIMIT_MESSAGES = 20;
+export const RATE_LIMIT_WINDOW_MS = 10_000;
+/** Close code sent when the connection's API key is revoked or expired. */
+export const CLOSE_KEY_INVALID = 4401;
 
 interface Subscription {
   txHash: string;
   lastStatus: string | null;
-  intervalId: NodeJS.Timeout;
 }
 
 interface ClientState {
@@ -28,11 +35,27 @@ interface ClientState {
   isAlive: boolean;
   token: string | null;
   clientIp: string | null;
+  rateTokens: number;
+  rateRefilledAt: number;
 }
 
 const connectionsByToken = new Map<string, Set<ClientState>>();
 const connectionsByIp = new Map<string, Set<ClientState>>();
+const liveClients = new Set<ClientState>();
 const sharedPollers = new Map<string, NodeJS.Timeout>();
+
+function hasSubscribers(txHash: string): boolean {
+  return Array.from(liveClients).some((client) => client.subscriptions.has(txHash));
+}
+
+function stopPollerIfUnused(txHash: string): void {
+  if (hasSubscribers(txHash)) return;
+  const pollerId = sharedPollers.get(txHash);
+  if (pollerId) {
+    clearInterval(pollerId);
+    sharedPollers.delete(txHash);
+  }
+}
 
 function send(ws: WebSocket, payload: unknown): void {
   if (ws.readyState === WebSocket.OPEN) {
@@ -49,6 +72,28 @@ function validateToken(token: string | null): boolean {
   return true;
 }
 
+/**
+ * Re-check the key the socket was opened with. Keys are only validated at
+ * upgrade time otherwise, so a revoked or expired key would keep its sockets.
+ * Returns false (and closes the socket with 4401) when the key is no longer valid.
+ */
+function ensureKeyStillValid(client: ClientState): boolean {
+  if (!client.token || validateToken(client.token)) return true;
+  client.ws.close(CLOSE_KEY_INVALID, 'API key revoked or expired');
+  return false;
+}
+
+/** Token bucket per connection; returns false when the client is over the limit. */
+function takeRateToken(client: ClientState): boolean {
+  const now = Date.now();
+  const refill = ((now - client.rateRefilledAt) / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_MESSAGES;
+  client.rateTokens = Math.min(RATE_LIMIT_MESSAGES, client.rateTokens + refill);
+  client.rateRefilledAt = now;
+  if (client.rateTokens < 1) return false;
+  client.rateTokens -= 1;
+  return true;
+}
+
 async function pollStatusOnce(txHash: string): Promise<void> {
   try {
     const cacheKey = buildCacheKey(STATUS_CACHE_NAMESPACE, txHash);
@@ -61,9 +106,7 @@ async function pollStatusOnce(txHash: string): Promise<void> {
     );
 
     const currentStatus = status.status;
-    const allClients = Array.from(connectionsByToken.values()).flatMap((set) => Array.from(set));
-
-    for (const client of allClients) {
+    for (const client of liveClients) {
       const sub = client.subscriptions.get(txHash);
       if (!sub) continue;
 
@@ -77,13 +120,14 @@ async function pollStatusOnce(txHash: string): Promise<void> {
           timestamp: Date.now(),
         });
 
-        if (currentStatus === 'success' || currentStatus === 'failed') {
-          clearInterval(sub.intervalId);
+        if (currentStatus === 'success' || currentStatus === 'failed' || currentStatus === 'expired') {
           client.subscriptions.delete(txHash);
           send(client.ws, { type: 'subscription_closed', txHash, reason: 'terminal_status' });
         }
       }
     }
+
+    stopPollerIfUnused(txHash);
   } catch (err) {
     logger.debug({ err, txHash }, 'ws poll error');
   }
@@ -108,7 +152,6 @@ function subscribe(client: ClientState, txHash: string, lastKnownStatus: string 
   const sub: Subscription = {
     txHash,
     lastStatus: lastKnownStatus,
-    intervalId: 0 as unknown as NodeJS.Timeout,
   };
 
   client.subscriptions.set(txHash, sub);
@@ -130,23 +173,14 @@ function unsubscribe(client: ClientState, txHash: string): void {
   }
   client.subscriptions.delete(txHash);
 
-  const hasOtherSubscribers = Array.from(connectionsByToken.values())
-    .flatMap((set) => Array.from(set))
-    .some((c) => c.subscriptions.has(txHash));
-
-  if (!hasOtherSubscribers) {
-    const pollerId = sharedPollers.get(txHash);
-    if (pollerId) {
-      clearInterval(pollerId);
-      sharedPollers.delete(txHash);
-    }
-  }
+  stopPollerIfUnused(txHash);
 
   send(client.ws, { type: 'unsubscribed', txHash, timestamp: Date.now() });
 }
 
 function cleanup(client: ClientState): void {
   clearInterval(client.heartbeatId);
+  liveClients.delete(client);
 
   if (client.token) {
     const clients = connectionsByToken.get(client.token);
@@ -159,18 +193,7 @@ function cleanup(client: ClientState): void {
   }
 
   for (const txHash of client.subscriptions.keys()) {
-    const hasOtherSubscribers = Array.from(connectionsByToken.values())
-      .flatMap((set) => Array.from(set))
-      .filter((c) => c !== client)
-      .some((c) => c.subscriptions.has(txHash));
-
-    if (!hasOtherSubscribers) {
-      const pollerId = sharedPollers.get(txHash);
-      if (pollerId) {
-        clearInterval(pollerId);
-        sharedPollers.delete(txHash);
-      }
-    }
+    stopPollerIfUnused(txHash);
   }
 
   client.subscriptions.clear();
@@ -189,6 +212,7 @@ function handleMessage(client: ClientState, raw: string): void {
 
   switch (action) {
     case 'subscribe': {
+      if (!ensureKeyStillValid(client)) return;
       const txHash = String(msg.txHash ?? '');
       const lastKnown = typeof msg.lastKnownStatus === 'string' ? msg.lastKnownStatus : null;
       subscribe(client, txHash, lastKnown);
@@ -213,11 +237,14 @@ function handleMessage(client: ClientState, raw: string): void {
 }
 
 export function createWebSocketServer(): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    const token = (ws as any).__wsToken || null;
-    const clientIp = req.socket.remoteAddress || req.headers['x-forwarded-for'] || '0.0.0.0';
+    // handleUpgrade hands over the slot it reserved, with the token and IP it
+    // was reserved under, so the bookkeeping cannot disagree with the check.
+    const slot: Slot | null = (ws as any).__wsSlot ?? null;
+    const token: string | null = slot?.token ?? (ws as any).__wsToken ?? null;
+    const clientIp = slot?.ip ?? (req ? clientIpOf(req) : '0.0.0.0');
 
     const client: ClientState = {
       ws,
@@ -225,7 +252,10 @@ export function createWebSocketServer(): WebSocketServer {
       isAlive: true,
       token,
       clientIp,
+      rateTokens: RATE_LIMIT_MESSAGES,
+      rateRefilledAt: Date.now(),
       heartbeatId: setInterval(() => {
+        if (!ensureKeyStillValid(client)) return;
         if (!client.isAlive) {
           ws.terminate();
           return;
@@ -234,6 +264,8 @@ export function createWebSocketServer(): WebSocketServer {
         ws.ping();
       }, HEARTBEAT_INTERVAL_MS),
     };
+
+    liveClients.add(client);
 
     if (token) {
       const clients = connectionsByToken.get(token) || new Set();
@@ -252,6 +284,10 @@ export function createWebSocketServer(): WebSocketServer {
     });
 
     ws.on('message', (data: Buffer | string) => {
+      if (!takeRateToken(client)) {
+        ws.close(1008, 'Message rate limit exceeded');
+        return;
+      }
       handleMessage(client, data.toString());
     });
 
@@ -268,10 +304,29 @@ export function createWebSocketServer(): WebSocketServer {
   return wss;
 }
 
+export function closeWebSocketServer(wss: WebSocketServer): Promise<void> {
+  for (const client of wss.clients) {
+    client.terminate();
+  }
+  for (const pollerId of sharedPollers.values()) {
+    clearInterval(pollerId);
+  }
+  sharedPollers.clear();
+
+  return new Promise((resolve, reject) => {
+    wss.close((err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket: import('net').Socket, head: Buffer): void {
-  const protocol = req.headers['sec-websocket-protocol'];
+  const protocol = req.headers?.['sec-websocket-protocol'];
   const token = typeof protocol === 'string' ? protocol : null;
-  const clientIp = req.socket.remoteAddress || req.headers['x-forwarded-for'] || '0.0.0.0';
 
   if (!validateToken(token)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nUnauthorized');
@@ -279,24 +334,40 @@ export function handleUpgrade(wss: WebSocketServer, req: IncomingMessage, socket
     return;
   }
 
+  const clientIp = clientIpOf(req);
+
+  // Check and reserve with no await in between, so the next upgrade sees this one.
   if (token) {
-    const tokenConnections = connectionsByToken.get(token)?.size ?? 0;
-    if (tokenConnections >= MAX_CONNECTIONS_PER_KEY) {
+    if ((slotsByToken.get(token) ?? 0) >= maxConnectionsPerKey()) {
       socket.write('HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nToo many connections for this key');
       socket.destroy();
       return;
     }
   }
 
-  const ipConnections = connectionsByIp.get(clientIp)?.size ?? 0;
-  if (ipConnections >= MAX_CONNECTIONS_PER_IP) {
+  if ((slotsByIp.get(clientIp) ?? 0) >= maxConnectionsPerIp()) {
     socket.write('HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nToo many connections from this IP');
     socket.destroy();
     return;
   }
 
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    (ws as any).__wsToken = token;
-    wss.emit('connection', ws, req);
+  const slot = takeSlot(token, clientIp);
+  let handedOver = false;
+  // ws calls back only on a successful handshake; a failed one just destroys
+  // the socket, so that is where an unclaimed slot is given back.
+  socket.once('close', () => {
+    if (!handedOver) slot.release();
   });
+
+  try {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      handedOver = true;
+      (ws as any).__wsToken = token;
+      (ws as any).__wsSlot = slot;
+      wss.emit('connection', ws, req);
+    });
+  } catch (err) {
+    slot.release();
+    throw err;
+  }
 }

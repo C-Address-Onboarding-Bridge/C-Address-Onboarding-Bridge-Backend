@@ -1,0 +1,44 @@
+name: Deploy scripts
+
+# Dry-run the deploy/rollback scripts against stubbed ssh/docker/curl so the
+# rollback paths are tested before a real deploy needs them (#1099).
+on:
+  pull_request:
+    paths:
+      - 'scripts/deploy-api.sh'
+      - 'scripts/blue-green-deploy.sh'
+      - 'scripts/test-deploy-rollback.sh'
+      - 'scripts/check-expand-only-migrations.mjs'
+      - 'api/src/migrations/**'
+      - '.github/workflows/deploy.yml'
+      - '.github/workflows/deploy-scripts.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/deploy-api.sh'
+      - 'scripts/blue-green-deploy.sh'
+      - 'scripts/test-deploy-rollback.sh'
+      - 'scripts/check-expand-only-migrations.mjs'
+      - 'api/src/migrations/**'
+      - '.github/workflows/deploy.yml'
+      - '.github/workflows/deploy-scripts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    name: Deploy/rollback dry run (stubbed ssh/docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: shellcheck -S warning scripts/deploy-api.sh scripts/blue-green-deploy.sh scripts/test-deploy-rollback.sh
+
+      - name: Expand-only migration check
+        run: node scripts/check-expand-only-migrations.mjs
+
+      - name: Deploy and rollback paths
+        run: bash scripts/test-deploy-rollback.sh

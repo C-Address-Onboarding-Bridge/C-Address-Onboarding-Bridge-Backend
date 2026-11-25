@@ -156,7 +156,8 @@ All variables are documented in `.env.local.example`. Key ones for local dev:
 | `SOROBAN_RPC_URL` | `http://localhost:8000/soroban/rpc` | Local quickstart sandbox |
 | `SOROBAN_NETWORK_PASSPHRASE` | `Standalone Network ; February 2017` | Local sandbox passphrase |
 | `BRIDGE_CONTRACT_ID` | *(empty)* | Fill after local contract deploy |
-| `API_KEYS` | `dev-api-key` | Add `X-API-Key: dev-api-key` header |
+| `API_KEYS` | `dev-api-key` | Read-only key; add `X-API-Key: dev-api-key` header |
+| `ADMIN_API_KEY` | *(unset)* | Bootstrap admin:keys key — required to reach `/api-keys`, `/webhooks` and `/admin`; use it to mint a properly scoped key via `POST /api/v1/api-keys` |
 | `LOG_LEVEL` | `debug` | `trace \| debug \| info \| warn \| error` |
 | `IDEMPOTENCY_KEY_REQUIRED` | `false` | Set `true` to test idempotency keys |
 

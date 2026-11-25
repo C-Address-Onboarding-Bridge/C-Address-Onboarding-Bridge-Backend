@@ -139,6 +139,32 @@ describe('collectAllPages', () => {
   });
 });
 
+describe('abort and cycle guard', () => {
+  it('all rejects with AbortError when signal is already aborted', async () => {
+    const fetcher = vi.fn().mockResolvedValue(mockPage1);
+    const controller = new AbortController();
+    controller.abort();
+    const helper = new PaginationHelper(fetcher);
+    await expect(helper.all(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('pages stops when cursor repeats to prevent infinite loop', async () => {
+    const repeatingPage: PaginatedResponse<{ id: string }> = {
+      data: [{ id: 'x' }],
+      nextCursor: 'same-cursor',
+      hasMore: true,
+    };
+    const fetcher: PageFetcher<{ id: string }> = vi.fn().mockResolvedValue(repeatingPage);
+    const helper = new PaginationHelper(fetcher);
+    const pages: PaginatedResponse<{ id: string }>[] = [];
+    for await (const page of helper.pages()) {
+      pages.push(page);
+      if (pages.length > 10) break; // safety
+    }
+    expect(pages.length).toBeLessThanOrEqual(2);
+  });
+});
+
 interface Item {
   id: string;
 }

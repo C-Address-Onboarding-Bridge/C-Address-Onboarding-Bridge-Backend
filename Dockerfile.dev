@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY api/ api/
 COPY sdk/ sdk/
+COPY hooks/package.json hooks/
 
 # Install all dependencies (including dev dependencies)
 RUN npm ci
@@ -26,6 +27,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY api/package.json api/
 COPY sdk/package.json sdk/
+COPY hooks/package.json hooks/
 
 # Copy built artifacts and source
 COPY --from=build /app/api/dist/ api/dist/

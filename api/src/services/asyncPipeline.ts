@@ -11,8 +11,8 @@
  *  - Prometheus instrumentation for all operations
  *
  * Two queues:
- *  - async-critical   priority 10, 5 attempts — tamper-evident audit logs
- *  - async-pipeline   priority 1,  3 attempts — analytics, metrics, admin records
+ *  - async-critical   priority 10, 5 attempts - tamper-evident audit logs
+ *  - async-pipeline   priority 1,  3 attempts - analytics, metrics, admin records
  */
 
 import { config } from '../config';
@@ -33,12 +33,21 @@ import {
 import type { AuditEventType } from './auditLog';
 import type { FundingMetricInput } from './metrics';
 
-// ─── Backpressure state ───────────────────────────────────────────────────────
+// ---- Backpressure state ---------------------------------------------------
 
 let _backpressured = false;
 let _lastBackpressureCheck = 0;
 /** Re-check the queue depth at most once per second to avoid hammering Redis. */
 const BACKPRESSURE_CHECK_INTERVAL_MS = 1_000;
+
+/**
+ * #1052: bounded wait before taking the sync fallback. Even with
+ * `enableOfflineQueue: false` on the producer connection, a misbehaving DNS
+ * or TCP path can still delay `Queue.add()`. 2s is well under any request
+ * timeout the API uses and short enough that a Redis outage surfaces in the
+ * audit trail promptly.
+ */
+const ENQUEUE_TIMEOUT_MS = 2_000;
 
 async function refreshBackpressure(): Promise<void> {
   const now = Date.now();
@@ -50,7 +59,7 @@ async function refreshBackpressure(): Promise<void> {
     _backpressured = depth > config.asyncPipeline.backpressureThreshold;
     asyncPipelineQueueDepth.set({ queue: 'async-pipeline' }, depth);
   } catch {
-    // Redis temporarily unavailable — keep the previous backpressure state.
+    // Redis temporarily unavailable - keep the previous backpressure state.
   }
 }
 
@@ -59,7 +68,7 @@ export function isBackpressured(): boolean {
   return _backpressured;
 }
 
-// ─── In-process analytics buffer ─────────────────────────────────────────────
+// ---- In-process analytics buffer ------------------------------------------
 
 interface BufferEntry {
   event: string;
@@ -67,7 +76,7 @@ interface BufferEntry {
   value: number;
 }
 
-/** key → accumulated count; flushed every bufferFlushMs */
+/** key -> accumulated count; flushed every bufferFlushMs */
 const analyticsBuffer = new Map<string, BufferEntry>();
 let _flushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -101,7 +110,7 @@ async function flushAnalyticsBuffer(): Promise<void> {
     asyncPipelineEnqueueCounter.inc({ queue: 'async-pipeline', job: 'async-analytics' });
     asyncPipelineQueueDepth.set({ queue: 'async-pipeline' }, await getQueueWaitingCount('async-pipeline').catch(() => 0));
   } catch {
-    // If Redis is down the batch is lost — acceptable for best-effort analytics.
+    // If Redis is down the batch is lost - acceptable for best-effort analytics.
   }
 }
 
@@ -114,14 +123,57 @@ export async function drainAnalyticsBuffer(): Promise<void> {
   await flushAnalyticsBuffer();
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ---- Public API -----------------------------------------------------------
+
+/**
+ * Returns true when enqueuing into the async pipeline is safe: the pipeline is
+ * enabled, a Redis URL is configured, AND the background workers that drain
+ * the queues are enabled.
+ *
+ * #1050: previously only `asyncPipeline.enabled` was checked, so with workers
+ * off the API would keep enqueuing forever. Both flags must be on.
+ * #1052: `config.asyncPipeline.enabled` is now itself gated on REDIS_URL, but
+ * we keep the explicit redis.enabled check here for defence in depth.
+ */
+function canEnqueue(): boolean {
+  return config.asyncPipeline.enabled && config.redis.enabled && config.jobs.enabled;
+}
+
+/**
+ * Race a promise against ENQUEUE_TIMEOUT_MS.
+ *
+ * @returns `true` when the promise resolved before the timeout, `false` on
+ *          rejection or timeout. Never throws.
+ */
+async function enqueueWithTimeout(promise: Promise<unknown>): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`enqueue timed out after ${ENQUEUE_TIMEOUT_MS}ms`)),
+          ENQUEUE_TIMEOUT_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /**
  * Enqueue an audit log entry on the high-priority async-critical queue.
  *
- * This is "fire and forget" from the caller's perspective — the Promise is
- * never awaited on the response path. If Redis is unavailable the synchronous
- * fallback is called instead so the audit entry is never silently lost.
+ * This is "fire and forget" from the caller's perspective - the Promise is
+ * never awaited on the response path. If Redis is unavailable, the background
+ * workers are disabled, the pipeline is disabled, or the enqueue takes longer
+ * than ENQUEUE_TIMEOUT_MS, the synchronous fallback is called instead so the
+ * audit entry is never silently lost.
  *
  * @param type     Audit event type
  * @param payload  Event payload
@@ -137,32 +189,38 @@ export function enqueueAudit(
 ): void {
   const fallback = syncFallback ?? (() => {});
 
-  if (!config.asyncPipeline.enabled) {
+  if (!canEnqueue()) {
     fallback();
     return;
   }
 
-  const data: AuditLogJobData = { type, payload, actor };
+  // Stamped here, on the request path: the worker may run this job seconds or
+  // minutes later (5 attempts with exponential backoff), and the entry must
+  // record when the event happened, not when it was processed.
+  const data: AuditLogJobData = { type, payload, actor, triggeredAt: Date.now() };
 
-  enqueueAuditLog(data)
-    .then(() => {
+  void (async () => {
+    const ok = await enqueueWithTimeout(enqueueAuditLog(data));
+    if (ok) {
       asyncPipelineEnqueueCounter.inc({ queue: 'async-critical', job: 'audit-log' });
-    })
-    .catch(() => {
-      asyncPipelineDroppedCounter.inc({ queue: 'async-critical', job: 'audit-log' });
-      try {
-        fallback();
-      } catch {
-        // Never let a fallback failure propagate to the caller.
-      }
-    });
+      return;
+    }
+
+    asyncPipelineDroppedCounter.inc({ queue: 'async-critical', job: 'audit-log' });
+    try {
+      fallback();
+    } catch {
+      // Never let a fallback failure propagate to the caller.
+    }
+  })();
 }
 
 /**
  * Buffer an analytics counter increment for batched delivery to BullMQ.
  *
- * If the pipeline is backpressured or disabled, the operation is either
- * dropped (best-effort) or the optional sync fallback is called.
+ * If the pipeline is disabled, workers are disabled, or the queue is
+ * backpressured, the operation is either dropped (best-effort) or the optional
+ * sync fallback is called.
  *
  * @param event       Metric event name
  * @param labels      Label key-value pairs
@@ -173,7 +231,7 @@ export function bufferAnalytics(
   labels: Record<string, string>,
   syncFallback?: () => void,
 ): void {
-  if (!config.asyncPipeline.enabled) {
+  if (!canEnqueue()) {
     syncFallback?.();
     return;
   }
@@ -199,7 +257,8 @@ export function bufferAnalytics(
  * Enqueue a funding metrics recording job on the best-effort async-pipeline queue.
  *
  * Falls back to the synchronous `recordFundingMetrics` call if the pipeline
- * is disabled or backpressured, so no data is ever lost under light load.
+ * is disabled, workers are disabled, the queue is backpressured, or the
+ * enqueue times out.
  *
  * @param input         Standard funding metrics input
  * @param syncFallback  Called when the pipeline degrades to sync mode
@@ -208,18 +267,21 @@ export function enqueueFundingMetrics(
   input: FundingMetricInput,
   syncFallback?: () => void,
 ): void {
-  if (!config.asyncPipeline.enabled || isBackpressured()) {
+  if (!canEnqueue() || isBackpressured()) {
     syncFallback?.();
     return;
   }
 
-  void enqueuePipelineMetrics({ operation: 'funding', data: input as unknown as Record<string, unknown> })
-    .then(() => {
+  void (async () => {
+    const ok = await enqueueWithTimeout(
+      enqueuePipelineMetrics({ operation: 'funding', data: input as unknown as Record<string, unknown> }),
+    );
+    if (ok) {
       asyncPipelineEnqueueCounter.inc({ queue: 'async-pipeline', job: 'pipeline-metrics' });
-    })
-    .catch(() => {
-      syncFallback?.();
-    });
+      return;
+    }
+    syncFallback?.();
+  })();
 }
 
 /**
@@ -236,7 +298,7 @@ export function enqueueCounterIncrement(
   bufferAnalytics(event, labels, syncFallback);
 }
 
-// ─── Exported test helpers ────────────────────────────────────────────────────
+// ---- Exported test helpers ------------------------------------------------
 
 /** Force-set the backpressure state. For tests only. */
 export function _setBackpressuredForTest(value: boolean): void {
@@ -248,3 +310,6 @@ export function _setBackpressuredForTest(value: boolean): void {
 export function _getBufferSizeForTest(): number {
   return analyticsBuffer.size;
 }
+
+/** Expose the bounded-enqueue timeout. For tests only. */
+export const _ENQUEUE_TIMEOUT_MS_FOR_TEST = ENQUEUE_TIMEOUT_MS;

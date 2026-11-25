@@ -1,12 +1,19 @@
 import crypto from 'crypto';
-import * as net from 'net';
-import { lookup } from 'node:dns/promises';
-import ipaddr from 'ipaddr.js';
-import { Agent } from 'undici';
-import { logger } from '../logger';
+import { logger } from '../index';
 import { hashPayload, integrityAuditLog } from './auditLog';
 import { enqueueAudit } from './asyncPipeline';
 import { enqueueWebhookRetry, WEBHOOK_RETRY_DELAYS_MS } from '../jobs/queue';
+import { safeWebhookFetch } from './webhookSecurity';
+import {
+  buildWebhookHeaders,
+  computeWebhookSignature,
+  toUnixSeconds,
+} from './webhookSignature';
+
+// Re-exported from the shared SSRF module so existing imports from
+// `../services/webhookDelivery` (webhookAdmin.ts, webhookIp.test.ts) keep
+// working without a call-site change.
+export { isBlockedIp, assertSafeWebhookUrl } from './webhookSecurity';
 
 export interface WebhookRegistration {
   id: string;
@@ -19,6 +26,8 @@ export interface WebhookRegistration {
 
 export interface DeliveryAttempt {
   id: string;
+  /** Stable across every attempt of one delivery; sent as `X-Webhook-Id`. */
+  deliveryId: string;
   registrationId: string;
   webhookUrl: string;
   event: string;
@@ -31,6 +40,8 @@ export interface DeliveryAttempt {
 export interface DLQEntry {
   id: string;
   registration: WebhookRegistration;
+  /** Stable dedupe key across every attempt of this delivery (issue #1061). */
+  webhookId: string;
   payload: unknown;
   event: string;
   attempts: DeliveryAttempt[];
@@ -49,112 +60,10 @@ export type WebhookEvent = (typeof WEBHOOK_EVENTS)[keyof typeof WEBHOOK_EVENTS];
 const DELIVERY_TIMEOUT_MS = 10_000;
 const DEFAULT_DELIVERY_LOG_LIMIT = 10_000;
 
-function isPublicAddress(address: string): boolean {
-  try {
-    return ipaddr.parse(address).range() === 'unicast';
-  } catch {
-    return false;
-  }
-}
-
-function ipv6ToBigInt(address: string): bigint {
-  let normalized = address.toLowerCase();
-  const ipv4Tail = normalized.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
-  if (ipv4Tail) {
-    const octets = ipv4Tail[1].split('.').map(Number);
-    const first = ((octets[0] << 8) | octets[1]).toString(16);
-    const second = ((octets[2] << 8) | octets[3]).toString(16);
-    normalized = `${normalized.slice(0, ipv4Tail.index)}${first}:${second}`;
-  }
-
-  const [leftPart, rightPart = ''] = normalized.split('::');
-  const left = leftPart ? leftPart.split(':') : [];
-  const right = rightPart ? rightPart.split(':') : [];
-  const groups = [...left, ...Array(8 - left.length - right.length).fill('0'), ...right];
-  return groups.reduce((value, group) => (value << 16n) | BigInt(`0x${group || '0'}`), 0n);
-}
-
-function ipv4FromBigInt(value: bigint): string {
-  return [24n, 16n, 8n, 0n].map((shift) => Number((value >> shift) & 0xffn)).join('.');
-}
-
-export function isBlockedIp(ip: string): boolean {
-  let address = ip.trim();
-  if (address.startsWith('[') && address.endsWith(']')) address = address.slice(1, -1);
-
-  const version = net.isIP(address);
-  if (version === 4) {
-    const parts = address.split('.').map(Number);
-    if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) return true;
-    const [first, second] = parts;
-    return first === 0
-      || first === 10
-      || first === 127
-      || (first === 169 && second === 254)
-      || (first === 172 && second >= 16 && second <= 31)
-      || (first === 192 && second === 168)
-      || (first === 100 && second >= 64 && second <= 127)
-      || first >= 224;
-  }
-
-  if (version === 6) {
-    const value = ipv6ToBigInt(address);
-    const prefix96 = value >> 32n;
-    const embeddedIpv4 = value & 0xffffffffn;
-    if (prefix96 === 0n || prefix96 === 0xffffn || prefix96 === 0x64ff9b0000000000000000n) {
-      return isBlockedIp(ipv4FromBigInt(embeddedIpv4));
-    }
-    if (value >> 112n === 0x2002n) {
-      return isBlockedIp(ipv4FromBigInt((value >> 80n) & 0xffffffffn));
-    }
-
-    const lower = address.toLowerCase();
-    return lower === '::'
-      || lower === '::1'
-      || lower.startsWith('fe8')
-      || lower.startsWith('fe9')
-      || lower.startsWith('fea')
-      || lower.startsWith('feb')
-      || lower.startsWith('fc')
-      || lower.startsWith('fd')
-      || lower.startsWith('ff');
-  }
-
-  return true;
-}
-
-async function resolveSafeWebhookAddress(url: string): Promise<{
-  hostname: string;
-  address: string;
-  family: number;
-}> {
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(url);
-  } catch {
-    throw new Error('Invalid webhook URL');
-  }
-  if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password) {
-    throw new Error('Webhook URL must use HTTPS without credentials');
-  }
-
-  const hostname = parsedUrl.hostname.replace(/^\[|\]$/g, '');
-  const literalFamily = net.isIP(hostname);
-  const addresses = literalFamily
-    ? [{ address: hostname, family: literalFamily }]
-    : await lookup(hostname, { all: true, verbatim: true });
-
-  if (addresses.length === 0 || addresses.some(({ address }) => isBlockedIp(address) || !isPublicAddress(address))) {
-    throw new Error('Webhook URL resolves to a blocked address');
-  }
-
-  return { hostname, ...addresses[0] };
-}
-
-export async function assertSafeWebhookUrl(rawUrl: string): Promise<void> {
-  await resolveSafeWebhookAddress(rawUrl);
-}
-
+/**
+ * Minimal persistence contract for webhook state. Implementations may back this
+ * with Postgres (production) or an in-memory store (tests / single-process).
+ */
 export interface WebhookStore {
   saveRegistration(_registration: WebhookRegistration): Promise<void>;
   deleteRegistration(_id: string): Promise<boolean>;
@@ -173,21 +82,14 @@ export interface WebhookStore {
 export class InMemoryWebhookStore implements WebhookStore {
   private registrations = new Map<string, WebhookRegistration>();
   private attempts: DeliveryAttempt[] = [];
-  private dlq = new Map<string, DLQEntry>();
+  private dlq: DLQEntry[] = [];
 
-  async saveRegistration(registration: WebhookRegistration): Promise<void> {
-    this.registrations.set(registration.id, { ...registration, events: [...registration.events] });
+  saveRegistration(registration: WebhookRegistration): void {
+    this.registrations.set(registration.id, registration);
   }
 
-  async deleteRegistration(id: string): Promise<boolean> {
-    const deleted = this.registrations.delete(id);
-    if (deleted) {
-      this.attempts = this.attempts.filter((attempt) => attempt.registrationId !== id);
-      for (const [entryId, entry] of this.dlq) {
-        if (entry.registration.id === id) this.dlq.delete(entryId);
-      }
-    }
-    return deleted;
+  deleteRegistration(id: string): boolean {
+    return this.registrations.delete(id);
   }
 
   async getRegistration(id: string): Promise<WebhookRegistration | undefined> {
@@ -202,19 +104,15 @@ export class InMemoryWebhookStore implements WebhookStore {
     }));
   }
 
-  async getRegistrationsByApiKeyId(apiKeyId: string): Promise<WebhookRegistration[]> {
-    return (await this.listRegistrations()).filter((registration) => registration.apiKeyId === apiKeyId);
+  appendDeliveryAttempt(attempt: DeliveryAttempt): void {
+    this.attempts.push(attempt);
   }
 
-  async appendDeliveryAttempt(attempt: DeliveryAttempt): Promise<void> {
-    this.attempts.push({ ...attempt });
+  listDeliveryAttempts(): DeliveryAttempt[] {
+    return [...this.attempts];
   }
 
-  async listDeliveryAttempts(): Promise<DeliveryAttempt[]> {
-    return this.attempts.map((attempt) => ({ ...attempt }));
-  }
-
-  async pruneDeliveryLog(maxEntries: number): Promise<void> {
+  pruneDeliveryLog(maxEntries: number): void {
     if (this.attempts.length > maxEntries) {
       this.attempts.splice(0, this.attempts.length - maxEntries);
     }
@@ -245,6 +143,24 @@ export class InMemoryWebhookStore implements WebhookStore {
   }
 }
 
+/**
+ * Webhook delivery service.
+ *
+ * SSRF hardening:
+ * - safeWebhookFetch() resolves the target hostname once and pins the result
+ *   into an undici Agent lookup, closing the DNS-rebinding TOCTOU window;
+ * - fetch() runs with `redirect: 'error'` so a 3xx cannot re-send the signed
+ *   POST body to an internal address.
+ *
+ * Header contract (issue #1060): every attempt - first delivery or retry -
+ * builds its headers via buildWebhookHeaders() so receivers can use one
+ * verification rule.
+ *
+ * Retry contract (issue #1061): one `webhookId` per deliver() call flows
+ * through the retry job so receivers can dedupe. The retry job does NOT carry
+ * a signature or timestamp - the worker re-signs with a fresh `now` so the
+ * final retry (~370 s later) still passes a 300 s replay window.
+ */
 export class WebhookDeliveryService {
   private readonly store: WebhookStore;
   private readonly deliveryLogLimit: number;
@@ -257,13 +173,21 @@ export class WebhookDeliveryService {
     this.deliveryLogLimit = deliveryLogLimit;
   }
 
-  async register(params: { url: string; secret: string; apiKeyId: string; events: string[] }): Promise<WebhookRegistration> {
+  register(params: {
+    url: string;
+    secret: string;
+    apiKeyId?: string;
+    apiKey?: string;
+    events: string[];
+  }): WebhookRegistration {
     const registration: WebhookRegistration = {
-      id: crypto.randomUUID(),
+      id: params.id ?? crypto.randomUUID(),
       url: params.url,
       secret: params.secret,
-      apiKeyId: params.apiKeyId,
-      events: [...params.events],
+      // `apiKeyId` is the canonical field; `apiKey` is accepted as a legacy
+      // alias so older call sites keep working.
+      apiKeyId: params.apiKeyId ?? params.apiKey ?? '',
+      events: params.events,
       createdAt: Date.now(),
     };
     await this.store.saveRegistration(registration);
@@ -283,15 +207,44 @@ export class WebhookDeliveryService {
     return this.store.getRegistrationsByApiKeyId(apiKeyId);
   }
 
-  sign(payload: string, secret: string, timestamp = Date.now()): string {
-    return crypto.createHmac('sha256', secret).update(`${timestamp}.${payload}`).digest('hex');
+  /** Legacy alias kept for callers that use the shorter name. */
+  getRegistrationsByApiKey(apiKey: string): WebhookRegistration[] {
+    return this.getRegistrationsByApiKeyId(apiKey);
+  }
+
+  /**
+   * Signs a webhook delivery.
+   *
+   * - 2-arg form: bare HMAC of `payload`. Legacy, kept for callers / tests
+   *   that predate the canonical `${timestamp}.${payload}` contract.
+   * - 3-arg form: canonical HMAC of `${timestampSeconds}.${payload}`, identical
+   *   to computeWebhookSignature(secret, timestampSeconds, payload).
+   */
+  sign(payload: string, secret: string, timestampSeconds?: number): string {
+    if (timestampSeconds !== undefined) {
+      return computeWebhookSignature(secret, timestampSeconds, payload);
+    }
+    return crypto.createHmac('sha256', secret).update(payload).digest('hex');
   }
 
   async deliver(registration: WebhookRegistration, event: string, data: unknown): Promise<void> {
-    const timestamp = Date.now();
-    const payload = JSON.stringify({ event, data, timestamp });
-    const signature = this.sign(payload, registration.secret, timestamp);
-    await this.attemptDelivery(registration, event, data, payload, signature, timestamp, 0);
+    // One UUID per logical delivery - all retries share it so receivers can
+    // dedupe across attempts (issue #1061).
+    const webhookId = crypto.randomUUID();
+    // Unix seconds - matches the header unit and the signed-message contract.
+    const timestampSeconds = toUnixSeconds(Date.now());
+    const payload = JSON.stringify({ event, data, timestamp: timestampSeconds });
+    const signature = computeWebhookSignature(registration.secret, timestampSeconds, payload);
+    await this.attemptDelivery(
+      registration,
+      event,
+      data,
+      payload,
+      signature,
+      timestampSeconds,
+      webhookId,
+      0,
+    );
   }
 
   async deliverToAll(apiKeyId: string, event: string, data: unknown): Promise<void> {
@@ -302,6 +255,11 @@ export class WebhookDeliveryService {
     await Promise.all(targets.map((registration) => this.deliver(registration, event, data)));
   }
 
+  /**
+   * Fire-and-forget helper used by route handlers to emit a state-change event
+   * to every webhook registered for the given API key. Delivery failures are
+   * logged and never propagate to the caller so request handling is unaffected.
+   */
   emit(apiKeyId: string, event: string, data: unknown): void {
     void this.deliverToAll(apiKeyId, event, data).catch((err) => {
       logger.error(
@@ -316,17 +274,26 @@ export class WebhookDeliveryService {
     await this.store.pruneDeliveryLog(this.deliveryLogLimit);
   }
 
+  /**
+   * One delivery attempt. Every call ends in exactly one of three ways: a 2xx
+   * returns; a failure with retries left enqueues the next attempt; a failure
+   * with none left (or whose retry cannot be enqueued) goes to the DLQ. The
+   * attempt is recorded, and audited, exactly once either way.
+   */
   private async attemptDelivery(
     registration: WebhookRegistration,
     event: string,
     data: unknown,
     payload: string,
     signature: string,
-    timestamp: number,
+    timestampSeconds: number,
+    webhookId: string,
     attemptNumber: number,
   ): Promise<void> {
+    const { registration, event, data, payload, signature, timestamp, deliveryId } = delivery;
     const attempt: DeliveryAttempt = {
       id: crypto.randomUUID(),
+      deliveryId,
       registrationId: registration.id,
       webhookUrl: registration.url,
       event,
@@ -334,125 +301,152 @@ export class WebhookDeliveryService {
       attemptNumber,
     };
 
+    let timeout: NodeJS.Timeout | undefined;
     let dispatcher: Agent | undefined;
     try {
-      const vettedAddress = await resolveSafeWebhookAddress(registration.url);
-      const pinnedLookup = (
-        requestedHostname: string,
-        options: { all?: boolean } | number,
-        callback: (
-          _error: NodeJS.ErrnoException | null,
-          _address: string | { address: string; family: number }[],
-          _family?: number,
-        ) => void,
-      ) => {
-        if (requestedHostname !== vettedAddress.hostname || isBlockedIp(vettedAddress.address)) {
-          const error = new Error('Webhook connection did not match its vetted destination') as NodeJS.ErrnoException;
-          error.code = 'EACCES';
-          callback(error, '');
-          return;
-        }
-
-        if (typeof options === 'object' && options.all) {
-          callback(null, [{ address: vettedAddress.address, family: vettedAddress.family }]);
-        } else {
-          callback(null, vettedAddress.address, vettedAddress.family);
-        }
-      };
-      dispatcher = new Agent({ connect: { lookup: pinnedLookup } });
-
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
       try {
-        const response = await fetch(registration.url, {
+        // SSRF-safe: resolve once, pin the answer, and refuse redirects.
+        const response = await safeWebhookFetch(registration.url, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Webhook-Signature': signature,
-            'X-Webhook-Timestamp': String(timestamp),
-            'X-Webhook-Event': event,
-          },
+          headers: buildWebhookHeaders({
+            event,
+            timestampSeconds,
+            signatureHex: signature,
+            attempt: attemptNumber + 1,
+            webhookId,
+          }),
           body: payload,
           signal: controller.signal,
           dispatcher,
         } as RequestInit & { dispatcher: Agent });
         attempt.statusCode = response.status;
-        if (!response.ok) attempt.error = `Webhook responded with status ${response.status}`;
+        if (!response.ok) {
+          attempt.error = `HTTP ${response.status}`;
+        }
       } finally {
         clearTimeout(timeout);
       }
     } catch (err) {
       attempt.error = err instanceof Error ? err.message : 'unknown error';
-    } finally {
-      if (dispatcher) void dispatcher.destroy();
     }
 
-    await this.recordAttempt(attempt);
-
-    const auditPayload = {
-      payloadHash: hashPayload(payload),
-      destination: registration.url,
-      registrationId: registration.id,
-      event,
-      attemptNumber: attemptNumber + 1,
-      statusCode: attempt.statusCode,
-      result: attempt.error ? 'failed' : 'success',
-      error: attempt.error,
-    };
-    enqueueAudit(
-      'webhook_delivery',
-      auditPayload,
-      registration.apiKeyId,
-      () => integrityAuditLog.append('webhook_delivery', auditPayload, registration.apiKeyId),
-    );
+    this.recordAttempt(attempt);
 
     if (!attempt.error) {
       logger.info(
-        { registrationId: registration.id, url: registration.url, event, attempt: attemptNumber + 1 },
+        {
+          registrationId: registration.id,
+          url: registration.url,
+          event,
+          webhookId,
+          status: attempt.statusCode,
+          attempt: attemptNumber + 1,
+        },
         'webhook delivered',
       );
       return;
     }
 
     logger.warn(
-      { registrationId: registration.id, url: registration.url, event, error: attempt.error, attempt: attemptNumber + 1 },
+      {
+        registrationId: registration.id,
+        url: registration.url,
+        event,
+        webhookId,
+        status: attempt.statusCode,
+        error: attempt.error,
+        attempt: attemptNumber + 1,
+      },
       'webhook delivery failed',
     );
 
+    const deliveryAuditPayload = {
+      payloadHash: hashPayload(payload),
+      destination: registration.url,
+      registrationId: registration.id,
+      event,
+      webhookId,
+      attemptNumber: attemptNumber + 1,
+      error: attempt.error,
+    };
+    try {
+      enqueueAudit(
+        'webhook_delivery',
+        deliveryAuditPayload,
+        registration.apiKeyId,
+        () => integrityAuditLog.append('webhook_delivery', deliveryAuditPayload, registration.apiKeyId),
+      );
+    } catch (auditErr) {
+      logger.warn(
+        { err: auditErr instanceof Error ? auditErr.message : String(auditErr) },
+        'failed to enqueue webhook delivery audit',
+      );
+      return;
+    }
+
     if (attemptNumber < WEBHOOK_RETRY_DELAYS_MS.length) {
+      const delay = WEBHOOK_RETRY_DELAYS_MS[attemptNumber];
       try {
+        // Issue #1061: the retry job carries the raw payload + webhookId, NOT
+        // the signature or timestamp. The worker re-signs with a fresh `now`
+        // so the last retry (10 + 60 + 300 = 370 s after signing) still lands
+        // inside the documented 300 s replay window.
         await enqueueWebhookRetry(
           {
             registrationId: registration.id,
+            deliveryId,
             url: registration.url,
             event,
-            timestamp,
+            webhookId,
             payload,
-            signature,
             data,
             attemptNumber: attemptNumber + 1,
           },
           WEBHOOK_RETRY_DELAYS_MS[attemptNumber],
         );
+        logger.info(
+          {
+            registrationId: registration.id,
+            event,
+            webhookId,
+            nextAttemptIn: delay,
+            attempt: attemptNumber + 1,
+          },
+          'scheduling webhook retry',
+        );
         return;
       } catch (err) {
+        // Without a queue there is no retry; the DLQ is the only place left
+        // that keeps the delivery from being lost.
         logger.error(
-          { registrationId: registration.id, event, error: err instanceof Error ? err.message : String(err) },
+          {
+            registrationId: registration.id,
+            event,
+            error: err instanceof Error ? err.message : String(err),
+          },
           'failed to enqueue webhook retry',
         );
       }
     }
 
-    await this.moveToDLQ(registration, event, data);
+    this.moveToDLQ(registration, event, data, webhookId);
   }
 
-  private async moveToDLQ(registration: WebhookRegistration, event: string, data: unknown): Promise<void> {
-    const attempts = (await this.store.listDeliveryAttempts()).filter(
-      (attempt) => attempt.registrationId === registration.id && attempt.event === event,
-    );
+  private moveToDLQ(
+    registration: WebhookRegistration,
+    event: string,
+    data: unknown,
+    webhookId: string,
+  ): void {
+    const attempts = this.store
+      .listDeliveryAttempts()
+      .filter((a) => a.registrationId === registration.id && a.event === event);
     const entry: DLQEntry = {
       id: crypto.randomUUID(),
       registration,
+      webhookId,
       payload: data,
       event,
       attempts,
@@ -460,7 +454,7 @@ export class WebhookDeliveryService {
     };
     await this.store.saveDLQEntry(entry);
     logger.error(
-      { registrationId: registration.id, url: registration.url, event, dlqId: entry.id },
+      { registrationId: registration.id, url: registration.url, event, webhookId, dlqId: entry.id },
       'webhook moved to dead letter queue after max retries',
     );
   }

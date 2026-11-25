@@ -8,7 +8,11 @@ vi.mock('../config', () => ({
     moonpay: { apiKey: 'pk', secretKey: 'sk' },
     transak: { apiKey: 'tk', secretKey: 'ts', environment: 'STAGING' },
     soroban: {
-      rpcUrls: ['https://rpc.example.com'],
+      rpcUrls: [
+        'https://rpc.example.com',
+        'https://rpc-2.example.com',
+        'https://rpc-3.example.com',
+      ],
       rpc: { healthCheckIntervalMs: 60_000, failureThreshold: 100, recoveryIntervalMs: 60_000, selectionStrategy: 'round-robin' },
     },
   },
@@ -16,7 +20,7 @@ vi.mock('../config', () => ({
 vi.mock('../logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('../services/httpAgent', () => ({ applyKeepAliveAgents: vi.fn() }));
 
-import { CircuitOpenError, CircuitState, circuitBreakers } from '../circuit-breaker';
+import { CircuitBreaker, CircuitOpenError, CircuitState, circuitBreakers } from '../circuit-breaker';
 import { moonpayService } from '../services/moonpay';
 import { transakService } from '../services/transak';
 import { RpcPool } from '../services/rpcPool';
@@ -28,6 +32,7 @@ const THRESHOLD = 5;
 describe('circuit breakers wrap outbound calls (#685)', () => {
   beforeEach(() => {
     global.fetch = vi.fn();
+    circuitBreakers.set('soroban', new CircuitBreaker('soroban'));
   });
 
   it('opens the moonpay breaker after repeated failures and then fails fast', async () => {
@@ -58,11 +63,25 @@ describe('circuit breakers wrap outbound calls (#685)', () => {
     const pool = new RpcPool();
 
     for (let i = 0; i < THRESHOLD; i++) {
-      await expect(pool.execute(async () => { throw new Error('rpc down'); })).rejects.toThrow('rpc down');
+      const networkError = Object.assign(new Error('rpc down'), { code: 'ECONNRESET' });
+      await expect(pool.execute(async () => { throw networkError; })).rejects.toThrow('rpc down');
     }
 
     expect(circuitBreakers.get('soroban')!.getState()).toBe(CircuitState.OPEN);
     await expect(pool.execute(async () => 'ok')).rejects.toBeInstanceOf(CircuitOpenError);
+    pool.destroy();
+  });
+
+  it('does not penalize providers or the breaker for repeated account-not-found errors', async () => {
+    const pool = new RpcPool();
+    const notFound = Object.assign(new Error('Account not found'), { code: -32004 });
+
+    for (let i = 0; i < 10; i++) {
+      await expect(pool.execute(async () => { throw notFound; })).rejects.toThrow('Account not found');
+    }
+
+    expect(pool.getMetrics().every((provider) => provider.healthy)).toBe(true);
+    expect(circuitBreakers.get('soroban')!.getState()).toBe(CircuitState.CLOSED);
     pool.destroy();
   });
 
@@ -74,5 +93,22 @@ describe('circuit breakers wrap outbound calls (#685)', () => {
 
     expect(res.status).toHaveBeenCalledWith(503);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'service_unavailable' }));
+  });
+
+  it('returns an ambiguous submission hash with the retryable response', () => {
+    const json = vi.fn();
+    const res = { status: vi.fn(() => ({ json })) } as unknown as Response;
+    const error = Object.assign(new Error('poll transaction status by hash'), {
+      code: 'TRY_AGAIN_LATER',
+      hash: 'abc123',
+    });
+
+    errorHandler(error, {} as Request, res, vi.fn() as NextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'TRY_AGAIN_LATER',
+      hash: 'abc123',
+    }));
   });
 });

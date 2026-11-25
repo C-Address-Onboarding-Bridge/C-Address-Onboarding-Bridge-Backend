@@ -36,14 +36,17 @@ interface DLQRow {
   registration_created_at: number | string;
 }
 
-function parseEvents(events: RegistrationRow['events']): string[] {
-  if (Array.isArray(events)) return events;
-  if (!events) return [];
-  try {
-    const parsed: unknown = JSON.parse(events);
-    if (Array.isArray(parsed) && parsed.every((event) => typeof event === 'string')) return parsed;
-  } catch {
-    return events.split(',').filter(Boolean);
+/**
+ * Postgres-backed persistence for webhook registrations, DLQ entries and the
+ * delivery log. Replaces the previous in-memory maps/arrays so state survives
+ * restarts and is shared across API instances.
+ */
+export class WebhookDeliveryRepository {
+  constructor(private readonly pool: Pool) {}
+
+  async init(): Promise<void> {
+    // Schema is created by the migration runner (migration 001).
+    // This stub is kept so callers do not need to change.
   }
   return [];
 }

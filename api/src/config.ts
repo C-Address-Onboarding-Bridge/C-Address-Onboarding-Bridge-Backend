@@ -28,13 +28,13 @@ function isValidContractId(id: string): boolean {
 
 /**
  * Parse the `TRUST_PROXY` env var into a value suitable for Express'
- * `app.set('trust proxy', …)`.
+ * `app.set('trust proxy', ...)`.
  *
  * Accepted forms:
- * - `undefined` / empty → `false` (do not trust any proxy)
- * - `true` / `false` → boolean
- * - a non-negative integer → hop count (e.g. `1`)
- * - a comma-separated list of subnets/IPs → string[] (e.g. `10.0.0.0/8,192.168.1.1`)
+ * - `undefined` / empty -> `false` (do not trust any proxy)
+ * - `true` / `false` -> boolean
+ * - a non-negative integer -> hop count (e.g. `1`)
+ * - a comma-separated list of subnets/IPs -> string[] (e.g. `10.0.0.0/8,192.168.1.1`)
  */
 export function parseTrustProxy(
   value: string | undefined,
@@ -128,6 +128,15 @@ export const config = {
    * Each API key record may store its own signing secret; this is the
    * global fallback. */
   signingSecret: process.env.SIGNING_SECRET || '',
+  /** When true, requests to signed routes must carry valid X-Signature /
+   * X-Timestamp / X-Nonce headers. Defaults to false so unsigned clients
+   * (legacy integrations, SDK clients with signing.enabled unset) are not
+   * rejected until signing is explicitly turned on. */
+  requestSigningRequired: process.env.REQUEST_SIGNING_REQUIRED === 'true',
+  /** Bootstrap key for the very first admin:keys-scoped key. Seeded once at
+   * boot (see seedAdminKey) so an operator can reach /api-keys, /webhooks
+   * and /admin on a fresh deployment, then mint properly scoped keys. */
+  adminApiKey: process.env.ADMIN_API_KEY || '',
   /** Shared secret sent by CloudFront as X-Origin-Verify. Enforced by
    * originVerifyMiddleware when ORIGIN_VERIFY_SECRET is set. */
   originVerifySecret: process.env.ORIGIN_VERIFY_SECRET || '',
@@ -171,13 +180,13 @@ export const config = {
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
     enabled: process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== '',
-    /** Status responses – invalidated by webhook on state change. */
+    /** Status responses - invalidated by webhook on state change. */
     statusTtlSeconds: parseInt(process.env.REDIS_STATUS_TTL_SECONDS || '10', 10),
-    /** Quote responses – invalidated on new ledger / block. */
+    /** Quote responses - invalidated on new ledger / block. */
     quoteTtlSeconds: parseInt(process.env.REDIS_QUOTE_TTL_SECONDS || '30', 10),
-    /** CEX route responses – exchange rates change slowly. */
+    /** CEX route responses - exchange rates change slowly. */
     cexTtlSeconds: parseInt(process.env.REDIS_CEX_TTL_SECONDS || '60', 10),
-    /** Transaction-list responses – short TTL, invalidated on new transaction. */
+    /** Transaction-list responses - short TTL, invalidated on new transaction. */
     transactionsTtlSeconds: parseInt(process.env.REDIS_TRANSACTIONS_TTL_SECONDS || '5', 10),
   },
   database: {
@@ -194,24 +203,40 @@ export const config = {
     maxSockets: parseInt(process.env.HTTP_AGENT_MAX_SOCKETS || '50', 10),
     maxFreeSockets: parseInt(process.env.HTTP_AGENT_MAX_FREE_SOCKETS || '10', 10),
     keepAliveMsecs: parseInt(process.env.HTTP_AGENT_KEEP_ALIVE_MS || '15000', 10),
+    timeoutMs: parseInt(process.env.SOROBAN_RPC_TIMEOUT_MS || '10000', 10),
   },
   websocket: {
     authRequired: process.env.WS_AUTH_REQUIRED !== 'false',
     maxSubscriptionsPerConnection: parseInt(process.env.WS_MAX_SUBSCRIPTIONS || '10', 10),
+    /** Concurrent WebSocket connections allowed per API key. */
+    maxConnectionsPerKey: parseInt(process.env.WS_MAX_CONNECTIONS_PER_KEY || '10', 10),
+    /** Concurrent WebSocket connections allowed per client IP (as derived with trustProxy). */
+    maxConnectionsPerIp: parseInt(process.env.WS_MAX_CONNECTIONS_PER_IP || '50', 10),
   },
   jobs: {
     enabled: process.env.JOBS_ENABLED !== 'false' && (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),
     txPollIntervalMs: parseInt(process.env.JOB_TX_POLL_INTERVAL_MS || '60000', 10),
     metricsIntervalMs: parseInt(process.env.JOB_METRICS_INTERVAL_MS || '3600000', 10),
+    cleanupIntervalMs: parseInt(process.env.JOB_CLEANUP_INTERVAL_MS || '86400000', 10),
+    warmupAssets: (process.env.JOB_WARMUP_ASSETS || '').split(',').map(s => s.trim()).filter(Boolean),
     concurrency: {
       txStatus: parseInt(process.env.JOB_CONCURRENCY_TX_STATUS || '5', 10),
       webhookRetry: parseInt(process.env.JOB_CONCURRENCY_WEBHOOK_RETRY || '3', 10),
       cacheWarmup: parseInt(process.env.JOB_CONCURRENCY_CACHE_WARMUP || '2', 10),
       metrics: parseInt(process.env.JOB_CONCURRENCY_METRICS || '1', 10),
+      // #1050: concurrency for the two async-pipeline queues so startWorkers()
+      // no longer hard-codes 5 / 10.
+      asyncCritical: parseInt(process.env.JOB_CONCURRENCY_ASYNC_CRITICAL || '5', 10),
+      asyncPipeline: parseInt(process.env.JOB_CONCURRENCY_ASYNC_PIPELINE || '10', 10),
     },
   },
   asyncPipeline: {
-    enabled: process.env.ASYNC_PIPELINE_ENABLED !== 'false',
+    // #1052: the pipeline can only work when a Redis URL is configured.
+    // Previously it was 'on' by default and enqueued to localhost:6379
+    // against machines that have no Redis, parking jobs in ioredis's
+    // offline queue indefinitely. Match the same guard used by
+    // config.redis.enabled / config.jobs.enabled.
+    enabled: process.env.ASYNC_PIPELINE_ENABLED !== 'false' && process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== '',
     backpressureThreshold: parseInt(process.env.ASYNC_BACKPRESSURE_THRESHOLD || '1000', 10),
     /**
      * How long (ms) the in-process analytics buffer accumulates events before

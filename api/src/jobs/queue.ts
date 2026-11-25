@@ -1,5 +1,6 @@
 import { Queue, QueueOptions } from 'bullmq';
 import { config } from '../config';
+import { createProducerRedisConnection } from './connection';
 
 export type JobName =
   | 'cache-warmup'
@@ -17,14 +18,14 @@ export interface MetricsData {
   period: 'hourly' | 'daily';
 }
 
-// ─── Async pipeline job payloads ─────────────────────────────────────────────
+// --- Async pipeline job payloads -------------------------------------------
 
 export interface AuditLogJobData {
   /** Maps to AuditEventType in auditLog.ts */
   type: string;
   payload: Record<string, unknown>;
   actor: string;
-  /** ISO timestamp of when the event was originally triggered on the request path */
+  /** When the event was triggered on the request path, in epoch ms. Becomes the entry's timestamp. */
   triggeredAt: number;
 }
 
@@ -52,17 +53,29 @@ export interface PipelineMetricsJobData {
 export const WEBHOOK_RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
 
 /**
- * Everything the worker needs to redeliver a webhook. The registration lives
- * in the API process, so the job must be self-contained.
+ * Everything the worker needs to redeliver a webhook.
+ *
+ * Issue #1061: the retry job carries only what the worker needs to re-sign
+ * the payload with a FRESH timestamp on every attempt. Neither the original
+ * signature nor the original timestamp is stored, because the final retry
+ * fires ~370 s after signing and would breach a 300 s replay window if we
+ * reused them. The worker re-fetches the registration secret from the DB at
+ * send time and recomputes HMAC-SHA256(secret, `${now}.${payload}`).
+ *
+ * `webhookId` is one UUID per logical delivery. It is stamped on every
+ * attempt (first delivery and every retry) as X-Webhook-Id so receivers can
+ * dedupe across attempts without trusting the timestamp.
  */
 export interface WebhookRetryData {
   registrationId: string;
+  /** Same for every attempt of one delivery; sent as X-Webhook-Id so receivers can dedupe. */
+  deliveryId: string;
   url: string;
   event: string;
-  /** Timestamp bound into the signature; resent as X-Webhook-Timestamp. */
-  timestamp: number;
+  /** Stable identifier for this delivery; sent as X-Webhook-Id on every attempt. */
+  webhookId: string;
+  /** Raw JSON body from the first attempt; re-signed on every retry. */
   payload: string;
-  signature: string;
   data: unknown;
   attemptNumber: number;
 }
@@ -75,19 +88,14 @@ export type JobData =
   | PipelineMetricsJobData
   | WebhookRetryData;
 
-function parseRedisUrl(url: string): { host: string; port: number; password?: string; db?: number } {
-  const parsed = new URL(url);
-  return {
-    host: parsed.hostname || 'localhost',
-    port: parseInt(parsed.port || '6379', 10),
-    password: parsed.password || undefined,
-    db: parsed.pathname ? parseInt(parsed.pathname.slice(1) || '0', 10) : 0,
-  };
-}
-
+// #1051: connections are built by the shared factory in ./connection, which
+// passes the raw URL to ioredis (rediss://, ACL username, /db all work).
+// #1052: producer connections are created with enableOfflineQueue: false so
+// Queue.add() rejects immediately when Redis is unreachable, instead of
+// parking in ioredis' offline queue and starving the sync fallback.
 function makeBaseOptions(): QueueOptions {
   return {
-    connection: parseRedisUrl(config.redis.url),
+    connection: createProducerRedisConnection(),
     defaultJobOptions: {
       attempts: 3,
       backoff: { type: 'exponential', delay: 5000 },
@@ -99,7 +107,7 @@ function makeBaseOptions(): QueueOptions {
 
 function makeCriticalOptions(): QueueOptions {
   return {
-    connection: parseRedisUrl(config.redis.url),
+    connection: createProducerRedisConnection(),
     defaultJobOptions: {
       attempts: 5,
       backoff: { type: 'exponential', delay: 2000 },
@@ -128,7 +136,7 @@ function getQueues() {
     const asyncCritical = new Queue<AuditLogJobData>('async-critical', criticalOpts);
     const asyncPipeline = new Queue<AnalyticsJobData | PipelineMetricsJobData>('async-pipeline', opts);
     const webhookRetry = new Queue<WebhookRetryData>('webhook-retry', {
-      connection: parseRedisUrl(config.redis.url),
+      connection: createProducerRedisConnection(),
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: 'fixed', delay: 10_000 },
@@ -158,10 +166,34 @@ export async function closeQueues(): Promise<void> {
   _queues = null;
 }
 
+/**
+ * Registers the recurring (repeatable) jobs.
+ *
+ * #1050: this must be called once from the worker entry point, guarded by
+ * `config.jobs.enabled`. Each call is idempotent across restarts because the
+ * repeat key is stable - BullMQ will not create a duplicate schedule.
+ */
 export async function scheduleRecurringJobs(): Promise<void> {
+  if (!config.jobs.enabled) return;
+
   const queues = getQueues();
-  await queues.cacheWarmup.add('cache-warmup', { assets: [] }, { repeat: { pattern: '*/30 * * * * *' } });
-  await queues.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { pattern: '0 * * * * *' } });
+
+  // Only schedule cache warmup when assets are configured; an empty list does
+  // nothing useful and would fire every 30 s for no reason.
+  if (config.jobs.warmupAssets.length > 0) {
+    await queues.cacheWarmup.add(
+      'cache-warmup',
+      { assets: config.jobs.warmupAssets },
+      { repeat: { every: 30_000 } },
+    );
+  }
+
+  // Use the configured interval so JOB_METRICS_INTERVAL_MS is honoured.
+  await queues.metrics.add(
+    'metrics-compute',
+    { period: 'hourly' },
+    { repeat: { every: config.jobs.metricsIntervalMs } },
+  );
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
@@ -180,6 +212,12 @@ export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Prom
 }
 
 export async function enqueueWebhookRetry(data: WebhookRetryData, delayMs: number): Promise<void> {
+  // #1050: if background workers are disabled there is nothing to drain this
+  // queue, so reject instead of piling jobs up forever. Callers
+  // (webhookDelivery.ts) already catch this and move the delivery to the DLQ.
+  if (!config.jobs.enabled) {
+    throw new Error('jobs disabled: webhook-retry queue is not being drained');
+  }
   const queues = getQueues();
   await queues.webhookRetry.add('webhook-retry', data, { delay: delayMs });
 }
