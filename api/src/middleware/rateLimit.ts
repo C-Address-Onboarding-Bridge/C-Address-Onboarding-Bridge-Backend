@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../logger';
 import { config } from '../config';
+import { httpRateLimitHits } from '../services/metrics';
 
 // ---------------------------------------------------------------------------
 // IP-based sliding-window rate limiter
@@ -117,6 +118,7 @@ export function ipRateLimitMiddleware(req: Request, res: Response, next: NextFun
     const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
     res.setHeader('Retry-After', String(retryAfter));
     logger.warn({ ip }, 'IP rate limit exceeded');
+    httpRateLimitHits.inc({ route: 'ip' });
     res.status(429).json({ error: 'Too Many Requests', retryAfter });
     return;
   }
@@ -175,6 +177,7 @@ export function tierRateLimitMiddleware(req: Request, res: Response, next: NextF
     const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
     res.setHeader('Retry-After', String(retryAfter));
     logger.warn({ tier, ip: getClientIp(req) }, 'Tier rate limit exceeded');
+    httpRateLimitHits.inc({ route: 'tier' });
     res.status(429).json({ error: 'Too Many Requests', retryAfter });
     return;
   }
@@ -208,6 +211,7 @@ export function telemetryRateLimit(req: Request, res: Response, next: NextFuncti
     const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
     res.setHeader('Retry-After', String(retryAfter));
     logger.warn({ ip }, 'Telemetry rate limit exceeded');
+    httpRateLimitHits.inc({ route: 'telemetry' });
     res.status(429).json({ error: 'Too Many Requests', retryAfter });
     return;
   }
