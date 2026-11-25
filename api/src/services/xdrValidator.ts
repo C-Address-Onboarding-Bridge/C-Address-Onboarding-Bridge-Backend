@@ -66,12 +66,12 @@ const SEEN_HASH_TTL_SECONDS = 24 * 60 * 60; // 24 hours
  * funding API; governance entry points (`propose`, `execute`, …) are rejected.
  */
 export const ALLOWED_FUNCTIONS_BY_ENDPOINT: Record<string, readonly string[]> = {
-  fund: ['fund', 'deposit'],
-  register: ['register'],
+  fund: ['fund_c_address'],
+  batch: ['batch_fund_c_address'],
 };
 
-/** Default allowlist used when no endpoint is supplied. */
-export const DEFAULT_ALLOWED_FUNCTIONS: readonly string[] = ['fund', 'deposit'];
+/** Default allowlist used when no endpoint is supplied — nothing is allowed. */
+export const DEFAULT_ALLOWED_FUNCTIONS: readonly string[] = [];
 
 // ── Validation error codes ────────────────────────────────────────────────────
 
