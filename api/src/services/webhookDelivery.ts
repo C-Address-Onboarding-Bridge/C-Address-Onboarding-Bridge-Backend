@@ -26,6 +26,8 @@ export interface WebhookRegistration {
 
 export interface DeliveryAttempt {
   id: string;
+  /** Stable across every attempt of one delivery; sent as `X-Webhook-Id`. */
+  deliveryId: string;
   registrationId: string;
   webhookUrl: string;
   event: string;
@@ -175,7 +177,7 @@ export class WebhookDeliveryService {
     events: string[];
   }): WebhookRegistration {
     const registration: WebhookRegistration = {
-      id: crypto.randomUUID(),
+      id: params.id ?? crypto.randomUUID(),
       url: params.url,
       secret: params.secret,
       // `apiKeyId` is the canonical field; `apiKey` is accepted as a legacy
@@ -267,6 +269,12 @@ export class WebhookDeliveryService {
     this.store.pruneDeliveryLog(this.deliveryLogLimit);
   }
 
+  /**
+   * One delivery attempt. Every call ends in exactly one of three ways: a 2xx
+   * returns; a failure with retries left enqueues the next attempt; a failure
+   * with none left (or whose retry cannot be enqueued) goes to the DLQ. The
+   * attempt is recorded, and audited, exactly once either way.
+   */
   private async attemptDelivery(
     registration: WebhookRegistration,
     event: string,
@@ -277,8 +285,10 @@ export class WebhookDeliveryService {
     webhookId: string,
     attemptNumber: number,
   ): Promise<void> {
+    const { registration, event, data, payload, signature, timestamp, deliveryId } = delivery;
     const attempt: DeliveryAttempt = {
       id: crypto.randomUUID(),
+      deliveryId,
       registrationId: registration.id,
       webhookUrl: registration.url,
       event,
@@ -286,6 +296,8 @@ export class WebhookDeliveryService {
       attemptNumber,
     };
 
+    let timeout: NodeJS.Timeout | undefined;
+    let dispatcher: Agent | undefined;
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
@@ -366,6 +378,7 @@ export class WebhookDeliveryService {
         { err: auditErr instanceof Error ? auditErr.message : String(auditErr) },
         'failed to enqueue webhook delivery audit',
       );
+      return;
     }
 
     if (attemptNumber < WEBHOOK_RETRY_DELAYS_MS.length) {
@@ -378,6 +391,7 @@ export class WebhookDeliveryService {
         await enqueueWebhookRetry(
           {
             registrationId: registration.id,
+            deliveryId,
             url: registration.url,
             event,
             webhookId,
@@ -399,6 +413,8 @@ export class WebhookDeliveryService {
         );
         return;
       } catch (err) {
+        // Without a queue there is no retry; the DLQ is the only place left
+        // that keeps the delivery from being lost.
         logger.error(
           {
             registrationId: registration.id,

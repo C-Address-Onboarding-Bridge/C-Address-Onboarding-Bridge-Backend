@@ -48,6 +48,7 @@ function makeJob(overrides: Partial<WebhookRetryData> = {}): Job<WebhookRetryDat
     id: 'webhook-retry-job-1',
     data: {
       registrationId: 'webhook-reg-123',
+      deliveryId: 'delivery-abc',
       url: 'https://example.com/webhook',
       event: 'funding.submitted',
       webhookId: TEST_WEBHOOK_ID,
@@ -144,6 +145,17 @@ describe('processWebhookRetry', () => {
     // Signature verifies against the fresh timestamp, not the stale one.
     expect(headers['X-Webhook-Signature']).toBe(`sha256=${freshSig}`);
     expect(headers['X-Webhook-Signature']).not.toBe(`sha256=${staleSig}`);
+  });
+
+  it('carries the same deliveryId into the next attempt (#1057)', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, status: 500 });
+
+    await processWebhookRetry(makeJob({ attemptNumber: 1 }));
+
+    expect(enqueueWebhookRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryId: 'delivery-abc', attemptNumber: 2 }),
+      60_000,
+    );
   });
 
   it('re-enqueues the next attempt with the next delay on failure', async () => {

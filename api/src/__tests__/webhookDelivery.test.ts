@@ -23,8 +23,8 @@ vi.mock('node:dns/promises', async (importOriginal) => {
 process.env.NODE_ENV = 'test';
 process.env.API_KEYS = 'test-api-key-123';
 
-vi.mock('../index', () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+vi.mock('../logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 vi.mock('../jobs/queue', () => ({
@@ -44,8 +44,10 @@ vi.mock('../services/auditLog', () => ({
   },
 }));
 
-import { WebhookDeliveryService } from '../services/webhookDelivery';
+// The real module, not a mock: #1056 is precisely that this file has to load.
+import { WebhookDeliveryService, InMemoryWebhookStore, isBlockedIp, assertSafeWebhookUrl } from '../services/webhookDelivery';
 import { enqueueWebhookRetry } from '../jobs/queue';
+import { enqueueAudit } from '../services/asyncPipeline';
 import { lookup } from 'node:dns/promises';
 
 function dnsAddresses(addresses: { address: string; family: number }[]): Awaited<ReturnType<typeof lookup>> {
@@ -58,12 +60,14 @@ describe('WebhookDeliveryService', () => {
   let service: WebhookDeliveryService;
 
   beforeEach(() => {
-    service = new WebhookDeliveryService();
+    service = new WebhookDeliveryService(new InMemoryWebhookStore());
     vi.clearAllMocks();
+    vi.mocked(enqueueWebhookRetry).mockReset().mockResolvedValue(undefined);
     vi.mocked(lookup).mockReset().mockResolvedValue(dnsAddresses([{ address: '93.184.216.34', family: 4 }]));
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -81,6 +85,12 @@ describe('WebhookDeliveryService', () => {
       expect(r1.id).not.toBe(r2.id);
     });
 
+    it('keeps a caller-supplied id', () => {
+      const reg = service.register({ id: 'fixed-id', url: 'https://a.com', secret: 'secretvalue12345', apiKeyId: 'k', events: ['*'] });
+      expect(reg.id).toBe('fixed-id');
+      expect(service.getRegistration('fixed-id')).toBeDefined();
+    });
+
     it('unregisters a registration', () => {
       const reg = service.register({ url: 'https://example.com', secret: 'secretvalue12345', apiKeyId: 'k', events: ['*'] });
       expect(service.unregister(reg.id)).toBe(true);
@@ -92,13 +102,13 @@ describe('WebhookDeliveryService', () => {
     });
   });
 
-  describe('getRegistrationsByApiKey', () => {
-    it('filters registrations by api key', () => {
+  describe('getRegistrationsByApiKeyId', () => {
+    it('filters registrations by api key id', () => {
       service.register({ url: 'https://a.com', secret: 'secretvalue12345', apiKeyId: 'key-A', events: ['*'] });
       service.register({ url: 'https://b.com', secret: 'secretvalue12345', apiKeyId: 'key-B', events: ['*'] });
       service.register({ url: 'https://c.com', secret: 'secretvalue12345', apiKeyId: 'key-A', events: ['tx'] });
 
-      const results = service.getRegistrationsByApiKey('key-A');
+      const results = service.getRegistrationsByApiKeyId('key-A');
       expect(results).toHaveLength(2);
       expect(results.every((r) => r.apiKeyId === 'key-A')).toBe(true);
     });
@@ -108,6 +118,7 @@ describe('WebhookDeliveryService', () => {
     it('produces a hex HMAC-SHA256 signature (legacy 2-arg form)', () => {
       const sig = service.sign('{"event":"test"}', 'mysecret');
       expect(sig).toMatch(/^[a-f0-9]{64}$/);
+      expect(sig).toBe(createHmac('sha256', 'mysecret').update('1700000000000.{"event":"test"}').digest('hex'));
     });
 
     it('3-arg form binds the timestamp into the signed message', () => {
@@ -126,9 +137,24 @@ describe('WebhookDeliveryService', () => {
     });
 
     it('produces the same signature for the same inputs', () => {
-      const sig1 = service.sign('payload', 'secret');
-      const sig2 = service.sign('payload', 'secret');
-      expect(sig1).toBe(sig2);
+      expect(service.sign('payload', 'secret', 1)).toBe(service.sign('payload', 'secret', 1));
+    });
+  });
+
+  describe('URL safety', () => {
+    it('blocks private, loopback, link-local and mapped addresses', () => {
+      for (const ip of ['10.0.0.1', '127.0.0.1', '169.254.169.254', '192.168.1.1', '::1', '::ffff:127.0.0.1', 'fd00::1']) {
+        expect(isBlockedIp(ip)).toBe(true);
+      }
+      expect(isBlockedIp('93.184.216.34')).toBe(false);
+    });
+
+    it('rejects http, blocked literals and hosts resolving to blocked addresses', async () => {
+      await expect(assertSafeWebhookUrl('http://example.com')).rejects.toThrow(/https/);
+      await expect(assertSafeWebhookUrl('https://127.0.0.1/hook')).rejects.toThrow(/blocked/);
+      vi.mocked(lookup).mockResolvedValueOnce(dnsAddresses([{ address: '10.0.0.5', family: 4 }]));
+      await expect(assertSafeWebhookUrl('https://internal.example')).rejects.toThrow(/blocked/);
+      await expect(assertSafeWebhookUrl('https://example.com')).resolves.toBeUndefined();
     });
   });
 
@@ -170,7 +196,7 @@ describe('WebhookDeliveryService', () => {
       const reg = service.register({
         url: 'https://rebind.example/hook',
         secret: 'mysecret123456!',
-        apiKey: 'k',
+        apiKeyId: 'k',
         events: ['*'],
       });
       await service.deliver(reg, 'transaction.success', { txHash: 'abc' });
@@ -245,6 +271,7 @@ describe('WebhookDeliveryService', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(enqueueMock).toHaveBeenCalledTimes(1);
       expect(service.getDLQ()).toHaveLength(0);
+      expect(service.getDeliveryLog()).toHaveLength(1);
 
       // Issue #1061: the retry payload is signature-free and timestamp-free.
       // The worker re-signs with a fresh `now` on every attempt.
@@ -262,11 +289,21 @@ describe('WebhookDeliveryService', () => {
       expect(retryData).not.toHaveProperty('timestamp');
     });
 
-    it('moves to DLQ if webhook retry enqueue fails', async () => {
-      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
-      vi.stubGlobal('fetch', fetchMock);
-      const enqueueMock = vi.mocked(enqueueWebhookRetry);
-      enqueueMock.mockRejectedValueOnce(new Error('Redis unavailable'));
+    it('a 500 on the last attempt writes exactly one DLQ entry (#1057)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
+
+      await attemptAt(service, reg, 3);
+
+      expect(enqueueWebhookRetry).not.toHaveBeenCalled();
+      expect(service.getDLQ()).toHaveLength(1);
+      expect(service.getDLQ()[0].attempts).toHaveLength(1);
+      expect(service.getDeliveryLog()).toHaveLength(1);
+    });
+
+    it('moves to DLQ exactly once if webhook retry enqueue fails', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+      vi.mocked(enqueueWebhookRetry).mockRejectedValueOnce(new Error('Redis unavailable'));
 
       const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: 'deadbeef' });
@@ -282,9 +319,8 @@ describe('WebhookDeliveryService', () => {
 
   describe('DLQ', () => {
     it('getDLQEntry returns the correct entry', async () => {
-      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
-      vi.stubGlobal('fetch', fetchMock);
-      const enqueueMock = vi.mocked(enqueueWebhookRetry);
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+      vi.mocked(enqueueWebhookRetry).mockRejectedValueOnce(new Error('Redis unavailable'));
 
       const reg = service.register({ url: 'https://fail.example', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: '1234' });
@@ -297,16 +333,15 @@ describe('WebhookDeliveryService', () => {
       expect(service.getDLQ()).toHaveLength(1);
 
       const dlq = service.getDLQ();
+      expect(dlq).toHaveLength(1);
       const entry = service.getDLQEntry(dlq[0].id);
       expect(entry).toBeDefined();
       expect(entry!.event).toBe('tx.failed');
     });
 
     it('deleteDLQEntry removes the entry', async () => {
-      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
-      vi.stubGlobal('fetch', fetchMock);
-      const enqueueMock = vi.mocked(enqueueWebhookRetry);
-      enqueueMock.mockRejectedValueOnce(new Error('Redis unavailable'));
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+      vi.mocked(enqueueWebhookRetry).mockRejectedValueOnce(new Error('Redis unavailable'));
 
       const reg = service.register({ url: 'https://fail.example', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: '5678' });
@@ -320,11 +355,12 @@ describe('WebhookDeliveryService', () => {
 
   describe('getStats', () => {
     it('returns correct stats', () => {
-      service.register({ url: 'https://a.com', secret: 'secretvalue12345', apiKey: 'k', events: ['*'] });
-      service.register({ url: 'https://b.com', secret: 'secretvalue12345', apiKey: 'k', events: ['*'] });
+      service.register({ url: 'https://a.com', secret: 'secretvalue12345', apiKeyId: 'k', events: ['*'] });
+      service.register({ url: 'https://b.com', secret: 'secretvalue12345', apiKeyId: 'k', events: ['*'] });
       const stats = service.getStats();
       expect(stats.registered).toBe(2);
       expect(stats.dlqSize).toBe(0);
+      expect(stats.totalAttempts).toBe(0);
     });
   });
 });

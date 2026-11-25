@@ -142,7 +142,10 @@ export function enqueueAudit(
     return;
   }
 
-  const data: AuditLogJobData = { type, payload, actor };
+  // Stamped here, on the request path: the worker may run this job seconds or
+  // minutes later (5 attempts with exponential backoff), and the entry must
+  // record when the event happened, not when it was processed.
+  const data: AuditLogJobData = { type, payload, actor, triggeredAt: Date.now() };
 
   enqueueAuditLog(data)
     .then(() => {

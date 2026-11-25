@@ -24,7 +24,7 @@ export interface AuditLogJobData {
   type: string;
   payload: Record<string, unknown>;
   actor: string;
-  /** ISO timestamp of when the event was originally triggered on the request path */
+  /** When the event was triggered on the request path, in epoch ms. Becomes the entry's timestamp. */
   triggeredAt: number;
 }
 
@@ -67,6 +67,8 @@ export const WEBHOOK_RETRY_DELAYS_MS = [10_000, 60_000, 300_000];
  */
 export interface WebhookRetryData {
   registrationId: string;
+  /** Same for every attempt of one delivery; sent as X-Webhook-Id so receivers can dedupe. */
+  deliveryId: string;
   url: string;
   event: string;
   /** Stable identifier for this delivery; sent as X-Webhook-Id on every attempt. */
