@@ -111,7 +111,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            contracts/onboarding-bridge/target
           key: contract-wasm-${{ runner.os }}-${{ hashFiles('contracts/onboarding-bridge/Cargo.lock') }}
           restore-keys: contract-wasm-${{ runner.os }}-
 
@@ -125,11 +125,10 @@ jobs:
       - name: Compute WASM hash and size
         id: hash
         run: |
-          WASM=$(find target -name "onboarding_bridge.wasm" | head -1)
-          if [[ -z "$WASM" ]]; then
-            echo "wasm_hash=unknown" >> "$GITHUB_OUTPUT"
-            echo "wasm_size=0"       >> "$GITHUB_OUTPUT"
-            exit 0
+          WASM=contracts/onboarding-bridge/target/wasm32v1-none/release/onboarding_bridge.wasm
+          if [[ ! -f "$WASM" ]]; then
+            echo "::error::WASM not found at $WASM"
+            exit 1
           fi
           HASH=$(sha256sum "$WASM" | awk '{print $1}')
           SIZE=$(wc -c < "$WASM")
@@ -143,8 +142,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: onboarding-bridge-wasm
-          path: |
-            target/**/release/onboarding_bridge.wasm
+          path: contracts/onboarding-bridge/target/wasm32v1-none/release/onboarding_bridge.wasm
+          if-no-files-found: error
           retention-days: 90
 
   # ── Deploy to Testnet ─────────────────────────────────────────────────────
@@ -173,7 +172,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            contracts/onboarding-bridge/target
           key: contract-wasm-${{ runner.os }}-${{ hashFiles('contracts/onboarding-bridge/Cargo.lock') }}
           restore-keys: contract-wasm-${{ runner.os }}-
 
@@ -184,7 +183,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: onboarding-bridge-wasm
-          path: target
+          path: contracts/onboarding-bridge/target/wasm32v1-none/release
 
       - name: Deploy contract
         id: deploy
@@ -254,7 +253,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            contracts/onboarding-bridge/target
           key: contract-wasm-${{ runner.os }}-${{ hashFiles('contracts/onboarding-bridge/Cargo.lock') }}
           restore-keys: contract-wasm-${{ runner.os }}-
 
@@ -265,7 +264,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: onboarding-bridge-wasm
-          path: target
+          path: contracts/onboarding-bridge/target/wasm32v1-none/release
 
       - name: Deploy contract
         id: deploy

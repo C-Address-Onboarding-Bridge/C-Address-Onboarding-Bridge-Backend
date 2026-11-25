@@ -16,8 +16,9 @@ Soroban's `env.deployer().update_current_contract_wasm()` replaces WASM in-place
 while keeping all instance storage intact. The contract does **not** expose a
 direct `upgrade()` entrypoint; instead, an upgrade is performed through the
 governed proposal flow: an admin proposes `ProposalAction::Upgrade(new_wasm_hash)`,
-approvers approve it, and once the approval threshold is met anyone can `execute`
-it. Execution calls `update_current_contract_wasm` with the new hash.
+approvers approve it, and once the approval threshold is met and the minimum
+execution delay (`MIN_EXEC_DELAY` ledgers) has passed anyone can `execute` it. Execution calls `update_current_contract_wasm` with the new hash, increments
+`DataKey::Version` and emits an `upgraded` event (old version, new version, hash).
 
 There is no `migrate()` entrypoint and no on-chain `schema_version` /
 `SCHEMA_VERSION` / `DataKey::SchemaVersion`. Storage layout changes must be
@@ -57,7 +58,8 @@ redeploy, since the contract has no migration hook.
      --network-passphrase "<passphrase>" \
      -- propose \
         --proposer <admin-address> \
-        --action '{"Upgrade": "<new_wasm_hash>"}'
+        --action '{"Upgrade": "<new_wasm_hash>"}' \
+        --expiry_blocks <expiry_blocks>
    # outputs: <proposal_id>
    ```
 5. Approve the proposal until the threshold is met (each approver):
@@ -67,7 +69,7 @@ redeploy, since the contract has no migration hook.
      --source <approver-secret> \
      --rpc-url <rpc-url> \
      --network-passphrase "<passphrase>" \
-     -- approve --approver <approver-address> --proposal_id <proposal_id>
+     -- approve --admin <approver-address> --proposal_id <proposal_id>
    ```
 6. Execute the proposal once approved:
    ```bash
@@ -112,9 +114,8 @@ default value on read and writes it on the next mutation. Follow all steps in
 §1 to roll the new WASM out through the governed upgrade flow.
 - **Redeploy.** If the change cannot be handled lazily, deploy a fresh contract
 with `stellar contract deploy`, re-run `initialize`, and migrate off-chain state
-(funding records, proposals) out of band. Soroban contracts are immutable once
-deployed, so a redeploy is the only way to change storage layout that the new
-WASM cannot reconcile.
+(funding records, proposals) out of band. Prefer the governed upgrade when the new WASM can reconcile the
+storage layout itself.
 
 ---
 
@@ -142,14 +143,45 @@ steps:
 
 ## Error reference
 
-| Error | Code | When |
-|-------|------|------|
-| `AlreadyInitialized` | 1 | `initialize` called twice |
-| `NotInitialized` | 2 | Any function called before `initialize` |
-| `Unauthorized` | 3 | Non-admin calls admin-only function |
-| `InvalidFeeBps` | 4 | `fee_bps > 10000` |
-| `ZeroAmount` | 5 | `amount <= 0` in `fund_c_address` |
-| `InsufficientFees` | 6 | Withdrawal exceeds accumulated fees |
+The authoritative list is the `BridgeError` enum in `src/lib.rs`; clients see
+failures as `Error(Contract, #<code>)`.
+
+| Error | Code |
+|-------|------|
+| `NotInitialized` | 1 |
+| `AdminsEmpty` | 2 |
+| `ThresholdZero` | 3 |
+| `ThresholdExceedsAdminCount` | 4 |
+| `MaxFeeExceedsLimit` | 5 |
+| `FeeExceedsMaxFee` | 6 |
+| `MinAmountInvalid` | 7 |
+| `MaxAmountBelowMinimum` | 8 |
+| `AdminCannotBeContract` | 9 |
+| `InvalidCAddress` | 10 |
+| `AmountNotPositive` | 11 |
+| `ContractPaused` | 12 |
+| `AmountBelowMinimum` | 13 |
+| `AmountAboveMaximum` | 14 |
+| `AmountTooLarge` | 15 |
+| `ReentrantCall` | 16 |
+| `EmptyBatch` | 17 |
+| `MismatchedBatchLengths` | 18 |
+| `NoEntriesToArchive` | 19 |
+| `OnlyAdminsCanPropose` | 20 |
+| `ExpiryTooShort` | 21 |
+| `ExpiryTooLong` | 22 |
+| `OnlyAdminsCanApprove` | 23 |
+| `ProposalNotFound` | 24 |
+| `ProposalExpired` | 25 |
+| `ProposalAlreadyExecuted` | 26 |
+| `AlreadyApproved` | 27 |
+| `InsufficientApprovals` | 28 |
+| `ExecutionTooSoon` | 29 |
+| `RateBelowMinimum` | 30 |
+| `RateAboveMaximum` | 31 |
+| `InsufficientAccumulatedFees` | 32 |
+| `DiscountTooHigh` | 33 |
+| `TierCapExceeded` | 34 |
 
 ---
 
