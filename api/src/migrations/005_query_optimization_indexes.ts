@@ -1,4 +1,5 @@
-import { Migration, runDDL } from './runner';
+import type { PoolClient } from 'pg';
+import { Migration, runDDLOnClient } from './runner';
 
 /**
  * Migration 005 — Query optimization & indexing strategy
@@ -21,7 +22,7 @@ export const migration005: Migration = {
   version: '005',
   name: 'query_optimization_indexes',
 
-  async up() {
+  async up(client: PoolClient) {
     const schema = `
       -- ─────────────────────────────────────────────────────────
       -- Enable query statistics extension
@@ -106,8 +107,9 @@ export const migration005: Migration = {
       -- ─────────────────────────────────────────────────────────
 
       -- Pattern: recent deliveries for a registration (admin view)
+      -- Uses created_at — the canonical column in this table's schema
       CREATE INDEX IF NOT EXISTS idx_webhook_delivery_reg_time
-        ON webhook_delivery_log (registration_id, delivered_at DESC);
+        ON webhook_delivery_log (registration_id, created_at DESC);
 
       -- ─────────────────────────────────────────────────────────
       -- audit_log_entries table (from migration 004)
@@ -130,10 +132,10 @@ export const migration005: Migration = {
       ANALYZE webhook_delivery_log;
     `;
 
-    await runDDL(schema);
+    await runDDLOnClient(schema, client);
   },
 
-  async down() {
+  async down(client: PoolClient) {
     const rollback = `
       DROP INDEX IF EXISTS idx_audit_actor_time;
       DROP INDEX IF EXISTS idx_audit_entity_time;
@@ -150,6 +152,6 @@ export const migration005: Migration = {
       DROP INDEX IF EXISTS idx_tx_hash_covering;
     `;
 
-    await runDDL(rollback);
+    await runDDLOnClient(rollback, client);
   },
 };

@@ -53,7 +53,7 @@ async function main() {
     }
 
     case 'status': {
-      const rows = migrationRunner.status();
+      const rows = await migrationRunner.status();
       console.log('\nMigration Status:');
       console.log('─'.repeat(50));
       for (const row of rows) {
