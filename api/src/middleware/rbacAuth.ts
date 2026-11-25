@@ -29,6 +29,13 @@ export interface ApiKeyRecord {
   expiresAt: number | null;
   rateLimit: 'low' | 'standard' | 'high';
   revoked: boolean;
+  /**
+   * Per-key HMAC secret for request signing (#1026). Generated once at key
+   * creation and returned to the caller like rawKey; never exposed again
+   * after that. Used instead of a single platform-wide secret so one
+   * tenant's key cannot sign requests as another tenant.
+   */
+  signingSecret: string;
 }
 
 export interface CreateKeyInput {
@@ -261,6 +268,7 @@ export function createApiKey(input: CreateKeyInput): { rawKey: string; record: A
     expiresAt: input.expiresAt ?? null,
     rateLimit: input.rateLimit ?? 'standard',
     revoked: false,
+    signingSecret: crypto.randomBytes(32).toString('hex'),
   };
   keyStore.set(record.id, record);
   keyHashIndex.set(record.keyHash, record);
@@ -281,9 +289,9 @@ export function revokeApiKey(id: string): boolean {
 /**
  * List all keys without exposing keyHash.
  */
-export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {
+export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash' | 'signingSecret'>[] {
   // Copy the arrays so callers cannot change a stored key's scopes or IP whitelist.
-  return Array.from(keyStore.values()).map(({ keyHash, ...rest }) => ({
+  return Array.from(keyStore.values()).map(({ keyHash, signingSecret, ...rest }) => ({
     ...rest,
     scopes: [...rest.scopes],
     ipWhitelist: [...rest.ipWhitelist],
@@ -291,12 +299,12 @@ export function listApiKeys(): Omit<ApiKeyRecord, 'keyHash'>[] {
 }
 
 /**
- * Get a single key by ID without exposing keyHash.
+ * Get a single key by ID without exposing keyHash or signingSecret.
  */
-export function getApiKey(id: string): Omit<ApiKeyRecord, 'keyHash'> | undefined {
+export function getApiKey(id: string): Omit<ApiKeyRecord, 'keyHash' | 'signingSecret'> | undefined {
   const record = keyStore.get(id);
   if (!record) return undefined;
-  const { keyHash, ...rest } = record;
+  const { keyHash, signingSecret, ...rest } = record;
   // Copy the arrays so callers cannot change the stored key's scopes or IP whitelist.
   return { ...rest, scopes: [...rest.scopes], ipWhitelist: [...rest.ipWhitelist] };
 }

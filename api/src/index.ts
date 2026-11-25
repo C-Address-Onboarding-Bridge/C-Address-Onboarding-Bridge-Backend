@@ -153,9 +153,16 @@ app.use(requestTracker);
 // PII-masking request/response logger
 app.use(loggingMiddleware);
 
+// Captures the exact bytes the client sent as req.rawBody so
+// requestSigningMiddleware can verify signatures against what was actually
+// signed, instead of a re-stringified (and potentially reordered) req.body.
+const captureRawBody = (req: express.Request, _res: express.Response, buf: Buffer) => {
+  (req as express.Request & { rawBody?: string }).rawBody = buf.toString('utf8');
+};
+
 app.use('/api/webhook', express.text({ type: '*/*' }));
 app.use(FUNDING_PATHS, fundingJsonParser);
-app.use('/api', express.json({ limit: DEFAULT_JSON_LIMIT }));
+app.use('/api', express.json({ limit: DEFAULT_JSON_LIMIT, verify: captureRawBody }));
 
 // suspiciousRateLimiting is mounted exactly once here. It only counts requests
 // that actually tripped a detector (see middleware/security.ts), so normal
@@ -199,6 +206,12 @@ app.use('/api/cache-metrics', rbacAuth, cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
 app.use('/metrics', rbacAuth, requireScopes('metrics:read'), metricsRouter);
+
+// Catch-all for unmatched routes: without this, Express's default
+// finalhandler answers with an HTML 404 instead of JSON.
+app.use((req, res) => {
+  res.status(404).json({ error: 'not_found' });
+});
 
 // Error handler must be the last middleware
 app.use(xssErrorSanitizer);
