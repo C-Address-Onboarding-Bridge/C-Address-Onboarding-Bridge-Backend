@@ -58,6 +58,22 @@ function stagedFiles() {
   return out.split('\n').filter(Boolean);
 }
 
+/**
+ * Files added/copied/modified/renamed in a git range such as
+ * `origin/main...HEAD` (a PR's changes) or `<before>..<after>` (a push).
+ * CI uses this: a fresh checkout has nothing staged, so `--staged` always
+ * scanned 0 files there (#1097).
+ */
+function diffFiles(range) {
+  const out = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMR', range], { encoding: 'utf8' });
+  return out.split('\n').filter(Boolean);
+}
+
+function argValue(flag) {
+  const i = process.argv.indexOf(flag);
+  return i === -1 ? undefined : process.argv[i + 1];
+}
+
 const secretPatterns = [
   /-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/,
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
@@ -71,11 +87,26 @@ const secretPatterns = [
 
 function scan() {
   const scanAll = process.argv.includes('--all');
-  const files = scanAll ? execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split('\n').filter(Boolean) : stagedFiles();
+  const diffRange = argValue('--diff');
+  // --require-files: fail instead of passing when nothing was scanned, so a
+  // misconfigured CI range can never silently report success.
+  const requireFiles = process.argv.includes('--require-files');
+  if (process.argv.includes('--diff') && !diffRange) {
+    console.error('--diff needs a git range, e.g. --diff origin/main...HEAD');
+    process.exit(2);
+  }
+  const mode = scanAll ? 'tracked' : diffRange ? `changed (${diffRange})` : 'staged';
+  const files = scanAll
+    ? execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split('\n').filter(Boolean)
+    : diffRange
+      ? diffFiles(diffRange)
+      : stagedFiles();
   const allowed = [/^package-lock\.json$/, /^docs\/api-reference\//, /^api\/src\/__tests__\//, /^api\/tests\//, /^sdk\/tests\//];
   const findings = [];
+  let scanned = 0;
   for (const file of files) {
     if (!existsSync(file) || allowed.some((pattern) => pattern.test(file))) continue;
+    scanned += 1;
     const text = readFileSync(file, 'utf8');
     const lines = text.split('\n');
     lines.forEach((line, index) => {
@@ -93,7 +124,11 @@ function scan() {
     findings.forEach((finding) => console.error(`  ${finding}`));
     process.exit(1);
   }
-  console.log(`secret scan passed (${files.length} ${scanAll ? 'tracked' : 'staged'} files checked)`);
+  if (requireFiles && files.length === 0) {
+    console.error(`secret scan checked 0 ${mode} files; refusing to report success.`);
+    process.exit(1);
+  }
+  console.log(`secret scan passed (${scanned} of ${files.length} ${mode} files checked; the rest are allowlisted or deleted)`);
 }
 
 function providerPath(path) {

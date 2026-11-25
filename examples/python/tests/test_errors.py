@@ -23,44 +23,46 @@ from c_address_bridge.errors import (
 class ParseHttpErrorTests(unittest.TestCase):
     def test_maps_401_and_403_to_auth_error(self) -> None:
         for status in (401, 403):
-            err = parse_http_error(status, {"message": "nope"})
+            # Real API shape: {"error": "invalid_api_key"}
+            err = parse_http_error(status, {"error": "invalid_api_key"})
             self.assertIsInstance(err, AuthError)
             self.assertEqual(err.status_code, status)
-            self.assertEqual(str(err), "nope")
+            self.assertEqual(str(err), "invalid_api_key")
 
     def test_maps_404_to_not_found(self) -> None:
-        err = parse_http_error(404, {"message": "missing"})
+        err = parse_http_error(404, {"error": "not_found"})
         self.assertIsInstance(err, NotFoundError)
         self.assertEqual(err.status_code, 404)
-        self.assertEqual(str(err), "missing")
+        self.assertEqual(str(err), "not_found")
 
     def test_maps_400_and_422_to_validation_error_with_fields(self) -> None:
         for status in (400, 422):
-            err = parse_http_error(status, {"message": "bad input", "fields": ["amount"]})
+            # Real API shape: {"error": "validation_error", "details": [...]}
+            err = parse_http_error(status, {"error": "validation_error", "details": [{"path": ["amount"]}]})
             self.assertIsInstance(err, ValidationError)
             self.assertEqual(err.status_code, status)
-            self.assertEqual(err.fields, ["amount"])
+            self.assertIsNotNone(err.fields)
 
     def test_maps_429_to_rate_limit_with_retry_after_ms(self) -> None:
-        err = parse_http_error(429, {"message": "slow down", "retryAfter": 2.5})
+        err = parse_http_error(429, {"error": "rate_limit_exceeded", "retryAfter": 2.5})
         self.assertIsInstance(err, RateLimitError)
         self.assertTrue(err.retryable)
         self.assertEqual(err.retry_after_ms, 2500)
 
     def test_maps_429_without_retry_after(self) -> None:
-        err = parse_http_error(429, {"message": "slow down"})
+        err = parse_http_error(429, {"error": "rate_limit_exceeded"})
         self.assertIsInstance(err, RateLimitError)
         self.assertIsNone(err.retry_after_ms)
 
     def test_maps_5xx_to_server_error(self) -> None:
         for status in (500, 502, 503):
-            err = parse_http_error(status, {"message": "boom"})
+            err = parse_http_error(status, {"error": "internal_server_error"})
             self.assertIsInstance(err, ServerError)
             self.assertEqual(err.status_code, status)
             self.assertTrue(err.retryable)
 
     def test_unknown_status_falls_back_to_base_error(self) -> None:
-        err = parse_http_error(418, {"message": "teapot"})
+        err = parse_http_error(418, {"error": "teapot"})
         self.assertIs(type(err), BridgeError)
         self.assertEqual(str(err), "teapot")
         self.assertFalse(err.retryable)

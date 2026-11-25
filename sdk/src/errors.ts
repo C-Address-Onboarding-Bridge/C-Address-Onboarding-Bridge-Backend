@@ -1,5 +1,5 @@
 import type { SupportedLocale, MessageKey, MessageParams } from './i18n/types.js';
-import { MESSAGE_CATALOGS, SUPPORTED_LOCALES } from './i18n.js';
+import { MESSAGE_CATALOGS, SUPPORTED_LOCALES } from './i18n/index.js';
 
 // ─── Localization ─────────────────────────────────────────────────────────────
 
@@ -239,6 +239,41 @@ export function parseRetryAfterHeader(value: string | null | undefined): number 
   return undefined;
 }
 
+/**
+ * Turn the API's zod `details` (`[{ path: ['amount'], message: '…' }]`) into a
+ * `{ amount: '…' }` field map. Falls back to a legacy `fields` object.
+ * Returns `undefined` when neither carries anything.
+ */
+function fieldsFromBody(body: ErrorBody): Record<string, string> | undefined {
+  if (Array.isArray(body.details) && body.details.length > 0) {
+    const fields: Record<string, string> = {};
+    for (const detail of body.details) {
+      if (!detail || typeof detail !== 'object') continue;
+      const path = Array.isArray(detail.path) ? detail.path.join('.') : detail.path;
+      const key = path === undefined || path === '' ? '_' : String(path);
+      if (fields[key] === undefined) {
+        fields[key] = detail.message ?? 'Invalid value';
+      }
+    }
+    if (Object.keys(fields).length > 0) return fields;
+  }
+  return body.fields && Object.keys(body.fields).length > 0 ? body.fields : undefined;
+}
+
+/**
+ * Map an HTTP error response to a typed {@link BridgeError}.
+ *
+ * The API sends `{ error, message }` from routes and
+ * `{ error: 'validation_error', details: [...] }` from its validation
+ * middleware, so the message, code and field errors are derived from those
+ * first and from the legacy `message` / `code` / `fields` keys otherwise.
+ *
+ * `body.error` is a machine code (`unauthorized`, `validation_error`), so it is
+ * always used as the `code`, but only used as the *message* by errors that have
+ * no localized default (`ValidationError`, `ServerError`, `BridgeError`).
+ * `AuthError`, `NotFoundError` and `RateLimitError` fall back to their
+ * localized catalog text when the body has no `message`.
+ */
 export function parseHttpError(
   status: number,
   body: ErrorBody,
@@ -246,6 +281,15 @@ export function parseHttpError(
   locale?: SupportedLocale,
   retryAfterHeader?: string | null,
 ): BridgeError {
+  // A non-JSON or empty error body arrives as `{}`; guard against `null` too.
+  body = body && typeof body === 'object' ? body : {};
+  /** Human-readable message the API sent, if any. */
+  const message = body.message;
+  /** `message`, or the API error code when there is no message. */
+  const messageOrCode = body.message ?? body.error;
+  const code = body.code ?? body.error;
+  const fields = fieldsFromBody(body);
+
   const headerRetryAfterMs = parseRetryAfterHeader(retryAfterHeader);
   const bodyRetryAfterMs = body.retryAfter !== undefined ? body.retryAfter * 1000 : undefined;
   const retryAfterMs = headerRetryAfterMs ?? bodyRetryAfterMs;
@@ -263,30 +307,64 @@ export function parseHttpError(
     case 404:
       return new NotFoundError(message, { code, cause, locale });
     case 429:
-      return new RateLimitError(body.message, {
+      return new RateLimitError(message, {
         retryAfterMs,
-        code: body.code,
+        code,
         cause,
         locale,
       });
     case 503:
-      return new ServerError(body.message ?? 'Service temporarily unavailable. Please try again later.', {
+      return new ServerError(messageOrCode ?? 'Service temporarily unavailable. Please try again later.', {
         statusCode: 503,
-        code: body.code,
+        code,
         cause,
       });
     default:
       if (status >= 500) {
-        return new ServerError(body.message ?? `Server error (${status}).`, {
+        return new ServerError(messageOrCode ?? `Server error (${status}).`, {
           statusCode: status,
-          code: body.code,
+          code,
           cause,
         });
       }
-      return new BridgeError(message ?? `Request failed with status ${status}.`, {
+      return new BridgeError(messageOrCode ?? `Request failed with status ${status}.`, {
         statusCode: status,
-        code: body.code,
+        code,
         cause,
       });
   }
+}
+
+// ─── Type guard helpers ────────────────────────────────────────────────────────
+
+export function isAuthError(err: unknown): err is AuthError {
+  return err instanceof AuthError;
+}
+
+export function isValidationError(err: unknown): err is ValidationError {
+  return err instanceof ValidationError;
+}
+
+export function isRateLimitError(err: unknown): err is RateLimitError {
+  return err instanceof RateLimitError;
+}
+
+export function isServerError(err: unknown): err is ServerError {
+  return err instanceof ServerError;
+}
+
+export function isNetworkError(err: unknown): err is NetworkError {
+  return err instanceof NetworkError;
+}
+
+export function isTimeoutError(err: unknown): err is TimeoutError {
+  return err instanceof TimeoutError;
+}
+
+export function isNotFoundError(err: unknown): err is NotFoundError {
+  return err instanceof NotFoundError;
+}
+
+export function isBridgeError(err: unknown): err is BridgeError {
+  return err instanceof BridgeError;
 }

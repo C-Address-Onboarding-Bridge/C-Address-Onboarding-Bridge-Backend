@@ -1,4 +1,5 @@
-import { Migration, runDDL } from './runner';
+import type { PoolClient } from 'pg';
+import { Migration, runDDLOnClient } from './runner';
 
 /**
  * Migration 005 — Query optimization & indexing strategy
@@ -21,12 +22,23 @@ export const migration005: Migration = {
   version: '005',
   name: 'query_optimization_indexes',
 
-  async up() {
+  async up(client: PoolClient) {
     const schema = `
       -- ─────────────────────────────────────────────────────────
       -- Enable query statistics extension
+      -- Needs superuser / rds_superuser and shared_preload_libraries
+      -- (infrastructure/postgres/postgresql-performance.conf). Guarded so a
+      -- non-superuser app role skips it instead of aborting the indexes
+      -- below (issue #1071). Already-applied databases are unaffected.
       -- ─────────────────────────────────────────────────────────
-      CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+      DO $$
+      BEGIN
+        CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+      EXCEPTION
+        WHEN insufficient_privilege OR undefined_file OR feature_not_supported THEN
+          RAISE NOTICE 'pg_stat_statements not enabled (%); ask a DBA to create it', SQLERRM;
+      END
+      $$;
 
       -- ─────────────────────────────────────────────────────────
       -- Slow query logging (100ms threshold)
@@ -106,8 +118,9 @@ export const migration005: Migration = {
       -- ─────────────────────────────────────────────────────────
 
       -- Pattern: recent deliveries for a registration (admin view)
+      -- Uses created_at — the canonical column in this table's schema
       CREATE INDEX IF NOT EXISTS idx_webhook_delivery_reg_time
-        ON webhook_delivery_log (registration_id, delivered_at DESC);
+        ON webhook_delivery_log (registration_id, created_at DESC);
 
       -- ─────────────────────────────────────────────────────────
       -- audit_log_entries table (from migration 004)
@@ -130,10 +143,10 @@ export const migration005: Migration = {
       ANALYZE webhook_delivery_log;
     `;
 
-    await runDDL(schema);
+    await runDDLOnClient(schema, client);
   },
 
-  async down() {
+  async down(client: PoolClient) {
     const rollback = `
       DROP INDEX IF EXISTS idx_audit_actor_time;
       DROP INDEX IF EXISTS idx_audit_entity_time;
@@ -150,6 +163,6 @@ export const migration005: Migration = {
       DROP INDEX IF EXISTS idx_tx_hash_covering;
     `;
 
-    await runDDL(rollback);
+    await runDDLOnClient(rollback, client);
   },
 };

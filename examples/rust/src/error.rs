@@ -22,8 +22,10 @@ pub enum BridgeError {
 
 impl BridgeError {
     pub fn from_response(status: u16, body: &serde_json::Value) -> Self {
+        // The API emits {"error": "...", "details": [...]} or {"error": "..."}.
+        // "error" doubles as both the machine code and the human message.
         let message = body
-            .get("message")
+            .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("request failed")
             .to_string();
@@ -46,11 +48,12 @@ mod tests {
     #[test]
     fn maps_401_and_403_to_auth() {
         for status in [401u16, 403u16] {
-            let err = BridgeError::from_response(status, &json!({ "message": "nope" }));
+            // Real API shape: {"error": "invalid_api_key"}
+            let err = BridgeError::from_response(status, &json!({ "error": "invalid_api_key" }));
             match err {
                 BridgeError::Auth { status: s, message } => {
                     assert_eq!(s, status);
-                    assert_eq!(message, "nope");
+                    assert_eq!(message, "invalid_api_key");
                 }
                 other => panic!("expected Auth, got {other:?}"),
             }
@@ -60,11 +63,12 @@ mod tests {
     #[test]
     fn maps_400_and_422_to_validation() {
         for status in [400u16, 422u16] {
-            let err = BridgeError::from_response(status, &json!({ "message": "bad input" }));
+            // Real API shape: {"error": "validation_error", "details": [...]}
+            let err = BridgeError::from_response(status, &json!({ "error": "validation_error", "details": [] }));
             match err {
                 BridgeError::Validation { status: s, message } => {
                     assert_eq!(s, status);
-                    assert_eq!(message, "bad input");
+                    assert_eq!(message, "validation_error");
                 }
                 other => panic!("expected Validation, got {other:?}"),
             }
@@ -73,24 +77,26 @@ mod tests {
 
     #[test]
     fn maps_404_to_not_found() {
-        let err = BridgeError::from_response(404, &json!({ "message": "missing" }));
-        assert!(matches!(err, BridgeError::NotFound { message } if message == "missing"));
+        let err = BridgeError::from_response(404, &json!({ "error": "not_found" }));
+        assert!(matches!(err, BridgeError::NotFound { message } if message == "not_found"));
     }
 
     #[test]
     fn maps_429_to_rate_limit() {
-        let err = BridgeError::from_response(429, &json!({ "message": "slow down" }));
-        assert!(matches!(err, BridgeError::RateLimit { message } if message == "slow down"));
+        // Real API shape: {"error": "rate_limit_exceeded"}
+        let err = BridgeError::from_response(429, &json!({ "error": "rate_limit_exceeded" }));
+        assert!(matches!(err, BridgeError::RateLimit { message } if message == "rate_limit_exceeded"));
     }
 
     #[test]
     fn maps_5xx_to_server() {
         for status in [500u16, 502u16, 599u16] {
-            let err = BridgeError::from_response(status, &json!({ "message": "boom" }));
+            // Real API shape: {"error": "internal_server_error"}
+            let err = BridgeError::from_response(status, &json!({ "error": "internal_server_error" }));
             match err {
                 BridgeError::Server { status: s, message } => {
                     assert_eq!(s, status);
-                    assert_eq!(message, "boom");
+                    assert_eq!(message, "internal_server_error");
                 }
                 other => panic!("expected Server, got {other:?}"),
             }
@@ -99,7 +105,7 @@ mod tests {
 
     #[test]
     fn maps_unknown_status_to_other() {
-        let err = BridgeError::from_response(418, &json!({ "message": "teapot" }));
+        let err = BridgeError::from_response(418, &json!({ "error": "teapot" }));
         match err {
             BridgeError::Other { status, message } => {
                 assert_eq!(status, 418);

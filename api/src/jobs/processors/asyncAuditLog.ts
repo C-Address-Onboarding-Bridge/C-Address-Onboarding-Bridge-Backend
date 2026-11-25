@@ -10,13 +10,10 @@ export async function processAuditLog(job: Job<AuditLogJobData>): Promise<void> 
   const end = asyncPipelineJobDuration.startTimer();
   try {
     const { type, payload, actor, triggeredAt } = job.data;
-    // #1053 — await so DB insert failures reject this promise and BullMQ
-    // retries the job. triggeredAt folded into payload so it is no longer lost.
-    await integrityAuditLog.append(
-      type as AuditEventType,
-      { ...payload, triggeredAt },
-      actor,
-    );
+    // Jobs enqueued before triggeredAt existed have none; stamp those now
+    // rather than writing NaN into the chain.
+    const timestamp = Number.isFinite(triggeredAt) ? triggeredAt : Date.now();
+    integrityAuditLog.append(type as AuditEventType, payload, actor, timestamp);
     logger.debug({ jobId: job.id, type }, 'audit log processed');
   } catch (error) {
     asyncPipelineFailureCounter.inc();

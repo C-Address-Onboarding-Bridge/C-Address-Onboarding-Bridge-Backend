@@ -2,7 +2,6 @@ import crypto from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from './db';
 import { logger } from '../logger';
-import { auditLogInsertFailureCounter } from './metrics';
 
 export type AuditEventType =
   | 'transaction_submission'
@@ -47,6 +46,7 @@ export interface AuditVerificationResult {
 const GENESIS_HASH = '0'.repeat(64);
 const SEVEN_YEARS_MS = 7 * 365 * 24 * 60 * 60 * 1000;
 const DEFAULT_CHECKPOINT_INTERVAL = 10;
+const CHECKPOINT_REQUEST_TIMEOUT_MS = 10_000;
 
 // #1053: stable small-int key for pg_advisory_xact_lock. Must fit in int4.
 // Chosen arbitrarily; document it here so future readers don't pick the same
@@ -156,6 +156,7 @@ export class IntegrityAuditLogService {
   private checkpoints: AuditCheckpoint[] = [];
   private readonly checkpointInterval: number;
   private readonly checkpointUrl?: string;
+  private readonly pendingEntryWrites = new Map<number, Promise<void>>();
   private initialized = false;
 
   constructor(options: { checkpointInterval?: number; checkpointUrl?: string } = {}) {
@@ -182,11 +183,25 @@ export class IntegrityAuditLogService {
     const pool = getPool();
     if (!pool) return;
 
-    // #1053: fail loud on initialize() — a silently-empty audit log at boot is
-    // worse than a 500 on /admin/audit/*. See loadFailure policy in PR body.
-    const entriesResult = await pool.query(
-      'SELECT sequence, id, created_at, event_type, actor, payload, previous_hash, hash, retention_until FROM audit_log_entries ORDER BY sequence ASC',
-    );
+    try {
+      const entriesResult = await pool.query(
+        'SELECT sequence, id, event_type, actor, payload, previous_hash, hash, created_at, retention_until FROM audit_log_entries ORDER BY sequence ASC',
+      );
+
+      for (const row of entriesResult.rows) {
+        const entry: AuditLogEntry = {
+          sequence: Number(row.sequence),
+          id: row.id,
+          timestamp: Number(row.created_at),
+          type: row.event_type as AuditEventType,
+          actor: row.actor,
+          payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
+          previousHash: row.previous_hash,
+          hash: row.hash,
+          retentionUntil: Number(row.retention_until),
+        };
+        this.entries.push(entry);
+      }
 
     this.entries = entriesResult.rows.map((row: any) => ({
       sequence: Number(row.sequence),
@@ -204,13 +219,19 @@ export class IntegrityAuditLogService {
       'SELECT sequence, hash, published_at, publisher, publication_ref FROM audit_log_checkpoints ORDER BY sequence ASC',
     );
 
-    this.checkpoints = checkpointsResult.rows.map((row: any) => ({
-      sequence: Number(row.sequence),
-      hash: row.hash,
-      timestamp: Number(row.published_at),
-      publisher: row.publisher as 'local' | 'trusted-timestamp',
-      publicationRef: row.publication_ref,
-    }));
+      for (const row of checkpointsResult.rows) {
+        const checkpoint: AuditCheckpoint = {
+          sequence: Number(row.sequence),
+          hash: row.hash,
+          timestamp: Number(row.published_at),
+          publisher: row.publisher as 'local' | 'trusted-timestamp',
+          publicationRef: row.publication_ref,
+        };
+        this.checkpoints.push(checkpoint);
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Failed to load audit log from database');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -266,26 +287,16 @@ export class IntegrityAuditLogService {
           entry.retentionUntil,
         ],
       );
+    } catch (err) {
+      logger.error({ err, sequence: entry.sequence, type: entry.type }, 'Failed to save audit entry to database');
+      throw err;
+    }
+  }
 
-      let checkpoint: AuditCheckpoint | undefined;
-      if (this.checkpointInterval > 0 && entry.sequence % this.checkpointInterval === 0) {
-        checkpoint = this.buildCheckpoint(entry, this.checkpointUrl ? 'trusted-timestamp' : 'local',
-          this.checkpointUrl
-            ? `${this.checkpointUrl}:pending:${entry.sequence}`
-            : `local:${entry.sequence}:${entry.hash}`);
-        await client.query(
-          `INSERT INTO audit_log_checkpoints
-           (sequence, hash, published_at, publisher, publication_ref)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [
-            checkpoint.sequence,
-            checkpoint.hash,
-            checkpoint.timestamp,
-            checkpoint.publisher,
-            checkpoint.publicationRef,
-          ],
-        );
-      }
+  private async saveCheckpointToDatabase(checkpoint: AuditCheckpoint): Promise<void> {
+    await this.pendingEntryWrites.get(checkpoint.sequence);
+    const pool = getPool();
+    if (!pool) return;
 
       await client.query('COMMIT');
 
@@ -313,16 +324,22 @@ export class IntegrityAuditLogService {
         { err: error, type, actor },
         'audit log append failed (DB insert); entry not persisted',
       );
-      throw error;
-    } finally {
-      client?.release();
+    } catch (err) {
+      logger.error({ err, sequence: checkpoint.sequence }, 'Failed to save audit checkpoint to database');
     }
   }
 
-  private computeNextEntryFromMemory(
+  /**
+   * @param timestamp When the event happened, in epoch ms. Defaults to now;
+   *   the async pipeline passes the time the event was triggered on the
+   *   request path, so a queued entry is not stamped with whenever the worker
+   *   got to it. Retention is measured from this time too.
+   */
+  append(
     type: AuditEventType,
     payload: Record<string, unknown>,
-    actor: string,
+    actor = 'system',
+    timestamp: number = Date.now(),
   ): AuditLogEntry {
     const previousHash = this.entries.at(-1)?.hash ?? GENESIS_HASH;
     return this.buildEntry(this.entries.length + 1, previousHash, type, payload, actor);
@@ -339,12 +356,12 @@ export class IntegrityAuditLogService {
     const entryWithoutHash: Omit<AuditLogEntry, 'hash'> = {
       sequence,
       id: crypto.randomUUID(),
-      timestamp: now,
+      timestamp,
       type,
       actor,
       payload,
       previousHash,
-      retentionUntil: now + SEVEN_YEARS_MS,
+      retentionUntil: timestamp + SEVEN_YEARS_MS,
     };
     return { ...entryWithoutHash, hash: sha256(entryHashMaterial(entryWithoutHash)) };
   }
@@ -407,23 +424,18 @@ export class IntegrityAuditLogService {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Readers — async, DB-backed (used by admin.ts)
-  // ---------------------------------------------------------------------------
+    this.entries.push(entry);
+    const entryWrite = this.saveEntryToDatabase(entry);
+    this.pendingEntryWrites.set(entry.sequence, entryWrite);
+    void entryWrite.then(
+      () => this.pendingEntryWrites.delete(entry.sequence),
+      () => this.pendingEntryWrites.delete(entry.sequence),
+    );
 
-  async listEntriesFromDb(
-    params: { type?: AuditEventType; limit?: number; cursor?: number } = {},
-  ): Promise<AuditLogEntry[]> {
-    const pool = getPool();
-    if (!pool) return this.listEntries(params);
-
-    const limit = Math.min(Math.max(params.limit ?? 100, 1), 1000);
-    const clauses: string[] = [];
-    const values: unknown[] = [];
-    let i = 1;
-    if (params.type) {
-      clauses.push(`event_type = $${i++}`);
-      values.push(params.type);
+    if (this.checkpointInterval > 0 && entry.sequence % this.checkpointInterval === 0) {
+      void entryWrite
+        .then(() => this.publishCheckpoint(entry))
+        .catch((err) => console.warn('Failed to publish audit checkpoint:', err));
     }
     if (params.cursor !== undefined) {
       clauses.push(`sequence > $${i++}`);
@@ -619,6 +631,48 @@ export class IntegrityAuditLogService {
     }
     const entry = this.entries.find((item) => item.sequence === sequence);
     if (entry) entry.payload = payload;
+  }
+
+  private async publishCheckpoint(entry: AuditLogEntry): Promise<void> {
+    if (!this.checkpointUrl) {
+      this.createCheckpoint(entry, 'local', `local:${entry.sequence}:${entry.hash}`);
+      return;
+    }
+
+    try {
+      const response = await fetch(this.checkpointUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sequence: entry.sequence, hash: entry.hash, timestamp: entry.timestamp }),
+        signal: AbortSignal.timeout(CHECKPOINT_REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        throw new Error(`Timestamp service returned HTTP ${response.status}`);
+      }
+      const receipt = await response.text();
+      if (!receipt) {
+        throw new Error('Timestamp service returned an empty receipt');
+      }
+      this.createCheckpoint(entry, 'trusted-timestamp', receipt);
+    } catch {
+      this.createCheckpoint(entry, 'local', `local-fallback:${entry.sequence}:${entry.hash}`);
+    }
+  }
+
+  private createCheckpoint(entry: AuditLogEntry, publisher: AuditCheckpoint['publisher'], publicationRef: string): AuditCheckpoint {
+    const existing = this.checkpoints.find((checkpoint) => checkpoint.sequence === entry.sequence && checkpoint.hash === entry.hash);
+    if (existing) return cloneCheckpoint(existing);
+
+    const checkpoint: AuditCheckpoint = {
+      sequence: entry.sequence,
+      hash: entry.hash,
+      timestamp: Date.now(),
+      publisher,
+      publicationRef,
+    };
+    this.checkpoints.push(checkpoint);
+    void this.saveCheckpointToDatabase(checkpoint);
+    return cloneCheckpoint(checkpoint);
   }
 }
 

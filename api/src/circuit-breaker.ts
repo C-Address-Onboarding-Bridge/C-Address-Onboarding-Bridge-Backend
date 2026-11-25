@@ -39,7 +39,7 @@ export class CircuitBreaker {
     this.halfOpenMaxRequests = config.halfOpenMaxRequests ?? 3;
   }
 
-  async execute<T>(fn: () => Promise<T>): Promise<T> {
+  async execute<T>(fn: () => Promise<T>, isFailure: (err: unknown) => boolean = () => true): Promise<T> {
     if (this.state === CircuitState.OPEN) {
       if (Date.now() - this.lastFailureTime! >= this.resetTimeout) {
         this.transition(CircuitState.HALF_OPEN);
@@ -61,7 +61,7 @@ export class CircuitBreaker {
       this.onSuccess();
       return result;
     } catch (err) {
-      this.onFailure();
+      if (isFailure(err)) this.onFailure();
       throw err;
     }
   }

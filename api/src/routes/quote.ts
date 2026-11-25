@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
+import { STELLAR_ADDRESS_REGEX, isValidStellarAddress } from '../utils/constants';
 import { sorobanService } from '../services/soroban';
 import { buildCacheKey, cacheDelPattern, CACHE_TTL } from '../services/cache';
 import { cacheMiddleware } from '../middleware/cache';
@@ -12,9 +12,9 @@ export const quoteRouter = Router();
 const getQuoteSchema = z.object({
   sourceAsset: z.string().min(1),
   amount: z.string().regex(/^\d+$/, 'amount must be an integer string (stroops)'),
-  targetAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid target Stellar address'),
-  sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid source Stellar address').optional(),
-  token: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid token Stellar address').optional(),
+  targetAddress: z.string().regex(STELLAR_ADDRESS_REGEX).refine(isValidStellarAddress, 'invalid target Stellar address'),
+  sourceAddress: z.string().regex(STELLAR_ADDRESS_REGEX).refine(isValidStellarAddress, 'invalid source Stellar address').optional(),
+  token: z.string().regex(STELLAR_ADDRESS_REGEX).refine(isValidStellarAddress, 'invalid token Stellar address').optional(),
 });
 
 async function computeQuote(req: Request) {

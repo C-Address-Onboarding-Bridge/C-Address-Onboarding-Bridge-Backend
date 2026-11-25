@@ -111,6 +111,11 @@ export function initializeSecrets(): void {
       const value = readSecret(provider, definition, localSecrets);
       if (!value) {
         audit({ ...baseEvent, result: 'missing' });
+        // A critical secret must be non-empty; an empty critical value is as
+        // fatal as a lookup error, not a silently-skipped optional one.
+        if (definition.critical) {
+          throw new Error(`critical secret ${definition.env} resolved to an empty value`);
+        }
         continue;
       }
       process.env[definition.env] = value;

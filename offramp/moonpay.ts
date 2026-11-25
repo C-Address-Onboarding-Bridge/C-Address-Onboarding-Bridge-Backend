@@ -4,6 +4,8 @@ import crypto from 'crypto';
 export interface MoonpayConfig {
   apiKey: string;
   secretKey: string;
+  /** Dedicated webhook signing key (separate from secretKey). */
+  webhookKey?: string;
 }
 
 /** Parameters for building a MoonPay widget URL. */
@@ -49,18 +51,57 @@ export function createMoonpayWidgetUrl(config: MoonpayConfig, params: MoonpayPur
 }
 
 /**
- * Verifies a MoonPay webhook HMAC-SHA256 signature.
+ * Verifies a MoonPay V2 webhook signature.
  *
- * @param config - MoonPay credentials (only `secretKey` is used).
- * @param rawBody - Raw request body string received from MoonPay.
- * @param signature - Value of the `x-moonpay-signature` header.
- * @returns `true` when the signature matches, `false` otherwise (including
- * when the signature has a different byte length than the computed HMAC).
+ * MoonPay signs webhooks with the `Moonpay-Signature-V2` header formatted as:
+ *   `t=<unix-timestamp-ms>,s=<hex-encoded-hmac-sha256>`
+ * The HMAC covers `${timestamp}.${rawBody}` using the dedicated `webhookKey`.
+ *
+ * @param config - MoonPay credentials. `webhookKey` is used when present,
+ *   otherwise falls back to `secretKey` for backward compatibility.
+ * @param rawBody - Raw request body string exactly as received.
+ * @param signature - Value of the `Moonpay-Signature-V2` header.
+ * @param toleranceMs - Maximum age of the timestamp in milliseconds (default 5 min).
+ * @returns `true` when the signature is valid and the timestamp is fresh.
  */
-export function verifyMoonpayWebhook(config: MoonpayConfig, rawBody: string, signature: string): boolean {
-  const expected = crypto.createHmac('sha256', config.secretKey).update(rawBody).digest();
-  const received = Buffer.from(signature, 'base64');
-  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
+export function verifyMoonpayWebhook(
+  config: MoonpayConfig,
+  rawBody: string,
+  signature: string,
+  toleranceMs = 5 * 60 * 1000,
+): boolean {
+  if (typeof signature !== 'string' || !signature.includes(',')) return false;
+
+  const parts = signature.split(',');
+  let timestamp: string | undefined;
+  let hmacHex: string | undefined;
+
+  for (const part of parts) {
+    const eqIdx = part.indexOf('=');
+    if (eqIdx === -1) return false;
+    const k = part.slice(0, eqIdx).trim();
+    const v = part.slice(eqIdx + 1).trim();
+    if (k === 't') timestamp = v;
+    else if (k === 's') hmacHex = v;
+  }
+
+  if (!timestamp || !hmacHex) return false;
+
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts)) return false;
+
+  // Reject stale timestamps
+  if (Math.abs(Date.now() - ts) > toleranceMs) return false;
+
+  const signingKey = config.webhookKey ?? config.secretKey;
+  const payload = `${timestamp}.${rawBody}`;
+  const expected = crypto
+    .createHmac('sha256', signingKey)
+    .update(payload)
+    .digest('hex');
+
+  if (expected.length !== hmacHex.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(hmacHex, 'hex'));
 }
 
 /**

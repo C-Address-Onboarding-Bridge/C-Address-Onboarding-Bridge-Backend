@@ -20,6 +20,9 @@ import {
   Token,
   TokenMetadata,
   TokenMetadataParams,
+  Transaction,
+  TransactionFilters,
+  AutoPaginateOptions,
 } from "./types.js";
 import { tokenToSourceAsset, tokenFromLegacy, getDefaultDecimals, isSacTokenAddress, isSacToken, validateSacTokenAddress } from "./token.js";
 import { generateIdempotencyKey } from "./utils.js";
@@ -29,11 +32,11 @@ import {
   parseHttpError,
   NetworkError,
   TimeoutError,
-  ServerError,
   BridgeError,
   ServerError,
   ValidationError,
 } from "./errors.js";
+import { PaginationHelper } from "./pagination.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -222,14 +225,10 @@ export class BridgeClient {
           const errBody = await res.json().catch(() => ({}));
           const bridgeErr = parseHttpError(
             res.status,
-            errBody as {
-              message?: string;
-              code?: string;
-              fields?: Record<string, string>;
-              retryAfter?: number;
-            },
+            errBody as Parameters<typeof parseHttpError>[1],
             undefined,
             this.config.locale,
+            res.headers?.get?.("retry-after"),
           );
           if (
             bridgeErr.retryable &&
@@ -337,19 +336,13 @@ export class BridgeClient {
   async requestPaginated<T>(
     path: string,
     params?: PaginatedRequestParams,
+    extraParams?: RequestParams,
   ): Promise<PaginatedResponse<T>> {
-    const queryParams: RequestParams = {};
-    if (params?.cursor !== undefined) queryParams["cursor"] = params.cursor;
-    if (params?.limit !== undefined)
-      queryParams["limit"] = String(params.limit);
-    if (params?.offset !== undefined)
-      queryParams["offset"] = String(params.offset);
-    return this.request<PaginatedResponse<T>>(
-      "GET",
-      path,
-      undefined,
-      queryParams,
-    );
+    const queryParams: RequestParams = { ...extraParams };
+    if (params?.cursor !== undefined) queryParams['cursor'] = params.cursor;
+    if (params?.limit !== undefined) queryParams['limit'] = String(params.limit);
+    if (params?.offset !== undefined) queryParams['offset'] = String(params.offset);
+    return this.request<PaginatedResponse<T>>('GET', path, undefined, queryParams);
   }
 
    async getQuote(params: QuoteParams): Promise<Quote> {
@@ -591,6 +584,41 @@ export class BridgeClient {
       "POST",
       "/api/v1/cex/route",
       params as unknown as Record<string, unknown>,
+    );
+  }
+
+  /**
+   * Lists transactions with optional filters and cursor pagination.
+   * Calls GET /api/v1/transactions.
+   */
+  async listTransactions(
+    filters?: TransactionFilters & PaginatedRequestParams,
+  ): Promise<PaginatedResponse<Transaction>> {
+    const { cursor, limit, offset, ...rest } = filters ?? {};
+    const extraParams: RequestParams = {};
+    if (rest.status !== undefined) extraParams['status'] = rest.status;
+    if (rest.fromDate !== undefined) extraParams['fromDate'] = rest.fromDate;
+    if (rest.toDate !== undefined) extraParams['toDate'] = rest.toDate;
+    if (rest.minAmount !== undefined) extraParams['minAmount'] = rest.minAmount;
+    if (rest.maxAmount !== undefined) extraParams['maxAmount'] = rest.maxAmount;
+    return this.requestPaginated<Transaction>(
+      '/api/v1/transactions',
+      { cursor, limit, offset },
+      extraParams,
+    );
+  }
+
+  /**
+   * Returns a PaginationHelper that iterates over all transaction pages
+   * matching the given filters. Use `.pages()` or `.all()` on the result.
+   */
+  iterateTransactions(
+    filters?: TransactionFilters,
+    options?: AutoPaginateOptions,
+  ): PaginationHelper<Transaction> {
+    return new PaginationHelper<Transaction>(
+      (paginationParams) => this.listTransactions({ ...filters, ...paginationParams }),
+      options,
     );
   }
 

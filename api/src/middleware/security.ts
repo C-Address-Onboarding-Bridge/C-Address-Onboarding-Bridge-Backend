@@ -1,21 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
+import { ZodError } from 'zod';
 import { logger } from '../logger';
+import { AppError } from './error';
+import { CircuitOpenError } from '../circuit-breaker';
 
-const SQL_PATTERNS = [
-  /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|UNION|TRUNCATE|DECLARE|CAST|CONVERT)\b)/i,
-  // Detect stored procedure calls and comment markers only in specific contexts
-  /\b(xp_|sp_)[\w]+/i,
-  // Only match comment patterns when clearly isolated (not in normal text)
-  /\/\*[\s\S]*?\*\//,
-  /--\s*[\w]/i,
-  // SQL statement terminator must be followed by another keyword or be at end
-  /;\s*(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|EXEC|UNION|DECLARE)\b/i,
-  /(\bOR\b|\bAND\b)\s+['"]?\d+['"]?\s*=\s*['"]?\d+['"]?/i,
-  /'\s*(OR|AND)\s*'/i,
-  /SLEEP\s*\(\d+\)/i,
-  /BENCHMARK\s*\(/i,
-];
-
+// The API uses parameterised queries everywhere, so a keyword-based SQL
+// scan has no injection to catch and only produces false positives on
+// ordinary input (key names like "Create payouts key", URLs containing
+// "cast", etc. — #1029). Dropped entirely.
 const NOSQL_PATTERNS = [
   /\$where\b/,
   /\$(ne|gt|lt|gte|lte|in|nin|exists|regex|options|elemMatch|size|all|slice)\b/,
@@ -140,7 +132,19 @@ export function requestSizeLimiting(req: Request, res: Response, next: NextFunct
   next();
 }
 
-const FREE_TEXT_FIELDS = new Set(['memo', 'description', 'notes', 'comment', 'message']);
+const FREE_TEXT_FIELDS = new Set(['memo', 'description', 'notes', 'comment', 'message', 'name']);
+
+/**
+ * URL fields are validated structurally (e.g. via zod .url()) rather than by
+ * keyword scan: a legitimate callback URL's query string (?sessionToken=...)
+ * or path can coincidentally match the XSS `on\w+=` pattern (#1029).
+ */
+const URL_FIELDS = new Set(['url', 'redirecturl', 'callbackurl', 'webhookurl']);
+
+function isUrlField(fieldPath: string): boolean {
+  const fieldName = fieldPath.split('.').pop()?.toLowerCase() ?? '';
+  return URL_FIELDS.has(fieldName);
+}
 
 /**
  * Fields whose values are binary/encoded payloads (base64 XDR, hex hashes,
@@ -189,10 +193,6 @@ export function injectionProtection(req: Request, res: Response, next: NextFunct
       if (isInEncodedField) {
         return null;
       }
-      // Skip SQL patterns for freetext fields; always check NoSQL and XSS
-      if (!isInFreetextField && detectPatterns([obj], SQL_PATTERNS)) {
-        return { match: SQL_PATTERNS.find((p) => testPattern(p, obj)) as RegExp, field: path || 'unknown' };
-      }
       if (detectPatterns([obj], NOSQL_PATTERNS)) {
         return { match: NOSQL_PATTERNS.find((p) => testPattern(p, obj)) as RegExp, field: path || 'unknown' };
       }
@@ -224,7 +224,7 @@ export function injectionProtection(req: Request, res: Response, next: NextFunct
           value,
           childPath,
           isInFreetextField || isFreetextField(childPath),
-          isInEncodedField || isEncodedField(childPath),
+          isInEncodedField || isEncodedField(childPath) || isUrlField(childPath),
         );
         if (result) return result;
       }
@@ -283,6 +283,16 @@ export function parameterPollutionProtection(req: Request, res: Response, next: 
  * then query-shape validation, then the pattern scan over body/query/params.
  */
 export function securityMiddleware(req: Request, res: Response, next: NextFunction): void {
+  // Provider webhooks (/api/webhook/*) are authenticated by HMAC signature
+  // verification, and their body is opaque provider JSON parsed as raw text,
+  // not structured fields we can selectively allow-list. Scanning it for
+  // keywords produces false positives (e.g. a callback URL containing
+  // "...?transactionId=1") that reject a valid, signed callback before
+  // signature verification even runs (#1029).
+  if (req.path.startsWith('/webhook/')) {
+    next();
+    return;
+  }
   requestSizeLimiting(req, res, (err?: unknown) => {
     if (err) {
       next(err);
@@ -345,8 +355,12 @@ export function suspiciousRateLimiting(req: Request, res: Response, next: NextFu
 }
 
 /**
- * Strips HTML/script fragments from error messages before they are sent to
- * clients, so reflected input cannot execute in a browser.
+ * Strips HTML/script fragments from an error's message so reflected input
+ * cannot execute in a browser, then forwards the error to errorHandler.
+ * Known error types (ZodError/AppError/CircuitOpenError) are left unchanged:
+ * errorHandler maps those to their proper status codes, and sanitizing their
+ * message here would corrupt the structured details (e.g. ZodError.errors)
+ * errorHandler relies on.
  */
 export function xssErrorSanitizer(err: unknown, req: Request, res: Response, next: NextFunction): void {
   if (res.headersSent) {
@@ -354,12 +368,17 @@ export function xssErrorSanitizer(err: unknown, req: Request, res: Response, nex
     return;
   }
 
-  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : 'Internal server error';
-  const sanitized = message
-    .replace(/<[^>]*>/g, '')
-    .replace(/javascript:/gi, '')
-    .replace(/on\w+\s*=/gi, '');
+  if (err instanceof ZodError || err instanceof AppError || err instanceof CircuitOpenError) {
+    next(err);
+    return;
+  }
 
-  logger.error({ err, ip: req.ip, path: req.path, method: req.method }, 'request failed');
-  res.status(500).json({ error: 'internal_error', message: sanitized });
+  if (err instanceof Error) {
+    err.message = err.message
+      .replace(/<[^>]*>/g, '')
+      .replace(/javascript:/gi, '')
+      .replace(/on\w+\s*=/gi, '');
+  }
+
+  next(err);
 }

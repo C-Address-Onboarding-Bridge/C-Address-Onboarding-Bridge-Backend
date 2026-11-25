@@ -14,9 +14,12 @@
 //!                       AccumulatedFees
 //! ```
 //!
-//! The contract itself does **not** move tokens; callers perform the actual
-//! token transfer off-chain (or via a separate SAC call) and invoke
-//! [`OnboardingBridge::fund_c_address`] to record the event and accrue fees.
+//! The contract **does** move tokens. Funding entry points
+//! (`fund_c_address`, `batch_fund_c_address`, `route_from_exchange`) pull the
+//! gross `amount` from the source into the contract with the token's
+//! `transfer(source, contract, amount)`, then forward `net_amount` to the
+//! target C-address with `transfer(contract, target, net_amount)`. The fee
+//! stays in the contract and is tracked in the accumulated-fee counters.
 //!
 //! ## Fee Model
 //!
@@ -27,34 +30,52 @@
 //! net_amount = amount − fee_amount
 //! ```
 //!
-//! Fees accumulate in [`DataKey::AccumulatedFees`] and can be withdrawn via
-//! `withdraw_fees` (admin, single or multi-recipient) or
-//! automatically via `trigger_auto_withdraw` (permissionless,
-//! fires when accumulated ≥ threshold).
+//! Fees accumulate in [`DataKey::AccumulatedFees`] (legacy total) and
+//! [`DataKey::AccumulatedFeesByToken`] (per token). They are withdrawn only
+//! through the multisig proposal flow: an admin calls `propose` with
+//! `ProposalAction::WithdrawFees(to, token, amount)`, admins `approve` until
+//! the threshold is met, the `MIN_EXEC_DELAY` window elapses, and anyone
+//! calls `execute`. There is no direct `withdraw_fees` entry point, no
+//! auto-withdraw trigger and no multi-recipient fee split.
 //!
-//! Multi-recipient splits are configured through
-//! `set_fee_recipients`; each recipient's share must be
-//! given in bps and all shares must sum to exactly 10 000.  The **last**
-//! recipient always receives the remainder to absorb integer-division dust.
+//! ## Governance
+//!
+//! `ProposalAction` covers `SetFee`, `SetFeeTokenWhitelist`,
+//! `SetFeeTokenRate`, `WithdrawFees`, `Pause`, `Unpause`, `Upgrade`,
+//! `RotateAdmins`, `SetThreshold`, `ArchiveOldEntries` and `SetRebateTier`.
 //!
 //! ## Storage Layout
 //!
-//! All keys live in **instance** storage (contract lifetime):
+//! Keys are spread over instance, persistent and temporary storage:
 //!
-//! | Key                    | Type            | Description                         |
-//! |------------------------|-----------------|-------------------------------------|
-//! | `Admin`                | `Address`       | Contract administrator              |
-//! | `FeeBps`               | `u32`           | Current fee rate (0–10 000)         |
-//! | `AccumulatedFees`      | `i128`          | Total unclaimed fees (stroops)      |
-//! | `Version`              | `u32`           | Contract schema version             |
-//! | `FeeRecipients`        | `Vec<FeeRecipient>` | Optional multi-recipient split  |
-//! | `AutoWithdrawThreshold`| `i128`          | Auto-withdraw trigger level; 0 = off|
+//! | Key                         | Type          | Storage    | Description                          |
+//! |-----------------------------|---------------|------------|--------------------------------------|
+//! | `FeeBps`                    | `u32`         | instance   | Current fee rate (bps)               |
+//! | `MaxFeeBps`                 | `u32`         | instance   | Upper bound for the fee rate         |
+//! | `AccumulatedFees`           | `i128`        | instance   | Total unclaimed fees                 |
+//! | `AccumulatedFeesByToken`    | `i128`        | instance   | Unclaimed fees per token             |
+//! | `Version`                   | `u32`         | instance   | Contract version, +1 per upgrade     |
+//! | `Paused`                    | `bool`        | instance   | Pause flag                           |
+//! | `Admins` / `Threshold`      | `Vec<Address>` / `u32` | instance | Multisig admin set and threshold |
+//! | `InitializationParams`      | struct        | instance   | Parameters given to `initialize`     |
+//! | `MinAmount` / `MaxAmount`   | `i128`        | instance   | Funding amount bounds                |
+//! | `ExecutionDelay`            | `u32`         | instance   | Execution delay setting              |
+//! | `ProposalNonce`, `ActiveProposalIds`, `NextPruneId` | `u32`, `Vec<u32>`, `u32` | instance | Proposal bookkeeping |
+//! | `FundingCount`, `HotCount`, `NextArchiveId`, `NextArchiveRecordId` | `u32` | instance | Funding record counters |
+//! | `TierCount`                 | `u32`         | instance   | Number of rebate tiers               |
+//! | `TotalVolume`, `UniqueFunderCount` | `i128`, `u32` | instance | Analytics counters           |
+//! | `FeeTokenWhitelist(Address)`, `FeeTokenRate(Address)` | `bool`, `u32` | persistent | Per-token fee config |
+//! | `Proposal(u32)`, `ProposalApproval(u32, Address)` | struct, `bool` | persistent | Proposals and approvals |
+//! | `Funding(u32)`, `ArchivedHash(u32)` | struct, hash | persistent | Funding records and archive hashes |
+//! | `UserVolume(Address, Address)`, `TotalVolumeByToken(Address)`, `UniqueFunder(Address)` | `i128` / marker | persistent | Volume analytics |
+//! | `TierThreshold(u32)`, `TierDiscount(u32)` | `i128`, `u32` | persistent | Rebate tier definitions |
+//! | `ReentrancyGuard`           | `bool`        | temporary  | Reentrancy lock during funding       |
 
 #![no_std]
 #![allow(clippy::needless_borrows_for_generic_args)]
 
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, crypto::Hash, token, Address, Bytes,
+    contract, contracterror, contractevent, contractimpl, contracttype, crypto::Hash, token, Address, Bytes,
     BytesN, Env, String, Vec,
 };
 
@@ -120,7 +141,13 @@ pub enum BridgeError {
     InsufficientAccumulatedFees = 32,
     DiscountTooHigh = 33,
     TierCapExceeded = 34,
+    /// The admin list contains the same address more than once.
+    DuplicateAdmin = 35,
+    AlreadyInitialized = 36,
 }
+
+#[cfg(test)]
+mod admin_governance_test;
 
 #[contractevent(topics = ["initialize"], data_format = "vec")]
 #[derive(Clone)]
@@ -319,6 +346,8 @@ pub enum ProposalAction {
     WithdrawFees(Address, Address, i128),
     Pause,
     Unpause,
+    /// Replaces the live contract WASM with the given hash (governed, timelocked).
+    Upgrade(BytesN<32>),
     /// Replaces the entire admin set. The current threshold must still be
     /// satisfiable by the new admin count, or execution panics.
     RotateAdmins(Vec<Address>),
@@ -353,6 +382,9 @@ pub struct Proposal {
     pub proposed_at: u32,
 }
 
+#[cfg(test)]
+mod governance_fixes_test;
+
 /// #20: Batch analytics view returned by `get_stats`.
 ///
 /// **Warning**: When multiple token types are active, `total_volume` and `total_fees`
@@ -370,6 +402,9 @@ pub struct Stats {
 
 #[contract]
 pub struct OnboardingBridge;
+
+#[cfg(test)]
+mod entrypoint_auth_test;
 
 fn rebate_bps(env: &Env, user: &Address, token: &Address) -> u32 {
     let volume: i128 = env
@@ -423,6 +458,13 @@ impl OnboardingBridge {
             if admin == contract_address {
                 return Err(BridgeError::AdminCannotBeContract);
             }
+            // Duplicates would count toward `admins.len()` in threshold
+            // checks but can only approve once, making a threshold unreachable.
+            for j in (i + 1)..admins.len() {
+                if admins.get_unchecked(j) == admin {
+                    return Err(BridgeError::DuplicateAdmin);
+                }
+            }
         }
         Ok(())
     }
@@ -473,7 +515,7 @@ impl OnboardingBridge {
         max_amount: i128,
     ) -> Result<(), BridgeError> {
         if env.storage().instance().has(&DataKey::Version) {
-            return Ok(());
+            return Err(BridgeError::AlreadyInitialized);
         }
         if admins.is_empty() {
             return Err(BridgeError::AdminsEmpty);
@@ -498,6 +540,12 @@ impl OnboardingBridge {
         }
 
         Self::validate_admins(&env, &admins)?;
+
+        // Every admin must authorize initialization so nobody can front-run
+        // the deployer and install their own governance.
+        for admin in admins.iter() {
+            admin.require_auth();
+        }
 
         env.storage().instance().set(&DataKey::Admins, &admins);
         env.storage()
@@ -524,9 +572,6 @@ impl OnboardingBridge {
         env.storage().instance().set(&DataKey::HotCount, &0u32);
         env.storage().instance().set(&DataKey::NextArchiveId, &0u32);
         env.storage().instance().set(&DataKey::NextArchiveRecordId, &1u32);
-        env.storage()
-            .instance()
-            .set(&DataKey::ExecutionDelay, &execution_delay);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::ProposalNonce, &0u32);
         env.storage()
@@ -555,6 +600,8 @@ impl OnboardingBridge {
             max_amount,
         }
         .publish(&env);
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -679,7 +726,7 @@ impl OnboardingBridge {
             .unwrap_or(false)
     }
 
-    pub fn get_admins(env: Env) -> Vec<Address> {
+    pub fn get_admins(env: Env) -> Result<Vec<Address>, BridgeError> {
         Self::extend_ttl(&env);
         env.storage()
             .instance()
@@ -687,7 +734,7 @@ impl OnboardingBridge {
             .ok_or(BridgeError::NotInitialized)
     }
 
-    pub fn get_threshold(env: Env) -> u32 {
+    pub fn get_threshold(env: Env) -> Result<u32, BridgeError> {
         Self::extend_ttl(&env);
         env.storage()
             .instance()
@@ -730,6 +777,7 @@ impl OnboardingBridge {
         amount: i128,
         memo: String,
     ) -> Result<i128, BridgeError> {
+        source.require_auth();
         Self::extend_ttl(&env);
         Self::pre_reentrancy_check(&env)?;
         Self::validate_c_address(&target)?;
@@ -808,22 +856,20 @@ impl OnboardingBridge {
                 .instance()
                 .set(&DataKey::AccumulatedFees, &new_accumulated);
 
-            if Self::is_fee_token_whitelisted(env.clone(), token_address.clone()) {
-                let token_fee_rate = Self::fee_token_rate(env.clone(), token_address.clone());
-                let token_fee = (fee * token_fee_rate as i128) / 10000;
-                let token_accumulated: i128 = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::AccumulatedFeesByToken(token_address.clone()))
-                    .unwrap_or(0);
-                let new_token_accumulated = token_accumulated
-                    .checked_add(token_fee)
-                    .expect("token fee accumulator overflow");
-                env.storage().instance().set(
-                    &DataKey::AccumulatedFeesByToken(token_address.clone()),
-                    &new_token_accumulated,
-                );
-            }
+            // Track the real fee per token (whitelisted or not) so that every
+            // token's fees can be withdrawn independently.
+            let token_accumulated: i128 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AccumulatedFeesByToken(token_address.clone()))
+                .unwrap_or(0);
+            let new_token_accumulated = token_accumulated
+                .checked_add(fee)
+                .expect("token fee accumulator overflow");
+            env.storage().instance().set(
+                &DataKey::AccumulatedFeesByToken(token_address.clone()),
+                &new_token_accumulated,
+            );
         }
         tk.transfer(&env.current_contract_address(), target, &net_amount);
 
@@ -902,6 +948,9 @@ impl OnboardingBridge {
                 .instance()
                 .set(&DataKey::UniqueFunderCount, &new_uc);
         }
+        // Keep the entry alive for both first-time and returning funders so
+        // it is never archived (which would make later funding fail).
+        Self::extend_persistent_ttl(env, &unique_key);
 
         Funded {
             source: source.clone(),
@@ -938,6 +987,15 @@ impl OnboardingBridge {
 
         for i in 0..count {
             Self::validate_c_address(&targets.get(i).unwrap())?;
+        }
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(BridgeError::ContractPaused);
         }
 
         Self::set_reentrancy_guard(&env);
@@ -988,7 +1046,11 @@ impl OnboardingBridge {
             return Err(BridgeError::ContractPaused);
         }
         exchange.require_auth();
-        Self::fund_c_address_internal(&env, &exchange, &target, &token_address, amount, &memo)
+        Self::set_reentrancy_guard(&env);
+        let result =
+            Self::fund_c_address_internal(&env, &exchange, &target, &token_address, amount, &memo);
+        Self::clear_reentrancy_guard(&env);
+        result
     }
 
     pub fn funding_count(env: Env) -> u32 {
@@ -1015,8 +1077,16 @@ impl OnboardingBridge {
             return Err(BridgeError::NoEntriesToArchive);
         }
 
+        let start: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextArchiveRecordId)
+            .unwrap_or(1);
+        if start > total {
+            return Err(BridgeError::NoEntriesToArchive);
+        }
         let mut hash_bytes = Bytes::new(env);
-        let end = start + archive_count - 1;
+        let end = core::cmp::min(start + archive_count - 1, total);
         for i in start..=end {
             if let Some(mut record) = env
                 .storage()
@@ -1110,7 +1180,12 @@ impl OnboardingBridge {
         (funding_count, archived_count, accumulated_fees, hot_count)
     }
 
-    pub fn propose(env: Env, proposer: Address, action: ProposalAction, expiry_blocks: u32) -> u32 {
+    pub fn propose(
+        env: Env,
+        proposer: Address,
+        action: ProposalAction,
+        expiry_blocks: u32,
+    ) -> Result<u32, BridgeError> {
         Self::extend_ttl(&env);
         proposer.require_auth();
 
@@ -1177,7 +1252,7 @@ impl OnboardingBridge {
         Ok(proposal_id)
     }
 
-    pub fn approve(env: Env, admin: Address, proposal_id: u32) {
+    pub fn approve(env: Env, admin: Address, proposal_id: u32) -> Result<(), BridgeError> {
         Self::extend_ttl(&env);
         admin.require_auth();
 
@@ -1222,9 +1297,11 @@ impl OnboardingBridge {
             approval_count: proposal.approval_count,
         }
         .publish(&env);
+
+        Ok(())
     }
 
-    pub fn execute(env: Env, proposal_id: u32) -> i128 {
+    pub fn execute(env: Env, proposal_id: u32) -> Result<i128, BridgeError> {
         Self::extend_ttl(&env);
         let threshold: u32 = env
             .storage()
@@ -1244,7 +1321,7 @@ impl OnboardingBridge {
         if proposal.executed {
             return Err(BridgeError::ProposalAlreadyExecuted);
         }
-        if proposal.approval_count < threshold {
+        if count_current_admin_approvals(&env, proposal_id)? < threshold {
             return Err(BridgeError::InsufficientApprovals);
         }
 
@@ -1256,6 +1333,7 @@ impl OnboardingBridge {
                 | ProposalAction::SetFee(_)
                 | ProposalAction::Pause
                 | ProposalAction::Unpause
+                | ProposalAction::Upgrade(_)
                 | ProposalAction::RotateAdmins(_)
                 | ProposalAction::SetThreshold(_)
         );
@@ -1263,6 +1341,18 @@ impl OnboardingBridge {
             if env.ledger().sequence() < proposal.proposed_at + MIN_EXEC_DELAY {
                 return Err(BridgeError::ExecutionTooSoon);
             }
+        }
+        // Fee/accounting actions change money flows just like the actions
+        // above, so they get the same transparency window.
+        let delayed_accounting = matches!(
+            proposal.action,
+            ProposalAction::SetRebateTier(_, _, _)
+                | ProposalAction::SetFeeTokenWhitelist(_, _)
+                | ProposalAction::SetFeeTokenRate(_, _)
+                | ProposalAction::ArchiveOldEntries(_)
+        );
+        if delayed_accounting && env.ledger().sequence() < proposal.proposed_at + MIN_EXEC_DELAY {
+            return Err(BridgeError::ExecutionTooSoon);
         }
 
         let mut executed_proposal = proposal.clone();
@@ -1319,10 +1409,7 @@ impl OnboardingBridge {
                 let key = DataKey::FeeTokenWhitelist(token.clone());
                 env.storage().persistent().set(&key, &enabled);
                 Self::extend_persistent_ttl(&env, &key);
-                env.events().publish(
-                    (Symbol::new(&env, "set_fee_token_whitelist"),),
-                    (token, enabled),
-                );
+                SetFeeTokenWhitelist { token, enabled }.publish(&env);
                 0i128
             }
             ProposalAction::SetFeeTokenRate(token, rate) => {
@@ -1331,8 +1418,7 @@ impl OnboardingBridge {
                 let key = DataKey::FeeTokenRate(token.clone());
                 env.storage().persistent().set(&key, &rate);
                 Self::extend_persistent_ttl(&env, &key);
-                env.events()
-                    .publish((Symbol::new(&env, "set_fee_token_rate"),), (token, rate));
+                SetFeeTokenRate { token, rate }.publish(&env);
                 0i128
             }
             ProposalAction::WithdrawFees(to, token, amount) => {
@@ -1343,27 +1429,22 @@ impl OnboardingBridge {
                     .get(&token_key)
                     .unwrap_or(0);
                 let withdraw_amount = if amount == 0 { token_accumulated } else { amount };
-                assert!(
-                    withdraw_amount <= token_accumulated,
-                    "insufficient accumulated fees"
-                );
-                let remaining = token_accumulated - withdraw_amount;
+                if withdraw_amount <= 0 || withdraw_amount > token_accumulated {
+                    return Err(BridgeError::InsufficientAccumulatedFees);
+                }
                 env.storage()
                     .instance()
-                    .set(&token_key, &remaining);
+                    .set(&token_key, &(token_accumulated - withdraw_amount));
+                // Keep the cross-token total as a reporting counter only.
                 let accumulated: i128 = env
                     .storage()
                     .instance()
                     .get(&DataKey::AccumulatedFees)
                     .unwrap_or(0);
-                let withdraw_amount = if amount == 0 { accumulated } else { amount };
-                if withdraw_amount > accumulated {
-                    return Err(BridgeError::InsufficientAccumulatedFees);
-                }
-                let remaining = accumulated - withdraw_amount;
-                env.storage()
-                    .instance()
-                    .set(&DataKey::AccumulatedFees, &(accumulated - withdraw_amount));
+                env.storage().instance().set(
+                    &DataKey::AccumulatedFees,
+                    &accumulated.saturating_sub(withdraw_amount),
+                );
                 let tk = token::Client::new(&env, &token);
                 tk.transfer(&env.current_contract_address(), &to, &withdraw_amount);
                 Withdrawn {
@@ -1382,6 +1463,10 @@ impl OnboardingBridge {
             ProposalAction::Unpause => {
                 env.storage().instance().set(&DataKey::Paused, &false);
                 Unpaused.publish(&env);
+                0i128
+            }
+            ProposalAction::Upgrade(wasm_hash) => {
+                upgrade::apply_upgrade(&env, wasm_hash);
                 0i128
             }
             ProposalAction::RotateAdmins(new_admins) => {
@@ -1431,7 +1516,9 @@ impl OnboardingBridge {
             }
             ProposalAction::SetRebateTier(tier_index, threshold, discount_bps) => {
                 assert!(discount_bps <= 5000, "discount capped at 50%");
-                assert!(tier_index < MAX_TIERS, "{}", ERR_TIER_CAP_EXCEEDED);
+                if tier_index >= MAX_TIERS {
+                    return Err(BridgeError::TierCapExceeded);
+                }
                 let threshold_key = DataKey::TierThreshold(tier_index);
                 let discount_key = DataKey::TierDiscount(tier_index);
                 env.storage().persistent().set(&threshold_key, &threshold);
@@ -1467,7 +1554,7 @@ impl OnboardingBridge {
 
     pub fn get_proposal(env: Env, proposal_id: u32) -> Result<Proposal, BridgeError> {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::Proposal(proposal_id))
             .ok_or(BridgeError::ProposalNotFound)
     }
@@ -1509,9 +1596,9 @@ impl OnboardingBridge {
     /// into instance storage and previously nothing ever removed them, so the
     /// contract's instance footprint grew forever with governance activity.
     /// This sweeps forward from the last pruned id, scanning at most
-    /// `max_scan` proposals, stopping early if it reaches a proposal that is
-    /// still active (neither executed nor expired) so a later call can pick
-    /// up from there once it becomes terminal. Returns the number of
+    /// `max_scan` proposals, skipping over proposals that are still
+    /// active (neither executed nor expired) while keeping the cursor at the
+    /// lowest active id so a later call can pick it up once it is terminal. Returns the number of
     /// proposals actually pruned.
     pub fn prune_proposals(env: Env, max_scan: u32) -> Result<u32, BridgeError> {
         let admins: Vec<Address> = env
@@ -1519,9 +1606,8 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::Admins)
             .ok_or(BridgeError::NotInitialized)?;
-        if !admins.is_empty() {
-            admins.get_unchecked(0).require_auth();
-        }
+        // Permissionless: pruning only deletes terminal (executed or expired)
+        // proposals, so no caller authorization is needed.
         Self::extend_ttl(&env);
 
         let nonce: u32 = env
@@ -1534,6 +1620,9 @@ impl OnboardingBridge {
             .instance()
             .get(&DataKey::NextPruneId)
             .unwrap_or(1);
+        // Lowest still-active id seen this call; the stored cursor never
+        // advances past it, but scanning continues beyond it.
+        let mut first_active: Option<u32> = None;
         let current_block = env.ledger().sequence();
 
         let mut pruned: u32 = 0;
@@ -1560,27 +1649,47 @@ impl OnboardingBridge {
                             .persistent()
                             .remove(&DataKey::ProposalApproval(cursor, proposal.proposer));
                         pruned += 1;
-                        cursor += 1;
-                    } else {
-                        // Still active: stop advancing so a future call
-                        // resumes here instead of skipping it permanently.
-                        break;
+                    } else if first_active.is_none() {
+                        // Still active: remember it so the stored cursor
+                        // resumes here, but keep scanning later proposals.
+                        first_active = Some(cursor);
                     }
                 }
                 None => {
                     // Already pruned in a previous call — keep advancing.
-                    cursor += 1;
                 }
             }
+            cursor += 1;
             scanned += 1;
         }
 
+        if let Some(id) = first_active {
+            cursor = id;
+        }
         env.storage().instance().set(&DataKey::NextPruneId, &cursor);
 
         ProposalsPruned { pruned, cursor }.publish(&env);
 
         Ok(pruned)
     }
+}
+
+/// Counts approvals on a proposal that were given by admins in the *current*
+/// admin set, so approvals from admins removed by `RotateAdmins` are ignored.
+fn count_current_admin_approvals(env: &Env, proposal_id: u32) -> Result<u32, BridgeError> {
+    let admins: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admins)
+        .ok_or(BridgeError::NotInitialized)?;
+    let mut count = 0u32;
+    for i in 0..admins.len() {
+        let key = DataKey::ProposalApproval(proposal_id, admins.get_unchecked(i));
+        if env.storage().persistent().has(&key) {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn is_admin_in_list(admins: &Vec<Address>, addr: &Address) -> bool {
@@ -1592,4 +1701,7 @@ fn is_admin_in_list(admins: &Vec<Address>, addr: &Address) -> bool {
     false
 }
 
+mod upgrade;
+#[cfg(test)]
+mod upgrade_test;
 mod test;

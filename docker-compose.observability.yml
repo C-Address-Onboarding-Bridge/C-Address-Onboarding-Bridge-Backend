@@ -23,6 +23,7 @@ services:
     volumes:
       - ./infrastructure/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infrastructure/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     secrets:
       - prometheus_scrape_key
@@ -58,6 +59,7 @@ services:
       - grafana_data:/var/lib/grafana
       - ./infrastructure/observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infrastructure/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards-monitoring:ro
     depends_on:
       - prometheus
       - loki
@@ -108,3 +110,10 @@ volumes:
   grafana_data:
   loki_data:
   alertmanager_data:
+
+# Prometheus scrape credential. Create it before starting the stack with an API key
+# that has the metrics:read scope (the API accepts it as `Authorization: Bearer <key>`):
+#   mkdir -p secrets && printf '%s' "<api-key-with-metrics:read>" > secrets/prometheus_scrape_key
+secrets:
+  prometheus_scrape_key:
+    file: ./secrets/prometheus_scrape_key

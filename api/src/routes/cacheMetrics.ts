@@ -4,7 +4,9 @@ import { getCacheMetrics, isRedisEnabled, getCacheClient } from '../services/cac
 export const cacheMetricsRouter = Router();
 
 /**
- * GET /api/v1/cache/metrics
+ * GET /api/cache-metrics
+ *
+ * Requires the `metrics:read` scope (enforced where this router is mounted).
  *
  * Returns cache statistics:
  *  - hits / misses / hitRatio  (in-process counters)

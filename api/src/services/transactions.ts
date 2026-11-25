@@ -2,6 +2,13 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { getPool } from './db';
 
+/**
+ * Maximum fee in basis points enforced by the Soroban bridge contract
+ * (`max_fee_bps` constant). Fee updates beyond this value are rejected
+ * both here and on-chain.
+ */
+export const CONTRACT_MAX_FEE_BPS = 1000;
+
 export type TransactionStatus = 'pending' | 'success' | 'failed';
 
 export interface TransactionRecord {
@@ -14,6 +21,8 @@ export interface TransactionRecord {
   fee: string;
   createdAt: string;
   currency: string;
+  /** Id of the API key that created this transaction; used for tenant scoping. */
+  apiKeyId: string;
 }
 
 export interface TransactionQueryParams {
@@ -26,6 +35,11 @@ export interface TransactionQueryParams {
   offset?: number;
   cursor?: string;
   format?: 'json' | 'csv';
+  /**
+   * Restricts results to transactions created by this API key. Required
+   * unless the caller holds `transactions:read:all`.
+   */
+  apiKeyId?: string;
 }
 
 export interface FeeConfigState {
@@ -50,72 +64,12 @@ export interface TransactionStats {
   averageAmount: string;
 }
 
-const seededTransactions: TransactionRecord[] = [
-  {
-    id: 'tx_1001',
-    txHash: '0xabc1001',
-    sourceAddr: 'GABC1001',
-    targetAddr: 'GXYZ1001',
-    status: 'success',
-    amount: '120.50',
-    fee: '0.36',
-    createdAt: '2026-06-20T10:15:00.000Z',
-    currency: 'USDC',
-  },
-  {
-    id: 'tx_1002',
-    txHash: '0xabc1002',
-    sourceAddr: 'GABC1002',
-    targetAddr: 'GXYZ1002',
-    status: 'pending',
-    amount: '80.00',
-    fee: '0.24',
-    createdAt: '2026-06-21T09:45:00.000Z',
-    currency: 'USDC',
-  },
-  {
-    id: 'tx_1003',
-    txHash: '0xabc1003',
-    sourceAddr: 'GABC1003',
-    targetAddr: 'GXYZ1003',
-    status: 'failed',
-    amount: '45.00',
-    fee: '0.14',
-    createdAt: '2026-06-22T05:30:00.000Z',
-    currency: 'USDC',
-  },
-  {
-    id: 'tx_1004',
-    txHash: '0xabc1004',
-    sourceAddr: 'GABC1004',
-    targetAddr: 'GXYZ1004',
-    status: 'success',
-    amount: '220.00',
-    fee: '0.66',
-    createdAt: '2026-06-23T12:45:00.000Z',
-    currency: 'USDC',
-  },
-  {
-    id: 'tx_1005',
-    txHash: '0xabc1005',
-    sourceAddr: 'GABC1005',
-    targetAddr: 'GXYZ1005',
-    status: 'pending',
-    amount: '99.99',
-    fee: '0.30',
-    createdAt: '2026-06-24T08:10:00.000Z',
-    currency: 'USDC',
-  },
-];
-
-const transactionStore: TransactionRecord[] = [...seededTransactions];
 let feeConfigState: FeeConfigState = {
   feeBps: config.soroban.feeBps,
   updatedAt: Date.now(),
   pendingFeeBps: null,
   timelockUntil: null,
 };
-let accumulatedFees = '1.20';
 const adminAuditLog: AdminAuditEntry[] = [];
 
 // #638 — helpers for DB-backed pagination
@@ -136,37 +90,85 @@ function rowToRecord(row: Record<string, unknown>): TransactionRecord {
       ? String(row['created_at_iso'])
       : new Date(Number(row['created_at'])).toISOString(),
     currency: String(row['currency'] ?? 'XLM'),
+    apiKeyId: String(row['api_key_id'] ?? 'legacy'),
   };
 }
 
-const DEFAULT_TRANSACTIONS_LIMIT = 20;
+const DEFAULT_TRANSACTIONS_LIMIT = 50;
+const MAX_TRANSACTIONS_LIMIT = 200;
 
-export function listTransactions(params: TransactionQueryParams = {}): { data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean } {
-  const { status, fromDate, toDate, minAmount, maxAmount, cursor, offset } = params;
-  const limit = params.limit ?? DEFAULT_TRANSACTIONS_LIMIT;
-
-  const filtered = transactionStore.filter((tx) => {
-    if (status && tx.status !== status) return false;
-    if (fromDate && tx.createdAt < fromDate) return false;
-    if (toDate && tx.createdAt > toDate) return false;
-    if (minAmount !== undefined && parseAmount(tx.amount) < parseAmount(minAmount)) return false;
-    if (maxAmount !== undefined && parseAmount(tx.amount) > parseAmount(maxAmount)) return false;
-    return true;
-  });
-
-  let startIndex = 0;
-  if (cursor) {
-    const cursorIndex = filtered.findIndex((tx) => tx.id === cursor);
-    startIndex = cursorIndex === -1 ? 0 : cursorIndex + 1;
-  } else if (offset) {
-    startIndex = offset;
+export async function listTransactions(params: TransactionQueryParams = {}): Promise<{ data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean }> {
+  const pool = getPool();
+  if (!pool) {
+    return { data: [], nextCursor: null, hasMore: false };
   }
 
-  const page = filtered.slice(startIndex, startIndex + limit);
-  const hasMore = startIndex + limit < filtered.length;
-  const nextCursor = hasMore ? page[page.length - 1]?.id ?? null : null;
+  // Clamp limit to [1, MAX_TRANSACTIONS_LIMIT]
+  const rawLimit = params.limit ?? DEFAULT_TRANSACTIONS_LIMIT;
+  const limit = Math.min(Math.max(Number.isInteger(rawLimit) && rawLimit > 0 ? rawLimit : DEFAULT_TRANSACTIONS_LIMIT, 1), MAX_TRANSACTIONS_LIMIT);
+  // Fetch one extra row to detect hasMore
+  const fetchLimit = limit + 1;
 
-  return { data: page, nextCursor, hasMore };
+  // Clamp offset to >= 0
+  const offset = Math.max(Number.isInteger(params.offset ?? 0) ? (params.offset ?? 0) : 0, 0);
+
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+  let idx = 1;
+
+  if (params.apiKeyId !== undefined) {
+    conditions.push(`api_key_id = $${idx++}`);
+    values.push(params.apiKeyId);
+  }
+  if (params.status) {
+    conditions.push(`status = $${idx++}`);
+    values.push(params.status);
+  }
+  if (params.fromDate) {
+    conditions.push(`created_at >= $${idx++}`);
+    values.push(params.fromDate);
+  }
+  if (params.toDate) {
+    conditions.push(`created_at <= $${idx++}`);
+    values.push(params.toDate);
+  }
+  // Amounts are stored as NUMERIC integers (stroops/base units); truncate to BigInt string
+  if (params.minAmount !== undefined) {
+    const minInt = String(BigInt(Math.trunc(parseFloat(params.minAmount))));
+    conditions.push(`amount::NUMERIC >= $${idx++}::NUMERIC`);
+    values.push(minInt);
+  }
+  if (params.maxAmount !== undefined) {
+    const maxInt = String(BigInt(Math.trunc(parseFloat(params.maxAmount))));
+    conditions.push(`amount::NUMERIC <= $${idx++}::NUMERIC`);
+    values.push(maxInt);
+  }
+  if (params.cursor) {
+    conditions.push(`id > $${idx++}`);
+    values.push(params.cursor);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const sql = `SELECT id, tx_hash, source_addr, target_addr, status, amount, fee, currency, api_key_id,
+                      created_at, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at_iso
+               FROM transactions
+               ${where}
+               ORDER BY id ASC
+               LIMIT $${idx++} OFFSET $${idx++}`;
+  values.push(fetchLimit, offset);
+
+  const client = await pool.connect();
+  try {
+    const result = await client.query<Record<string, unknown>>(sql, values);
+    const rows = result.rows;
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const data = page.map(rowToRecord);
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+    return { data, nextCursor, hasMore };
+  } finally {
+    client.release();
+  }
 }
 
 /**

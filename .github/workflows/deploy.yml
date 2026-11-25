@@ -12,7 +12,7 @@ on:
         type: choice
         options: [staging, production]
       image_tag:
-        description: 'Docker image tag to promote (defaults to latest on branch)'
+        description: 'Immutable image tag to promote, e.g. sha-1a2b3c4 (defaults to this run''s build; mutable tags such as main are refused)'
         required: false
 
 concurrency:
@@ -34,7 +34,11 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image_tag: ${{ steps.meta.outputs.version }}
+      # Immutable references only (#1099). steps.meta.outputs.version is the
+      # highest-priority tag, which is the mutable branch tag (`main`), so
+      # rollback could never tell two builds apart.
+      image_tag: ${{ steps.sha_tag.outputs.tag }}
+      image_digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +54,15 @@ jobs:
             type=sha,prefix=sha-
             type=ref,event=branch
 
+      - name: Select immutable sha- tag
+        id: sha_tag
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          tag=$(printf '%s\n' "$TAGS" | sed -n 's/.*:\(sha-[0-9a-f]\{7,\}\)$/\1/p' | head -n1)
+          [ -n "$tag" ] || { echo "no sha- tag in metadata output:"; printf '%s\n' "$TAGS"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -57,6 +70,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/build-push-action@v5
+        id: push
         with:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -83,6 +97,14 @@ jobs:
       - uses: actions/checkout@v4
         if: env.DEPLOY_HOST != ''
 
+      - name: Setup Node.js environment
+        if: env.DEPLOY_HOST != ''
+        uses: ./.github/actions/setup-node-env
+
+      - name: Check migrations are expand-only
+        if: env.DEPLOY_HOST != ''
+        run: node scripts/check-expand-only-migrations.mjs
+
       - name: Run migrations
         if: env.DEPLOY_HOST != ''
         run: npm run migrate -w api
@@ -95,6 +117,7 @@ jobs:
         run: bash scripts/deploy-api.sh
         env:
           IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.image_digest }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
 
@@ -124,6 +147,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Migrations need tsx/pg (#1099), and run while the old color still
+      # serves traffic, so they must be expand-only (docs/expand-contract-migrations.md).
+      - name: Setup Node.js environment
+        uses: ./.github/actions/setup-node-env
+
+      - name: Check migrations are expand-only
+        run: node scripts/check-expand-only-migrations.mjs
+
       - name: Run migrations
         run: npm run migrate -w api
         env:
@@ -145,6 +176,9 @@ jobs:
           BLUE_DEPLOY_HOST: ${{ secrets.BLUE_DEPLOY_HOST }}
           GREEN_DEPLOY_HOST: ${{ secrets.GREEN_DEPLOY_HOST }}
           IMAGE_TAG: ${{ github.event.inputs.image_tag || needs.build.outputs.image_tag }}
+          # Pin the digest when deploying this run's build; an explicit
+          # image_tag input must itself be immutable (deploy-api.sh refuses `main`).
+          IMAGE_DIGEST: ${{ github.event.inputs.image_tag == '' && needs.build.outputs.image_digest || '' }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
           DEPLOY_BLUE_COMMAND: DEPLOY_HOST="$BLUE_DEPLOY_HOST" bash scripts/deploy-api.sh
@@ -152,6 +186,10 @@ jobs:
           SMOKE_TEST_SCRIPT: scripts/smoke-test.sh
           SMOKE_API_KEY: ${{ secrets.SMOKE_API_KEY }}
           POST_SWITCH_CHECK_COMMAND: bash scripts/smoke-test.sh
+          # Staging now switches traffic too, so the production switch path is
+          # exercised before it is used for real. blue-green-deploy.sh fails
+          # when this is unset (#1099); set it in the staging environment.
+          SWITCH_TRAFFIC_COMMAND: ${{ vars.SWITCH_TRAFFIC_COMMAND }}
           DRAIN_GRACE_SECONDS: '30'
           WARMUP_WINDOW_SECONDS: '60'
 
@@ -174,6 +212,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Migrations need tsx/pg (#1099), and run while the old color still
+      # serves traffic, so they must be expand-only (docs/expand-contract-migrations.md).
+      - name: Setup Node.js environment
+        uses: ./.github/actions/setup-node-env
+
+      - name: Check migrations are expand-only
+        run: node scripts/check-expand-only-migrations.mjs
+
       - name: Run migrations
         run: npm run migrate -w api
         env:
@@ -195,6 +241,9 @@ jobs:
           BLUE_DEPLOY_HOST: ${{ secrets.BLUE_DEPLOY_HOST }}
           GREEN_DEPLOY_HOST: ${{ secrets.GREEN_DEPLOY_HOST }}
           IMAGE_TAG: ${{ github.event.inputs.image_tag || needs.build.outputs.image_tag }}
+          # Pin the digest when deploying this run's build; an explicit
+          # image_tag input must itself be immutable (deploy-api.sh refuses `main`).
+          IMAGE_DIGEST: ${{ github.event.inputs.image_tag == '' && needs.build.outputs.image_digest || '' }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
           DEPLOY_BLUE_COMMAND: DEPLOY_HOST="$BLUE_DEPLOY_HOST" bash scripts/deploy-api.sh
