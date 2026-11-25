@@ -6,6 +6,7 @@ import {
   EventEmitterOptions,
   TransactionStatus,
 } from './types.js';
+import { BridgeError } from './errors.js';
 import { unrefTimer } from './utils.js';
 
 type StatusFetcher = (txHash: string) => Promise<TransactionStatus>;
@@ -14,7 +15,14 @@ type HealthChecker = () => Promise<boolean>;
 interface WatchState {
   timer?: ReturnType<typeof setTimeout>;
   cancelled: boolean;
+  consecutiveErrors: number;
+  currentDelayMs: number;
 }
+
+/** Base multiplier for exponential backoff on retryable errors. */
+const BACKOFF_BASE = 2;
+/** Cap on a single poll delay regardless of error count (30 s). */
+const MAX_BACKOFF_MS = 30_000;
 
 export class BridgeEventEmitter {
   private readonly handlers = new Map<BridgeEventType, Set<EventHandler<BridgeEventType>>>();
@@ -22,6 +30,7 @@ export class BridgeEventEmitter {
   private readonly historySize: number;
   private readonly pollIntervalMs: number;
   private readonly healthCheckIntervalMs: number;
+  private readonly maxConsecutiveErrors: number;
   private readonly watchTimers = new Map<string, WatchState>();
   private readonly statusCache = new Map<string, string>();
   private healthTimer?: ReturnType<typeof setInterval>;
@@ -37,6 +46,7 @@ export class BridgeEventEmitter {
     this.pollIntervalMs = options?.pollIntervalMs ?? 2_000;
     this.historySize = options?.historySize ?? 100;
     this.healthCheckIntervalMs = options?.healthCheckIntervalMs ?? 10_000;
+    this.maxConsecutiveErrors = options?.maxConsecutiveErrors ?? 10;
 
     if (this.healthChecker) {
       this.startHealthCheck();
@@ -70,14 +80,18 @@ export class BridgeEventEmitter {
   watch(txHash: string): this {
     if (this.destroyed || this.watchTimers.has(txHash)) return this;
 
-    const state: WatchState = { cancelled: false };
+    const state: WatchState = {
+      cancelled: false,
+      consecutiveErrors: 0,
+      currentDelayMs: this.pollIntervalMs,
+    };
     this.watchTimers.set(txHash, state);
 
-    const scheduleNext = (): void => {
+    const scheduleNext = (delayMs: number): void => {
       if (state.cancelled || this.destroyed) return;
       state.timer = setTimeout(() => {
         void tick();
-      }, this.pollIntervalMs);
+      }, delayMs);
     };
 
     const tick = async (): Promise<void> => {
@@ -92,14 +106,47 @@ export class BridgeEventEmitter {
         // The watch may have been cancelled or the emitter destroyed while the
         // fetch was in flight. In that case, swallow the error and stop.
         if (state.cancelled || this.destroyed) return;
+
+        // Non-retryable BridgeErrors (404, 401, 422, …) must stop immediately.
+        // Polling again would only hammer the API and fill the history buffer.
+        if (err instanceof BridgeError && !err.retryable) {
+          this.emit('error', {
+            message: `Polling stopped: non-retryable error for ${txHash}`,
+            error: err,
+          });
+          this.unwatch(txHash);
+          return;
+        }
+
+        // Retryable errors (503, network, …) — back off exponentially.
+        state.consecutiveErrors++;
         this.emit('error', { message: 'Failed to poll transaction status', error: err });
-        scheduleNext();
+
+        if (state.consecutiveErrors >= this.maxConsecutiveErrors) {
+          this.emit('error', {
+            message: `Polling aborted after ${state.consecutiveErrors} consecutive errors for ${txHash}`,
+            error: err,
+          });
+          this.unwatch(txHash);
+          return;
+        }
+
+        // Exponential backoff capped at MAX_BACKOFF_MS.
+        const backoff = Math.min(
+          this.pollIntervalMs * Math.pow(BACKOFF_BASE, state.consecutiveErrors - 1),
+          MAX_BACKOFF_MS,
+        );
+        state.currentDelayMs = backoff;
+        scheduleNext(backoff);
         return;
       }
 
-      // Re-check cancellation after the await. This is what prevents
-      // `transaction:success` from firing after `unwatch`/`destroy`.
+      // Re-check cancellation after the await.
       if (state.cancelled || this.destroyed) return;
+
+      // Successful fetch resets the error counter and backoff.
+      state.consecutiveErrors = 0;
+      state.currentDelayMs = this.pollIntervalMs;
 
       const previous = this.statusCache.get(txHash);
 
@@ -127,10 +174,10 @@ export class BridgeEventEmitter {
       }
 
       // Only schedule the next poll after the current one has fully settled.
-      scheduleNext();
+      scheduleNext(this.pollIntervalMs);
     };
 
-    scheduleNext();
+    scheduleNext(this.pollIntervalMs);
     return this;
   }
 
@@ -210,3 +257,4 @@ export class BridgeEventEmitter {
     }
   }
 }
+
