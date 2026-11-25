@@ -1,3 +1,20 @@
+x-api-env: &api-env
+  NODE_ENV: production
+  PORT: 3001
+  DATABASE_URL: postgres://bridge:bridge@postgres:5432/bridge
+  REDIS_URL: redis://redis:6379
+  SOROBAN_RPC_URL: ${SOROBAN_RPC_URL:-http://soroban-quickstart:8000/soroban/rpc}
+  SOROBAN_NETWORK_PASSPHRASE: ${SOROBAN_NETWORK_PASSPHRASE:-Standalone Network ; February 2017}
+  BRIDGE_CONTRACT_ID: ${BRIDGE_CONTRACT_ID}
+  BRIDGE_FEE_BPS: ${BRIDGE_FEE_BPS:-30}
+  API_KEYS: ${API_KEYS:-dev-api-key}
+  MOONPAY_API_KEY: ${MOONPAY_API_KEY}
+  MOONPAY_SECRET_KEY: ${MOONPAY_SECRET_KEY}
+  TRANSAK_API_KEY: ${TRANSAK_API_KEY}
+  TRANSAK_ENVIRONMENT: ${TRANSAK_ENVIRONMENT:-STAGING}
+  WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:-dev-signing-secret-change-in-prod}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
 services:
   api:
     build:

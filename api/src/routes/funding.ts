@@ -102,7 +102,7 @@ fundingRouter.post('/prepare', fundEndpointRateLimit, idempotencyMiddleware, asy
         fee: prepared.fee,
       },
       actor,
-      () => integrityAuditLog.append(
+      () => { void integrityAuditLog.append(
         'transaction_prepared',
         {
           sourceAddress: body.sourceAddress,
@@ -154,7 +154,7 @@ fundingRouter.post('/', fundEndpointRateLimit, idempotencyMiddleware, async (req
       },
       actor,
       // Sync fallback: run inline when pipeline unavailable.
-      () => integrityAuditLog.append(
+      () => { void integrityAuditLog.append(
         'transaction_submission_result',
         { txHash: result.hash, status: result.status, signedXdrHash: hashPayload(body.signedXdr), error: result.error },
         actor,
@@ -252,7 +252,7 @@ fundingRouter.post('/batch', fundEndpointRateLimit, idempotencyMiddleware, async
         recipientCount: body.recipients.length,
       },
       actor,
-      () => integrityAuditLog.append(
+      () => { void integrityAuditLog.append(
         'transaction_submission_result',
         {
           txHash: result.hash,
@@ -314,7 +314,7 @@ fundingRouter.post('/direct', fundEndpointRateLimit, idempotencyMiddleware, asyn
         error: result.error,
       },
       actor,
-      () => integrityAuditLog.append(
+      () => { void integrityAuditLog.append(
         'transaction_submission_result',
         {
           txHash: result.hash,

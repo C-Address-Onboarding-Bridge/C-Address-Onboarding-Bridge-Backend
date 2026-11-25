@@ -28,13 +28,13 @@ function isValidContractId(id: string): boolean {
 
 /**
  * Parse the `TRUST_PROXY` env var into a value suitable for Express'
- * `app.set('trust proxy', …)`.
+ * `app.set('trust proxy', ...)`.
  *
  * Accepted forms:
- * - `undefined` / empty → `false` (do not trust any proxy)
- * - `true` / `false` → boolean
- * - a non-negative integer → hop count (e.g. `1`)
- * - a comma-separated list of subnets/IPs → string[] (e.g. `10.0.0.0/8,192.168.1.1`)
+ * - `undefined` / empty -> `false` (do not trust any proxy)
+ * - `true` / `false` -> boolean
+ * - a non-negative integer -> hop count (e.g. `1`)
+ * - a comma-separated list of subnets/IPs -> string[] (e.g. `10.0.0.0/8,192.168.1.1`)
  */
 export function parseTrustProxy(
   value: string | undefined,
@@ -180,13 +180,13 @@ export const config = {
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
     enabled: process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== '',
-    /** Status responses – invalidated by webhook on state change. */
+    /** Status responses - invalidated by webhook on state change. */
     statusTtlSeconds: parseInt(process.env.REDIS_STATUS_TTL_SECONDS || '10', 10),
-    /** Quote responses – invalidated on new ledger / block. */
+    /** Quote responses - invalidated on new ledger / block. */
     quoteTtlSeconds: parseInt(process.env.REDIS_QUOTE_TTL_SECONDS || '30', 10),
-    /** CEX route responses – exchange rates change slowly. */
+    /** CEX route responses - exchange rates change slowly. */
     cexTtlSeconds: parseInt(process.env.REDIS_CEX_TTL_SECONDS || '60', 10),
-    /** Transaction-list responses – short TTL, invalidated on new transaction. */
+    /** Transaction-list responses - short TTL, invalidated on new transaction. */
     transactionsTtlSeconds: parseInt(process.env.REDIS_TRANSACTIONS_TTL_SECONDS || '5', 10),
   },
   database: {
@@ -224,10 +224,19 @@ export const config = {
       webhookRetry: parseInt(process.env.JOB_CONCURRENCY_WEBHOOK_RETRY || '3', 10),
       cacheWarmup: parseInt(process.env.JOB_CONCURRENCY_CACHE_WARMUP || '2', 10),
       metrics: parseInt(process.env.JOB_CONCURRENCY_METRICS || '1', 10),
+      // #1050: concurrency for the two async-pipeline queues so startWorkers()
+      // no longer hard-codes 5 / 10.
+      asyncCritical: parseInt(process.env.JOB_CONCURRENCY_ASYNC_CRITICAL || '5', 10),
+      asyncPipeline: parseInt(process.env.JOB_CONCURRENCY_ASYNC_PIPELINE || '10', 10),
     },
   },
   asyncPipeline: {
-    enabled: process.env.ASYNC_PIPELINE_ENABLED !== 'false',
+    // #1052: the pipeline can only work when a Redis URL is configured.
+    // Previously it was 'on' by default and enqueued to localhost:6379
+    // against machines that have no Redis, parking jobs in ioredis's
+    // offline queue indefinitely. Match the same guard used by
+    // config.redis.enabled / config.jobs.enabled.
+    enabled: process.env.ASYNC_PIPELINE_ENABLED !== 'false' && process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== '',
     backpressureThreshold: parseInt(process.env.ASYNC_BACKPRESSURE_THRESHOLD || '1000', 10),
     /**
      * How long (ms) the in-process analytics buffer accumulates events before

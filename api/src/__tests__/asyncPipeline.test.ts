@@ -272,3 +272,45 @@ describe('isBackpressured', () => {
     expect(result).toBe(false);
   });
 });
+
+// #1050: when background workers are disabled, enqueueing must take the
+// synchronous fallback so audit entries / retries are not stranded in Redis.
+describe('enqueue paths respect config.jobs.enabled (#1050)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _setBackpressuredForTest(false);
+  });
+
+  afterEach(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { config } = (await import('../config')) as any;
+    config.jobs.enabled = true;
+    await drainAnalyticsBuffer();
+  });
+
+  it('enqueueAudit() uses the sync fallback when jobs are disabled', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { config } = (await import('../config')) as any;
+    config.jobs.enabled = false;
+
+    const fallback = vi.fn();
+    enqueueAudit('admin_operation', {}, 'admin', fallback);
+    await wait(5);
+
+    expect(mockEnqueueAuditLog).not.toHaveBeenCalled();
+    expect(fallback).toHaveBeenCalledOnce();
+  });
+
+  it('bufferAnalytics() calls the fallback when jobs are disabled', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { config } = (await import('../config')) as any;
+    config.jobs.enabled = false;
+
+    const fallback = vi.fn();
+    bufferAnalytics('evt', {}, fallback);
+    await wait(5);
+
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(mockEnqueueAnalytics).not.toHaveBeenCalled();
+  });
+});

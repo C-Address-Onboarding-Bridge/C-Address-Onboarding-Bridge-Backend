@@ -31,7 +31,6 @@ adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Respo
   const feeBps = Number.parseInt(String(req.body?.feeBps ?? ''), 10);
   const timelockMs = Number.parseInt(String(req.body?.timelockMs ?? '60000'), 10);
 
-  // #639 — validate against contract max_fee_bps (1000 bps), not 10 000
   if (Number.isNaN(feeBps) || feeBps < 0 || feeBps > CONTRACT_MAX_FEE_BPS) {
     res.status(400).json({
       error: 'bad_request',
@@ -39,7 +38,6 @@ adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Respo
     });
     return;
   }
-  // #639 — validate timelockMs: must be a non-negative integer
   if (Number.isNaN(timelockMs) || timelockMs < 0) {
     res.status(400).json({ error: 'bad_request', message: 'timelockMs must be a non-negative integer' });
     return;
@@ -55,16 +53,16 @@ adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Respo
 
   const actor = req.apiKeyRecord?.id ?? 'admin';
 
-  // recordAdminAction is synchronous but lightweight (in-memory push) — keep sync.
   recordAdminAction('fee_update', { feeBps, timelockMs }, actor);
 
-  // Audit log: off the response path; sync fallback ensures durability.
   const auditPayload = { operation: 'fee_change', feeBps, timelockMs, result };
   enqueueAudit(
     'admin_operation',
     auditPayload,
     actor,
-    () => integrityAuditLog.append('admin_operation', auditPayload, actor),
+    () => {
+      void integrityAuditLog.append('admin_operation', auditPayload, actor);
+    },
   );
 
   res.json(result);
@@ -85,7 +83,9 @@ adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), asyncHandler(asy
     'fee_withdrawal',
     auditPayload,
     actor,
-    () => integrityAuditLog.append('fee_withdrawal', auditPayload, actor),
+    () => {
+      void integrityAuditLog.append('fee_withdrawal', auditPayload, actor);
+    },
   );
 
   res.json(result);
@@ -107,19 +107,22 @@ adminRouter.get('/health', requireScopes('admin:keys'), asyncHandler(async (_req
   });
 }));
 
-adminRouter.get('/audit/integrity', requireScopes('admin:keys'), (req: Request, res: Response) => {
+adminRouter.get('/audit/integrity', requireScopes('admin:keys'), async (req: Request, res: Response) => {
   const type = typeof req.query.type === 'string' ? (req.query.type as AuditEventType) : undefined;
   const limit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : undefined;
   const cursor = typeof req.query.cursor === 'string' ? Number.parseInt(req.query.cursor, 10) : undefined;
-  res.json({ entries: integrityAuditLog.listEntries({ type, limit, cursor }) });
+  // #1053 — read from the DB, not the per-process mirror.
+  const entries = await integrityAuditLog.listEntriesFromDb({ type, limit, cursor });
+  res.json({ entries });
 });
 
-adminRouter.get('/audit/integrity/checkpoints', requireScopes('admin:keys'), (_req: Request, res: Response) => {
-  res.json({ checkpoints: integrityAuditLog.listCheckpoints() });
+adminRouter.get('/audit/integrity/checkpoints', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  const checkpoints = await integrityAuditLog.listCheckpointsFromDb();
+  res.json({ checkpoints });
 });
 
-adminRouter.post('/audit/integrity/checkpoints', requireScopes('admin:keys'), (_req: Request, res: Response) => {
-  const checkpoint = integrityAuditLog.publishCheckpointForLatest();
+adminRouter.post('/audit/integrity/checkpoints', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  const checkpoint = await integrityAuditLog.publishCheckpointForLatestAsync();
   if (!checkpoint) {
     res.status(404).json({ error: 'not_found', message: 'no audit entries to checkpoint' });
     return;
@@ -127,17 +130,166 @@ adminRouter.post('/audit/integrity/checkpoints', requireScopes('admin:keys'), (_
   res.status(201).json(checkpoint);
 });
 
-adminRouter.get('/audit/integrity/verify', requireScopes('admin:keys'), (_req: Request, res: Response) => {
-  const result = integrityAuditLog.verify();
+adminRouter.get('/audit/integrity/verify', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  const result = await integrityAuditLog.verifyFromDb();
   res.status(result.valid ? 200 : 409).json(result);
 });
 
-adminRouter.get('/audit/integrity/export', requireScopes('admin:keys'), (req: Request, res: Response) => {
+adminRouter.get('/audit/integrity/export', requireScopes('admin:keys'), async (req: Request, res: Response) => {
   if (req.query.format === 'ndjson') {
-    res.type('application/x-ndjson').send(integrityAuditLog.exportNdjson());
+    const ndjson = await integrityAuditLog.exportNdjsonFromDb();
+    res.type('application/x-ndjson').send(ndjson);
     return;
   }
-  res.json(integrityAuditLog.exportJson());
+  res.json(await integrityAuditLog.exportJsonFromDb());
+});
+
+adminRouter.get('/audit', requireScopes('admin:keys'), (_req: Request, res: Response) => {
+  res.json({ log: getAdminAuditLog() });
+});
+EOFcat > api/src/routes/admin.ts <<'EOF'
+import { Router, Request, Response } from 'express';
+import { requireScopes } from '../middleware/rbacAuth';
+import {
+  CONTRACT_MAX_FEE_BPS,
+  getAdminAuditLog,
+  getFeeConfig,
+  getTransactionStats,
+  recordAdminAction,
+  updateFeeConfig,
+  withdrawAccumulatedFees,
+} from '../services/transactions';
+import { AuditEventType, integrityAuditLog } from '../services/auditLog';
+import { enqueueAudit } from '../services/asyncPipeline';
+import { logger } from '../logger';
+import { circuitBreakers } from '../circuit-breaker';
+import { getHealthStatus } from '../services/health';
+import { isRedisEnabled, getCacheMetrics } from '../services/cache';
+
+export const adminRouter = Router();
+
+adminRouter.get('/stats', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  res.json(await getTransactionStats());
+});
+
+adminRouter.get('/fees', requireScopes('admin:keys'), (_req: Request, res: Response) => {
+  res.json(getFeeConfig());
+});
+
+adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Response) => {
+  const feeBps = Number.parseInt(String(req.body?.feeBps ?? ''), 10);
+  const timelockMs = Number.parseInt(String(req.body?.timelockMs ?? '60000'), 10);
+
+  if (Number.isNaN(feeBps) || feeBps < 0 || feeBps > CONTRACT_MAX_FEE_BPS) {
+    res.status(400).json({
+      error: 'bad_request',
+      message: `feeBps must be an integer in [0, ${CONTRACT_MAX_FEE_BPS}]`,
+    });
+    return;
+  }
+  if (Number.isNaN(timelockMs) || timelockMs < 0) {
+    res.status(400).json({ error: 'bad_request', message: 'timelockMs must be a non-negative integer' });
+    return;
+  }
+
+  let result: { pendingFeeBps: number; timelockUntil: number };
+  try {
+    result = updateFeeConfig(feeBps, timelockMs);
+  } catch (err) {
+    res.status(400).json({ error: 'bad_request', message: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+
+  const actor = req.apiKeyRecord?.id ?? 'admin';
+
+  recordAdminAction('fee_update', { feeBps, timelockMs }, actor);
+
+  const auditPayload = { operation: 'fee_change', feeBps, timelockMs, result };
+  enqueueAudit(
+    'admin_operation',
+    auditPayload,
+    actor,
+    () => {
+      void integrityAuditLog.append('admin_operation', auditPayload, actor);
+    },
+  );
+
+  res.json(result);
+});
+
+adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), async (req: Request, res: Response) => {
+  const actor = req.apiKeyRecord?.id ?? 'admin';
+  const recipientAddress = typeof req.body?.recipientAddress === 'string' ? req.body.recipientAddress : undefined;
+  const tokenAddress = typeof req.body?.tokenAddress === 'string' ? req.body.tokenAddress : undefined;
+
+  const result = await withdrawAccumulatedFees(recipientAddress, tokenAddress);
+
+  recordAdminAction('withdraw_fees_proposal', { ...result }, actor);
+
+  const auditPayload = { proposalId: result.proposalId, recipient: result.recipient, token: result.token, actor };
+  enqueueAudit(
+    'fee_withdrawal',
+    auditPayload,
+    actor,
+    () => {
+      void integrityAuditLog.append('fee_withdrawal', auditPayload, actor);
+    },
+  );
+
+  res.json(result);
+});
+
+adminRouter.get('/health', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  const circuits: Record<string, string> = {};
+  for (const [name, cb] of circuitBreakers) {
+    circuits[name] = cb.getState();
+  }
+
+  const health = await getHealthStatus();
+  const statusCode = health.status === 'unhealthy' ? 503 : health.status === 'degraded' ? 207 : 200;
+
+  res.status(statusCode).json({
+    ...health,
+    circuits,
+    cache: { redis: isRedisEnabled(), metrics: getCacheMetrics() },
+  });
+});
+
+adminRouter.get('/audit/integrity', requireScopes('admin:keys'), async (req: Request, res: Response) => {
+  const type = typeof req.query.type === 'string' ? (req.query.type as AuditEventType) : undefined;
+  const limit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : undefined;
+  const cursor = typeof req.query.cursor === 'string' ? Number.parseInt(req.query.cursor, 10) : undefined;
+  // #1053 — read from the DB, not the per-process mirror.
+  const entries = await integrityAuditLog.listEntriesFromDb({ type, limit, cursor });
+  res.json({ entries });
+});
+
+adminRouter.get('/audit/integrity/checkpoints', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  const checkpoints = await integrityAuditLog.listCheckpointsFromDb();
+  res.json({ checkpoints });
+});
+
+adminRouter.post('/audit/integrity/checkpoints', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  const checkpoint = await integrityAuditLog.publishCheckpointForLatestAsync();
+  if (!checkpoint) {
+    res.status(404).json({ error: 'not_found', message: 'no audit entries to checkpoint' });
+    return;
+  }
+  res.status(201).json(checkpoint);
+});
+
+adminRouter.get('/audit/integrity/verify', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+  const result = await integrityAuditLog.verifyFromDb();
+  res.status(result.valid ? 200 : 409).json(result);
+});
+
+adminRouter.get('/audit/integrity/export', requireScopes('admin:keys'), async (req: Request, res: Response) => {
+  if (req.query.format === 'ndjson') {
+    const ndjson = await integrityAuditLog.exportNdjsonFromDb();
+    res.type('application/x-ndjson').send(ndjson);
+    return;
+  }
+  res.json(await integrityAuditLog.exportJsonFromDb());
 });
 
 adminRouter.get('/audit', requireScopes('admin:keys'), (_req: Request, res: Response) => {

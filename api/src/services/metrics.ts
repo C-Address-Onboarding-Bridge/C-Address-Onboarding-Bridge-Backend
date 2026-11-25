@@ -344,3 +344,10 @@ export const asyncPipelineFailureCounter = new Counter({
   labelNames: ['queue', 'job'],
   registers: [register],
 });
+
+// #1053 — surface audit log insert failures (see services/auditLog.ts)
+export const auditLogInsertFailureCounter = new Counter({
+  name: "audit_log_insert_failures_total",
+  help: "Number of failed INSERTs into audit_log_entries / audit_log_checkpoints",
+  registers: [register],
+});

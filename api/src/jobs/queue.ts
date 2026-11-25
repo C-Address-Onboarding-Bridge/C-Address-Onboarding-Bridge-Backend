@@ -1,5 +1,6 @@
 import { Queue, QueueOptions } from 'bullmq';
 import { config } from '../config';
+import { createProducerRedisConnection } from './connection';
 
 export type JobName =
   | 'cache-warmup'
@@ -87,19 +88,14 @@ export type JobData =
   | PipelineMetricsJobData
   | WebhookRetryData;
 
-function parseRedisUrl(url: string): { host: string; port: number; password?: string; db?: number } {
-  const parsed = new URL(url);
-  return {
-    host: parsed.hostname || 'localhost',
-    port: parseInt(parsed.port || '6379', 10),
-    password: parsed.password || undefined,
-    db: parsed.pathname ? parseInt(parsed.pathname.slice(1) || '0', 10) : 0,
-  };
-}
-
+// #1051: connections are built by the shared factory in ./connection, which
+// passes the raw URL to ioredis (rediss://, ACL username, /db all work).
+// #1052: producer connections are created with enableOfflineQueue: false so
+// Queue.add() rejects immediately when Redis is unreachable, instead of
+// parking in ioredis' offline queue and starving the sync fallback.
 function makeBaseOptions(): QueueOptions {
   return {
-    connection: parseRedisUrl(config.redis.url),
+    connection: createProducerRedisConnection(),
     defaultJobOptions: {
       attempts: 3,
       backoff: { type: 'exponential', delay: 5000 },
@@ -111,7 +107,7 @@ function makeBaseOptions(): QueueOptions {
 
 function makeCriticalOptions(): QueueOptions {
   return {
-    connection: parseRedisUrl(config.redis.url),
+    connection: createProducerRedisConnection(),
     defaultJobOptions: {
       attempts: 5,
       backoff: { type: 'exponential', delay: 2000 },
@@ -140,7 +136,7 @@ function getQueues() {
     const asyncCritical = new Queue<AuditLogJobData>('async-critical', criticalOpts);
     const asyncPipeline = new Queue<AnalyticsJobData | PipelineMetricsJobData>('async-pipeline', opts);
     const webhookRetry = new Queue<WebhookRetryData>('webhook-retry', {
-      connection: parseRedisUrl(config.redis.url),
+      connection: createProducerRedisConnection(),
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: 'fixed', delay: 10_000 },
@@ -170,7 +166,16 @@ export async function closeQueues(): Promise<void> {
   _queues = null;
 }
 
+/**
+ * Registers the recurring (repeatable) jobs.
+ *
+ * #1050: this must be called once from the worker entry point, guarded by
+ * `config.jobs.enabled`. Each call is idempotent across restarts because the
+ * repeat key is stable - BullMQ will not create a duplicate schedule.
+ */
 export async function scheduleRecurringJobs(): Promise<void> {
+  if (!config.jobs.enabled) return;
+
   const queues = getQueues();
 
   // Only schedule cache warmup when assets are configured; an empty list does
@@ -207,6 +212,12 @@ export async function enqueuePipelineMetrics(data: PipelineMetricsJobData): Prom
 }
 
 export async function enqueueWebhookRetry(data: WebhookRetryData, delayMs: number): Promise<void> {
+  // #1050: if background workers are disabled there is nothing to drain this
+  // queue, so reject instead of piling jobs up forever. Callers
+  // (webhookDelivery.ts) already catch this and move the delivery to the DLQ.
+  if (!config.jobs.enabled) {
+    throw new Error('jobs disabled: webhook-retry queue is not being drained');
+  }
   const queues = getQueues();
   await queues.webhookRetry.add('webhook-retry', data, { delay: delayMs });
 }
