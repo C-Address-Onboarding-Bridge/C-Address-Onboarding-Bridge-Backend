@@ -905,4 +905,85 @@ describe('WebSocket Service', () => {
       expect(true).toBe(true);
     });
   });
+
+  // ── #909: shared poller is stopped after terminal status ──────────────────
+  describe('shared poller lifecycle after terminal status (#909)', () => {
+    let wss: WebSocketServer;
+
+    beforeEach(() => {
+      wss = createWebSocketServer();
+      vi.mocked(sorobanService.getTransactionStatus).mockClear();
+      vi.mocked(getOrCompute).mockClear();
+      vi.useFakeTimers({ shouldAdvanceTime: false });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      wss.close();
+    });
+
+    it('makes no further RPC calls after a success status is received', async () => {
+      let callCount = 0;
+      vi.mocked(sorobanService.getTransactionStatus).mockImplementation(async () => {
+        callCount += 1;
+        return { status: 'success', hash: 'a'.repeat(64) };
+      });
+      vi.mocked(getOrCompute).mockImplementation(async (_key, _ttl, compute) => compute());
+
+      const mockWs = new EventEmitter() as any;
+      mockWs.readyState = WebSocket.OPEN;
+      mockWs.send = vi.fn();
+
+      wss.emit('connection', mockWs);
+
+      const txHash = 'a'.repeat(64);
+      mockWs.emit('message', JSON.stringify({ action: 'subscribe', txHash }));
+
+      // Allow the synchronous initial pollStatusOnce() promise to settle.
+      await vi.runAllTimersAsync();
+
+      const countAfterFirstPoll = callCount;
+      expect(countAfterFirstPoll).toBeGreaterThan(0);
+
+      // Advance time past the POLL_INTERVAL_MS (5 s) — if the shared interval
+      // were still running this would trigger another RPC call.
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      // No additional RPC calls should have been made.
+      expect(callCount).toBe(countAfterFirstPoll);
+    });
+
+    it('treats "expired" as a terminal status and stops polling', async () => {
+      let callCount = 0;
+      vi.mocked(sorobanService.getTransactionStatus).mockImplementation(async () => {
+        callCount += 1;
+        return { status: 'expired', hash: 'b'.repeat(64) };
+      });
+      vi.mocked(getOrCompute).mockImplementation(async (_key, _ttl, compute) => compute());
+
+      const mockWs = new EventEmitter() as any;
+      mockWs.readyState = WebSocket.OPEN;
+      const messages: any[] = [];
+      mockWs.send = vi.fn((data: string) => messages.push(JSON.parse(data)));
+
+      wss.emit('connection', mockWs);
+
+      const txHash = 'b'.repeat(64);
+      mockWs.emit('message', JSON.stringify({ action: 'subscribe', txHash }));
+
+      // Allow the initial poll to run.
+      await vi.runAllTimersAsync();
+
+      // The subscription_closed message must have been sent.
+      const closed = messages.find((m) => m.type === 'subscription_closed' && m.txHash === txHash);
+      expect(closed).toBeDefined();
+      expect(closed?.reason).toBe('terminal_status');
+
+      const countAfterFirstPoll = callCount;
+
+      // Advance time past the poll interval — no extra calls expected.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(callCount).toBe(countAfterFirstPoll);
+    });
+  });
 });

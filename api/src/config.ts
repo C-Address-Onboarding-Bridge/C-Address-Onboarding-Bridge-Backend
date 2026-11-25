@@ -212,6 +212,8 @@ export const config = {
     enabled: process.env.JOBS_ENABLED !== 'false' && (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),
     txPollIntervalMs: parseInt(process.env.JOB_TX_POLL_INTERVAL_MS || '60000', 10),
     metricsIntervalMs: parseInt(process.env.JOB_METRICS_INTERVAL_MS || '3600000', 10),
+    cleanupIntervalMs: parseInt(process.env.JOB_CLEANUP_INTERVAL_MS || '86400000', 10),
+    warmupAssets: (process.env.JOB_WARMUP_ASSETS || '').split(',').map(s => s.trim()).filter(Boolean),
     concurrency: {
       txStatus: parseInt(process.env.JOB_CONCURRENCY_TX_STATUS || '5', 10),
       webhookRetry: parseInt(process.env.JOB_CONCURRENCY_WEBHOOK_RETRY || '3', 10),

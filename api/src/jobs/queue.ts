@@ -160,8 +160,23 @@ export async function closeQueues(): Promise<void> {
 
 export async function scheduleRecurringJobs(): Promise<void> {
   const queues = getQueues();
-  await queues.cacheWarmup.add('cache-warmup', { assets: [] }, { repeat: { pattern: '*/30 * * * * *' } });
-  await queues.metrics.add('metrics-compute', { period: 'hourly' }, { repeat: { pattern: '0 * * * * *' } });
+
+  // Only schedule cache warmup when assets are configured; an empty list does
+  // nothing useful and would fire every 30 s for no reason.
+  if (config.jobs.warmupAssets.length > 0) {
+    await queues.cacheWarmup.add(
+      'cache-warmup',
+      { assets: config.jobs.warmupAssets },
+      { repeat: { every: 30_000 } },
+    );
+  }
+
+  // Use the configured interval so JOB_METRICS_INTERVAL_MS is honoured.
+  await queues.metrics.add(
+    'metrics-compute',
+    { period: 'hourly' },
+    { repeat: { every: config.jobs.metricsIntervalMs } },
+  );
 }
 
 export async function enqueueAuditLog(data: AuditLogJobData): Promise<void> {
