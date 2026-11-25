@@ -11,6 +11,10 @@ function normalizeVersion(value: string | undefined): ApiVersion | undefined {
   return undefined;
 }
 
+function isVersionedPath(req: Request): boolean {
+  return /^\/api\/v\d+/.test(req.path);
+}
+
 function resolveVersion(req: Request): ApiVersion {
   const pathVersion = req.path.match(/^\/api\/(v\d+)/)?.[1];
   if (pathVersion) {
@@ -39,13 +43,25 @@ function resolveVersion(req: Request): ApiVersion {
   return 'v1';
 }
 
+// v1 and v2 are currently identical; no version is actually scheduled for
+// removal. Flip this (and set a real Sunset date / Link) only once a version
+// is genuinely being deprecated.
+const DEPRECATED_VERSIONS: ReadonlySet<ApiVersion> = new Set();
+
 export function versionCompatibility(req: Request, res: Response, next: NextFunction) {
+  if (!isVersionedPath(req)) {
+    // Not an /api/v*/... route (e.g. /health, /metrics, webhooks, /api/docs):
+    // versioning headers are meaningless here, so skip them entirely.
+    next();
+    return;
+  }
+
   const version = resolveVersion(req);
   const reqWithVersion = req as Request & { apiVersion?: ApiVersion };
   reqWithVersion.apiVersion = version;
 
   res.set('X-API-Version', version);
-  if (version === 'v1') {
+  if (DEPRECATED_VERSIONS.has(version)) {
     res.set('Deprecation', 'true');
     res.set('Sunset', '2027-12-31');
     res.set('Link', '<https://docs.example.com/api/versioning>; rel="successor-version"');

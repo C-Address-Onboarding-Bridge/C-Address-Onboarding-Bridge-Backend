@@ -12,6 +12,7 @@ export type PermissionScope =
   | 'cex:read'
   | 'cex:withdraw'
   | 'transactions:read'
+  | 'transactions:read:all'
   | 'admin:keys'
   | 'metrics:read';
 
