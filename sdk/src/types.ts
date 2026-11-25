@@ -198,6 +198,28 @@ export interface BridgeClientConfig {
   };
 }
 
+/** A single transaction record returned by GET /api/v1/transactions. */
+export interface Transaction {
+  id: string;
+  status: BridgeStatus;
+  hash: string;
+  sourceAsset: string;
+  amount: string;
+  fee?: string;
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+}
+
+/** Filter parameters for listing transactions. */
+export interface TransactionFilters {
+  status?: BridgeStatus;
+  fromDate?: string;
+  toDate?: string;
+  minAmount?: string;
+  maxAmount?: string;
+}
+
 export interface PaginatedRequestParams {
   cursor?: string;
   limit?: number;
