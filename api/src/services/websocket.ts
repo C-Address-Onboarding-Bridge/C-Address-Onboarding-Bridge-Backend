@@ -40,7 +40,21 @@ interface ClientState {
 
 const connectionsByToken = new Map<string, Set<ClientState>>();
 const connectionsByIp = new Map<string, Set<ClientState>>();
+const liveClients = new Set<ClientState>();
 const sharedPollers = new Map<string, NodeJS.Timeout>();
+
+function hasSubscribers(txHash: string): boolean {
+  return Array.from(liveClients).some((client) => client.subscriptions.has(txHash));
+}
+
+function stopPollerIfUnused(txHash: string): void {
+  if (hasSubscribers(txHash)) return;
+  const pollerId = sharedPollers.get(txHash);
+  if (pollerId) {
+    clearInterval(pollerId);
+    sharedPollers.delete(txHash);
+  }
+}
 
 function send(ws: WebSocket, payload: unknown): void {
   if (ws.readyState === WebSocket.OPEN) {
@@ -91,9 +105,7 @@ async function pollStatusOnce(txHash: string): Promise<void> {
     );
 
     const currentStatus = status.status;
-    const allClients = Array.from(connectionsByToken.values()).flatMap((set) => Array.from(set));
-
-    for (const client of allClients) {
+    for (const client of liveClients) {
       const sub = client.subscriptions.get(txHash);
       if (!sub) continue;
 
@@ -114,19 +126,7 @@ async function pollStatusOnce(txHash: string): Promise<void> {
       }
     }
 
-    // Once every subscriber has been removed for a terminal status, stop the
-    // shared poller so no further RPC calls happen for this hash.
-    const stillSubscribed = Array.from(connectionsByToken.values())
-      .flatMap((set) => Array.from(set))
-      .some((c) => c.subscriptions.has(txHash));
-
-    if (!stillSubscribed) {
-      const pollerId = sharedPollers.get(txHash);
-      if (pollerId) {
-        clearInterval(pollerId);
-        sharedPollers.delete(txHash);
-      }
-    }
+    stopPollerIfUnused(txHash);
   } catch (err) {
     logger.debug({ err, txHash }, 'ws poll error');
   }
@@ -172,23 +172,14 @@ function unsubscribe(client: ClientState, txHash: string): void {
   }
   client.subscriptions.delete(txHash);
 
-  const hasOtherSubscribers = Array.from(connectionsByToken.values())
-    .flatMap((set) => Array.from(set))
-    .some((c) => c.subscriptions.has(txHash));
-
-  if (!hasOtherSubscribers) {
-    const pollerId = sharedPollers.get(txHash);
-    if (pollerId) {
-      clearInterval(pollerId);
-      sharedPollers.delete(txHash);
-    }
-  }
+  stopPollerIfUnused(txHash);
 
   send(client.ws, { type: 'unsubscribed', txHash, timestamp: Date.now() });
 }
 
 function cleanup(client: ClientState): void {
   clearInterval(client.heartbeatId);
+  liveClients.delete(client);
 
   if (client.token) {
     const clients = connectionsByToken.get(client.token);
@@ -201,18 +192,7 @@ function cleanup(client: ClientState): void {
   }
 
   for (const txHash of client.subscriptions.keys()) {
-    const hasOtherSubscribers = Array.from(connectionsByToken.values())
-      .flatMap((set) => Array.from(set))
-      .filter((c) => c !== client)
-      .some((c) => c.subscriptions.has(txHash));
-
-    if (!hasOtherSubscribers) {
-      const pollerId = sharedPollers.get(txHash);
-      if (pollerId) {
-        clearInterval(pollerId);
-        sharedPollers.delete(txHash);
-      }
-    }
+    stopPollerIfUnused(txHash);
   }
 
   client.subscriptions.clear();
@@ -280,6 +260,8 @@ export function createWebSocketServer(): WebSocketServer {
         ws.ping();
       }, HEARTBEAT_INTERVAL_MS),
     };
+
+    liveClients.add(client);
 
     if (token) {
       const clients = connectionsByToken.get(token) || new Set();
