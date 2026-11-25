@@ -381,6 +381,9 @@ pub struct Proposal {
     pub proposed_at: u32,
 }
 
+#[cfg(test)]
+mod governance_fixes_test;
+
 /// #20: Batch analytics view returned by `get_stats`.
 ///
 /// **Warning**: When multiple token types are active, `total_volume` and `total_fees`
@@ -843,22 +846,20 @@ impl OnboardingBridge {
                 .instance()
                 .set(&DataKey::AccumulatedFees, &new_accumulated);
 
-            if Self::is_fee_token_whitelisted(env.clone(), token_address.clone()) {
-                let token_fee_rate = Self::fee_token_rate(env.clone(), token_address.clone());
-                let token_fee = (fee * token_fee_rate as i128) / 10000;
-                let token_accumulated: i128 = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::AccumulatedFeesByToken(token_address.clone()))
-                    .unwrap_or(0);
-                let new_token_accumulated = token_accumulated
-                    .checked_add(token_fee)
-                    .expect("token fee accumulator overflow");
-                env.storage().instance().set(
-                    &DataKey::AccumulatedFeesByToken(token_address.clone()),
-                    &new_token_accumulated,
-                );
-            }
+            // Track the real fee per token (whitelisted or not) so that every
+            // token's fees can be withdrawn independently.
+            let token_accumulated: i128 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AccumulatedFeesByToken(token_address.clone()))
+                .unwrap_or(0);
+            let new_token_accumulated = token_accumulated
+                .checked_add(fee)
+                .expect("token fee accumulator overflow");
+            env.storage().instance().set(
+                &DataKey::AccumulatedFeesByToken(token_address.clone()),
+                &new_token_accumulated,
+            );
         }
         tk.transfer(&env.current_contract_address(), target, &net_amount);
 
@@ -1026,7 +1027,11 @@ impl OnboardingBridge {
             return Err(BridgeError::ContractPaused);
         }
         exchange.require_auth();
-        Self::fund_c_address_internal(&env, &exchange, &target, &token_address, amount, &memo)
+        Self::set_reentrancy_guard(&env);
+        let result =
+            Self::fund_c_address_internal(&env, &exchange, &target, &token_address, amount, &memo);
+        Self::clear_reentrancy_guard(&env);
+        result
     }
 
     pub fn funding_count(env: Env) -> u32 {
@@ -1282,7 +1287,7 @@ impl OnboardingBridge {
         if proposal.executed {
             return Err(BridgeError::ProposalAlreadyExecuted);
         }
-        if proposal.approval_count < threshold {
+        if count_current_admin_approvals(&env, proposal_id)? < threshold {
             return Err(BridgeError::InsufficientApprovals);
         }
 
@@ -1394,27 +1399,22 @@ impl OnboardingBridge {
                     .get(&token_key)
                     .unwrap_or(0);
                 let withdraw_amount = if amount == 0 { token_accumulated } else { amount };
-                assert!(
-                    withdraw_amount <= token_accumulated,
-                    "insufficient accumulated fees"
-                );
-                let remaining = token_accumulated - withdraw_amount;
+                if withdraw_amount <= 0 || withdraw_amount > token_accumulated {
+                    return Err(BridgeError::InsufficientAccumulatedFees);
+                }
                 env.storage()
                     .instance()
-                    .set(&token_key, &remaining);
+                    .set(&token_key, &(token_accumulated - withdraw_amount));
+                // Keep the cross-token total as a reporting counter only.
                 let accumulated: i128 = env
                     .storage()
                     .instance()
                     .get(&DataKey::AccumulatedFees)
                     .unwrap_or(0);
-                let withdraw_amount = if amount == 0 { accumulated } else { amount };
-                if withdraw_amount > accumulated {
-                    return Err(BridgeError::InsufficientAccumulatedFees);
-                }
-                let remaining = accumulated - withdraw_amount;
-                env.storage()
-                    .instance()
-                    .set(&DataKey::AccumulatedFees, &(accumulated - withdraw_amount));
+                env.storage().instance().set(
+                    &DataKey::AccumulatedFees,
+                    &accumulated.saturating_sub(withdraw_amount),
+                );
                 let tk = token::Client::new(&env, &token);
                 tk.transfer(&env.current_contract_address(), &to, &withdraw_amount);
                 Withdrawn {
@@ -1522,7 +1522,7 @@ impl OnboardingBridge {
 
     pub fn get_proposal(env: Env, proposal_id: u32) -> Result<Proposal, BridgeError> {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::Proposal(proposal_id))
             .ok_or(BridgeError::ProposalNotFound)
     }
@@ -1640,6 +1640,24 @@ impl OnboardingBridge {
 
         Ok(pruned)
     }
+}
+
+/// Counts approvals on a proposal that were given by admins in the *current*
+/// admin set, so approvals from admins removed by `RotateAdmins` are ignored.
+fn count_current_admin_approvals(env: &Env, proposal_id: u32) -> Result<u32, BridgeError> {
+    let admins: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admins)
+        .ok_or(BridgeError::NotInitialized)?;
+    let mut count = 0u32;
+    for i in 0..admins.len() {
+        let key = DataKey::ProposalApproval(proposal_id, admins.get_unchecked(i));
+        if env.storage().persistent().has(&key) {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn is_admin_in_list(admins: &Vec<Address>, addr: &Address) -> bool {
