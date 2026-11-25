@@ -183,8 +183,10 @@ run_session_persistence() {
 switch_traffic() {
   local color="$1"
   local url="$2"
+  # main() refuses to start without a switch command outside a dry run
+  # (#1099), so this branch is only reachable in dry-run mode.
   [[ -n "$SWITCH_TRAFFIC_COMMAND" ]] || {
-    log "No traffic switch command configured; marking $color as active in state only."
+    log "No traffic switch command configured (dry run); marking $color as active in state only."
     return 0
   }
 
@@ -254,6 +256,12 @@ main() {
 
   log "Current active color: $current_color"
   log "Deploying to target color: $target_color"
+
+  # Without a switch command a "blue/green deploy" passes while traffic never
+  # reaches the new color, so refuse before deploying anything (#1099).
+  if [[ -z "$SWITCH_TRAFFIC_COMMAND" && "$DRY_RUN" != "true" ]]; then
+    err "SWITCH_TRAFFIC_COMMAND is required outside --dry-run; without it traffic would never move to ${target_color}."
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log "Dry run only. Skipped deploy, smoke test, and traffic switch."
