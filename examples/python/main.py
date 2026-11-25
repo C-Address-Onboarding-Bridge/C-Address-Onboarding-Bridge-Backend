@@ -27,9 +27,12 @@ def main() -> int:
         prepared = client.prepare_funding(
             MOCK_G_ADDRESS, MOCK_C_ADDRESS, MOCK_TOKEN_ADDRESS, "10000000", memo="onboarding"
         )
-        print(f"Funding prepared: {prepared['instruction'][:40]}...")
+        print(f"Funding prepared: unsignedXdr={prepared['unsignedXdr'][:40]}...")
 
-        funded = client.submit_signed_xdr("AAAAAgAAAABexampleSignedTransactionXdr")
+        # In production, sign prepared['unsignedXdr'] with the source key using stellar-sdk.
+        # For this example against the mock server we re-use the unsigned XDR directly
+        # (the mock validates only that the submitted value starts with 'AAAA').
+        funded = client.submit_signed_xdr(prepared["unsignedXdr"])
         print(f"Fund submitted: {funded['status']} hash={funded['hash'][:16]}...")
 
         status = client.get_status(funded["hash"])
