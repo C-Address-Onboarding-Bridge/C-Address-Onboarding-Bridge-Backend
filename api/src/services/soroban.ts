@@ -9,10 +9,11 @@ import {
   TransactionBuilder,
   BASE_FEE,
   nativeToScVal,
+  rpc,
 } from '@stellar/stellar-sdk';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { config } from '../config';
-import { rpcPool } from './rpcPool';
+import { isRetryableRpcError, rpcPool } from './rpcPool';
 import { externalCallDuration } from './metrics';
 import { validateXdr, XdrValidationError, recordSeenHash, checkFee } from './xdrValidator';
 import { logger } from '../logger';
@@ -33,10 +34,12 @@ export interface SorobanTxResponse {
  */
 export class SorobanRetryableError extends Error {
   readonly code = 'TRY_AGAIN_LATER';
+  readonly hash?: string;
 
-  constructor(message = 'Soroban RPC is congested; retry later') {
+  constructor(message = 'Soroban RPC is congested; retry later', hash?: string) {
     super(message);
     this.name = 'SorobanRetryableError';
+    this.hash = hash;
   }
 }
 
@@ -60,11 +63,23 @@ export class SorobanRpcError extends Error {
  * `simulation_failed` footprint.
  */
 export class SorobanSimulationError extends Error {
-  readonly code = 'SIMULATION_FAILED';
+  readonly code: string = 'SIMULATION_FAILED';
 
   constructor(message = 'Soroban simulation failed', options?: { cause?: unknown }) {
     super(message, options);
     this.name = 'SorobanSimulationError';
+  }
+}
+
+/** A simulation requiring archived ledger entries to be restored before retry. */
+export class SorobanRestoreRequiredError extends SorobanSimulationError {
+  readonly code = 'RESTORE_REQUIRED';
+  readonly restorePreamble: unknown;
+
+  constructor(restorePreamble: unknown) {
+    super('Funding simulation requires ledger entries to be restored');
+    this.name = 'SorobanRestoreRequiredError';
+    this.restorePreamble = restorePreamble;
   }
 }
 
@@ -298,14 +313,22 @@ export class SorobanService {
           .build();
 
         const simulation = await rpcPool.execute((server) => server.simulateTransaction(tx), 'simulateTransaction');
+        if (rpc.Api.isSimulationRestore(simulation)) {
+          throw new SorobanRestoreRequiredError(simulation.restorePreamble);
+        }
         if (!SorobanService.isSimulationSuccess(simulation)) {
           throw new SorobanSimulationError('Funding simulation failed');
         }
 
-        const prepared = SorobanService.assembleTransaction(tx, simulation);
+        let prepared: Transaction;
+        try {
+          prepared = SorobanService.assembleTransaction(tx, simulation);
+        } catch (err) {
+          throw new SorobanSimulationError('Funding transaction assembly failed', { cause: err });
+        }
         return {
           unsignedXdr: prepared.toXDR(),
-          footprint: JSON.stringify(simulation.result?.footprint ?? {}),
+          footprint: simulation.transactionData.build().toXDR('base64'),
           fee: prepared.fee,
         };
       } finally {
@@ -341,6 +364,7 @@ export class SorobanService {
   async submitTransaction(signedXdr: string): Promise<SorobanTxResponse> {
     return tracer.startActiveSpan('contract.submitTransaction', async (span) => {
       const start = Date.now();
+      let hash = '';
       try {
         const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
         const parsed = TransactionBuilder.fromXDR(envelope, this.networkPassphrase);
@@ -358,15 +382,19 @@ export class SorobanService {
         // sendTransaction/getTransaction key on), but the inner hash for
         // duplicate detection, matching what validateXdr checked.
         const outerHash = parsed.hash().toString('hex');
+        hash = outerHash;
         const innerHash = tx.hash().toString('hex');
         submittedTxTimeBounds.set(outerHash, {
           maxTime: tx.timeBounds?.maxTime ? Number(tx.timeBounds.maxTime) : 0,
           submittedAt: Math.floor(Date.now() / 1000),
         });
 
-        const response = await rpcPool.execute((server) => server.sendTransaction(parsed), 'sendTransaction');
+        const response = await rpcPool.execute(
+          (server) => server.sendTransaction(parsed),
+          { failover: false, method: 'sendTransaction' },
+        );
         if (response.status === 'TRY_AGAIN_LATER') {
-          throw new SorobanRetryableError();
+          throw new SorobanRetryableError(undefined, hash);
         }
         if (response.status === 'ERROR') {
           return { status: 'failed', hash: outerHash, error: response.errorResult?.toXDR('base64') };
@@ -377,9 +405,15 @@ export class SorobanService {
         return { status: 'pending', hash: outerHash };
       } catch (err) {
         if (err instanceof SorobanRetryableError) throw err;
+        if (isRetryableRpcError(err)) {
+          throw new SorobanRetryableError(
+            'Soroban submission may have reached the network; poll transaction status by hash',
+            hash,
+          );
+        }
         throw new SorobanRpcError('Soroban submitTransaction failed', { cause: err });
       } finally {
-        externalCallDuration.record(Date.now() - start, { call: 'submitTransaction' });
+        externalCallDuration.observe({ service: 'soroban' }, (Date.now() - start) / 1000);
         span.end();
       }
     });
@@ -394,11 +428,11 @@ export class SorobanService {
         const response = await rpcPool.execute((server) => server.getTransaction(hash), 'getTransaction');
         if (response.status === 'SUCCESS') {
           submittedTxTimeBounds.delete(hash);
-          return { status: 'success', hash };
+          return { status: 'success' as const, hash };
         }
         if (response.status === 'FAILED') {
           submittedTxTimeBounds.delete(hash);
-          return { status: 'failed', hash };
+          return { status: 'failed' as const, hash };
         }
 
         // NOT_FOUND — decide whether the tx's validity window has elapsed.
@@ -408,10 +442,10 @@ export class SorobanService {
           const expiry = tracked.maxTime || tracked.submittedAt + DEFAULT_RPC_RETENTION_SECONDS;
           if (nowSec >= expiry) {
             submittedTxTimeBounds.delete(hash);
-            return { status: 'expired', hash };
+            return { status: 'expired' as const, hash };
           }
         }
-        return { status: 'pending', hash };
+        return { status: 'pending' as const, hash };
       } catch (err) {
         throw new SorobanRpcError('Soroban getTransaction failed', { cause: err });
       } finally {
@@ -422,33 +456,25 @@ export class SorobanService {
 
   /** Type guard for a successful Soroban simulation response. */
   static isSimulationSuccess(simulation: unknown): simulation is {
-    result?: { retval?: xdr.ScVal; footprint?: unknown };
+    result?: { retval?: xdr.ScVal };
+    transactionData: { build(): xdr.SorobanTransactionData };
   } {
     return (
-      typeof simulation === 'object' &&
-      simulation !== null &&
-      'result' in simulation &&
-      !('error' in simulation)
+      typeof simulation === 'object' && simulation !== null &&
+      rpc.Api.isSimulationSuccess(simulation as Parameters<typeof rpc.Api.isSimulationSuccess>[0])
     );
   }
 
   /** Assembles a simulated transaction into a prepared envelope. */
   static assembleTransaction(
     tx: Transaction,
-    simulation: { result?: { retval?: xdr.ScVal; footprint?: unknown } },
+    simulation: Parameters<typeof rpc.assembleTransaction>[1],
   ): Transaction {
-    // Minimal assembly: attach the simulated footprint/fee via the SDK helper
-    // when available; otherwise return the original transaction.
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { SorobanRpc } = require('@stellar/stellar-sdk');
-      if (SorobanRpc?.assembleTransaction) {
-        return SorobanRpc.assembleTransaction(tx, simulation).build();
-      }
-    } catch {
-      // fall through
+      return rpc.assembleTransaction(tx, simulation).build();
+    } catch (err) {
+      throw new SorobanSimulationError('Funding transaction assembly failed', { cause: err });
     }
-    return tx;
   }
 }
 

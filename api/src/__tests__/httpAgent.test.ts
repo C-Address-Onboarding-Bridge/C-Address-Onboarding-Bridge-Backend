@@ -5,10 +5,13 @@ process.env.NODE_ENV = 'test';
 vi.mock('../index', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+vi.mock('../logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 
 vi.mock('../config', () => ({
   config: {
-    httpAgent: { maxSockets: 25, maxFreeSockets: 5, keepAliveMsecs: 1000 },
+    httpAgent: { maxSockets: 25, maxFreeSockets: 5, keepAliveMsecs: 1000, timeoutMs: 1234 },
   },
 }));
 
@@ -18,9 +21,12 @@ import { applyKeepAliveAgents, getAgentStats, destroyAgents } from '../services/
 describe('httpAgent (Soroban RPC connection pooling)', () => {
   it('installs keep-alive agents on the Stellar SDK axios client', () => {
     applyKeepAliveAgents();
-    const client = SorobanRpc.AxiosClient as { defaults: { httpsAgent?: { keepAlive?: boolean; maxSockets?: number } } };
+    const client = SorobanRpc.AxiosClient as {
+      defaults: { httpsAgent?: { keepAlive?: boolean; maxSockets?: number }; timeout?: number };
+    };
     expect(client.defaults.httpsAgent?.keepAlive).toBe(true);
     expect(client.defaults.httpsAgent?.maxSockets).toBe(25);
+    expect(client.defaults.timeout).toBe(1234);
   });
 
   it('is idempotent', () => {
