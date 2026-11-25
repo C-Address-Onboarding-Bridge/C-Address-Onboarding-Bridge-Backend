@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import net from 'net';
 import { Response, NextFunction, Request as ExpressRequest } from 'express';
+import type { RequestHandler } from 'express';
 import { logger } from '../logger';
 import { getPool } from '../services/db';
 
@@ -361,8 +362,8 @@ declare module 'express-serve-static-core' {
  * Returns an Express middleware that enforces the specified scopes. The request
  * must have already been processed by rbacAuth (which attaches apiKeyRecord).
  */
-export function requireScopes(...required: PermissionScope[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+export function requireScopes(...required: PermissionScope[]): RequestHandler {
+  return (req: ExpressRequest, res: Response, next: NextFunction): void => {
     const granted = req.resolvedScopes ?? [];
     const missing = required.filter((scope) => !granted.includes(scope));
     if (!req.resolvedScopes || missing.length > 0) {
@@ -374,7 +375,7 @@ export function requireScopes(...required: PermissionScope[]) {
   };
 }
 
-export function rbacAuth(req: Request, res: Response, next: NextFunction): void {
+export function rbacAuth(req: ExpressRequest, res: Response, next: NextFunction): void {
   const header = req.headers['x-api-key'];
   const apiKey = Array.isArray(header) ? header[0] : header;
   if (!apiKey) {

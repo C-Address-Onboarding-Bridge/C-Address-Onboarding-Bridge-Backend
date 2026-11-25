@@ -48,11 +48,6 @@ export interface DLQEntry {
   failedAt: number;
 }
 
-/**
- * Canonical webhook event names emitted by the API. Kept in one place so the
- * delivery wiring, the OpenAPI documentation, and integrators all agree on the
- * exact strings.
- */
 export const WEBHOOK_EVENTS = {
   FUNDING_SUBMITTED: 'funding.submitted',
   FUNDING_CONFIRMED: 'funding.confirmed',
@@ -70,23 +65,20 @@ const DEFAULT_DELIVERY_LOG_LIMIT = 10_000;
  * with Postgres (production) or an in-memory store (tests / single-process).
  */
 export interface WebhookStore {
-  saveRegistration(registration: WebhookRegistration): void;
-  deleteRegistration(id: string): boolean;
-  getRegistration(id: string): WebhookRegistration | undefined;
-  listRegistrations(): WebhookRegistration[];
-  appendDeliveryAttempt(attempt: DeliveryAttempt): void;
-  listDeliveryAttempts(): DeliveryAttempt[];
-  pruneDeliveryLog(maxEntries: number): void;
-  saveDLQEntry(entry: DLQEntry): void;
-  listDLQEntries(): DLQEntry[];
-  getDLQEntry(id: string): DLQEntry | undefined;
-  deleteDLQEntry(id: string): boolean;
+  saveRegistration(_registration: WebhookRegistration): Promise<void>;
+  deleteRegistration(_id: string): Promise<boolean>;
+  getRegistration(_id: string): Promise<WebhookRegistration | undefined>;
+  listRegistrations(): Promise<WebhookRegistration[]>;
+  getRegistrationsByApiKeyId(_apiKeyId: string): Promise<WebhookRegistration[]>;
+  appendDeliveryAttempt(_attempt: DeliveryAttempt): Promise<void>;
+  listDeliveryAttempts(): Promise<DeliveryAttempt[]>;
+  pruneDeliveryLog(_maxEntries: number): Promise<void>;
+  saveDLQEntry(_entry: DLQEntry): Promise<void>;
+  listDLQEntries(): Promise<DLQEntry[]>;
+  getDLQEntry(_id: string): Promise<DLQEntry | undefined>;
+  deleteDLQEntry(_id: string): Promise<boolean>;
 }
 
-/**
- * In-memory fallback store. Used when no Postgres-backed store is injected so
- * the service keeps working in tests and single-process deployments.
- */
 export class InMemoryWebhookStore implements WebhookStore {
   private registrations = new Map<string, WebhookRegistration>();
   private attempts: DeliveryAttempt[] = [];
@@ -100,12 +92,16 @@ export class InMemoryWebhookStore implements WebhookStore {
     return this.registrations.delete(id);
   }
 
-  getRegistration(id: string): WebhookRegistration | undefined {
-    return this.registrations.get(id);
+  async getRegistration(id: string): Promise<WebhookRegistration | undefined> {
+    const registration = this.registrations.get(id);
+    return registration ? { ...registration, events: [...registration.events] } : undefined;
   }
 
-  listRegistrations(): WebhookRegistration[] {
-    return [...this.registrations.values()];
+  async listRegistrations(): Promise<WebhookRegistration[]> {
+    return [...this.registrations.values()].map((registration) => ({
+      ...registration,
+      events: [...registration.events],
+    }));
   }
 
   appendDeliveryAttempt(attempt: DeliveryAttempt): void {
@@ -122,23 +118,28 @@ export class InMemoryWebhookStore implements WebhookStore {
     }
   }
 
-  saveDLQEntry(entry: DLQEntry): void {
-    this.dlq.push(entry);
+  async saveDLQEntry(entry: DLQEntry): Promise<void> {
+    this.dlq.set(entry.id, {
+      ...entry,
+      registration: { ...entry.registration, events: [...entry.registration.events] },
+      attempts: entry.attempts.map((attempt) => ({ ...attempt })),
+    });
   }
 
-  listDLQEntries(): DLQEntry[] {
-    return [...this.dlq];
+  async listDLQEntries(): Promise<DLQEntry[]> {
+    return [...this.dlq.values()].map((entry) => ({
+      ...entry,
+      registration: { ...entry.registration, events: [...entry.registration.events] },
+      attempts: entry.attempts.map((attempt) => ({ ...attempt })),
+    }));
   }
 
-  getDLQEntry(id: string): DLQEntry | undefined {
-    return this.dlq.find((e) => e.id === id);
+  async getDLQEntry(id: string): Promise<DLQEntry | undefined> {
+    return (await this.listDLQEntries()).find((entry) => entry.id === id);
   }
 
-  deleteDLQEntry(id: string): boolean {
-    const idx = this.dlq.findIndex((e) => e.id === id);
-    if (idx === -1) return false;
-    this.dlq.splice(idx, 1);
-    return true;
+  async deleteDLQEntry(id: string): Promise<boolean> {
+    return this.dlq.delete(id);
   }
 }
 
@@ -161,10 +162,13 @@ export class InMemoryWebhookStore implements WebhookStore {
  * final retry (~370 s later) still passes a 300 s replay window.
  */
 export class WebhookDeliveryService {
-  private store: WebhookStore;
-  private deliveryLogLimit: number;
+  private readonly store: WebhookStore;
+  private readonly deliveryLogLimit: number;
 
-  constructor(store: WebhookStore = new InMemoryWebhookStore(), deliveryLogLimit = DEFAULT_DELIVERY_LOG_LIMIT) {
+  constructor(
+    store: WebhookStore = new InMemoryWebhookStore(),
+    deliveryLogLimit = DEFAULT_DELIVERY_LOG_LIMIT,
+  ) {
     this.store = store;
     this.deliveryLogLimit = deliveryLogLimit;
   }
@@ -186,21 +190,21 @@ export class WebhookDeliveryService {
       events: params.events,
       createdAt: Date.now(),
     };
-    this.store.saveRegistration(registration);
+    await this.store.saveRegistration(registration);
     logger.info({ registrationId: registration.id, url: params.url }, 'webhook registered');
     return registration;
   }
 
-  unregister(id: string): boolean {
+  async unregister(id: string): Promise<boolean> {
     return this.store.deleteRegistration(id);
   }
 
-  getRegistration(id: string): WebhookRegistration | undefined {
+  async getRegistration(id: string): Promise<WebhookRegistration | undefined> {
     return this.store.getRegistration(id);
   }
 
-  getRegistrationsByApiKeyId(apiKeyId: string): WebhookRegistration[] {
-    return this.store.listRegistrations().filter((r) => r.apiKeyId === apiKeyId);
+  async getRegistrationsByApiKeyId(apiKeyId: string): Promise<WebhookRegistration[]> {
+    return this.store.getRegistrationsByApiKeyId(apiKeyId);
   }
 
   /** Legacy alias kept for callers that use the shorter name. */
@@ -244,10 +248,11 @@ export class WebhookDeliveryService {
   }
 
   async deliverToAll(apiKeyId: string, event: string, data: unknown): Promise<void> {
-    const targets = this.getRegistrationsByApiKeyId(apiKeyId).filter(
-      (r) => r.events.includes(event) || r.events.includes('*'),
+    const registrations = await this.getRegistrationsByApiKeyId(apiKeyId);
+    const targets = registrations.filter((registration) =>
+      registration.events.includes(event) || registration.events.includes('*'),
     );
-    await Promise.all(targets.map((r) => this.deliver(r, event, data)));
+    await Promise.all(targets.map((registration) => this.deliver(registration, event, data)));
   }
 
   /**
@@ -264,9 +269,9 @@ export class WebhookDeliveryService {
     });
   }
 
-  private recordAttempt(attempt: DeliveryAttempt): void {
-    this.store.appendDeliveryAttempt(attempt);
-    this.store.pruneDeliveryLog(this.deliveryLogLimit);
+  private async recordAttempt(attempt: DeliveryAttempt): Promise<void> {
+    await this.store.appendDeliveryAttempt(attempt);
+    await this.store.pruneDeliveryLog(this.deliveryLogLimit);
   }
 
   /**
@@ -314,8 +319,8 @@ export class WebhookDeliveryService {
           }),
           body: payload,
           signal: controller.signal,
-        });
-
+          dispatcher,
+        } as RequestInit & { dispatcher: Agent });
         attempt.statusCode = response.status;
         if (!response.ok) {
           attempt.error = `HTTP ${response.status}`;
@@ -399,7 +404,7 @@ export class WebhookDeliveryService {
             data,
             attemptNumber: attemptNumber + 1,
           },
-          delay,
+          WEBHOOK_RETRY_DELAYS_MS[attemptNumber],
         );
         logger.info(
           {
@@ -447,36 +452,41 @@ export class WebhookDeliveryService {
       attempts,
       failedAt: Date.now(),
     };
-    this.store.saveDLQEntry(entry);
+    await this.store.saveDLQEntry(entry);
     logger.error(
       { registrationId: registration.id, url: registration.url, event, webhookId, dlqId: entry.id },
       'webhook moved to dead letter queue after max retries',
     );
   }
 
-  getDLQ(): DLQEntry[] {
+  async getDLQ(): Promise<DLQEntry[]> {
     return this.store.listDLQEntries();
   }
 
-  getDLQEntry(id: string): DLQEntry | undefined {
+  async getDLQEntry(id: string): Promise<DLQEntry | undefined> {
     return this.store.getDLQEntry(id);
   }
 
-  deleteDLQEntry(id: string): boolean {
+  async deleteDLQEntry(id: string): Promise<boolean> {
     return this.store.deleteDLQEntry(id);
   }
 
-  getDeliveryLog(): DeliveryAttempt[] {
+  async getDeliveryLog(): Promise<DeliveryAttempt[]> {
     return this.store.listDeliveryAttempts();
   }
 
-  getStats(): { registered: number; dlqSize: number; totalAttempts: number } {
-    return {
-      registered: this.store.listRegistrations().length,
-      dlqSize: this.store.listDLQEntries().length,
-      totalAttempts: this.store.listDeliveryAttempts().length,
-    };
+  async getStats(): Promise<{ registered: number; dlqSize: number; totalAttempts: number }> {
+    const [registrations, dlq, attempts] = await Promise.all([
+      this.store.listRegistrations(),
+      this.store.listDLQEntries(),
+      this.store.listDeliveryAttempts(),
+    ]);
+    return { registered: registrations.length, dlqSize: dlq.length, totalAttempts: attempts.length };
   }
 }
 
-export const webhookDeliveryService = new WebhookDeliveryService();
+export let webhookDeliveryService = new WebhookDeliveryService();
+
+export function setWebhookDeliveryService(service: WebhookDeliveryService): void {
+  webhookDeliveryService = service;
+}

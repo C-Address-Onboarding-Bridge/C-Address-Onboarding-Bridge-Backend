@@ -1,4 +1,5 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router } from 'express';
+import type { RequestHandler } from 'express';
 import { z } from 'zod';
 import net from 'net';
 import { requireScopes } from '../middleware/rbacAuth';
@@ -7,18 +8,13 @@ import { logger } from '../logger';
 
 export const webhookAdminRouter = Router();
 
-const BLOCKED_HOSTNAMES = new Set([
-  'localhost',
-  'metadata.google.internal',
-  'metadata',
-]);
+const BLOCKED_HOSTNAMES = new Set(['localhost', 'metadata.google.internal', 'metadata']);
 
 function isBlockedHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (BLOCKED_HOSTNAMES.has(host)) return true;
   if (host.endsWith('.localhost') || host.endsWith('.internal')) return true;
-  if (net.isIP(host) && isBlockedIp(host)) return true;
-  return false;
+  return net.isIP(host) !== 0 && isBlockedIp(host);
 }
 
 function isSafeWebhookUrl(raw: string): boolean {
@@ -29,8 +25,7 @@ function isSafeWebhookUrl(raw: string): boolean {
     return false;
   }
   if (process.env.NODE_ENV === 'production' && parsed.protocol !== 'https:') return false;
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
-  return !isBlockedHost(parsed.hostname);
+  return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && !isBlockedHost(parsed.hostname);
 }
 
 const registerSchema = z.object({
@@ -47,7 +42,7 @@ webhookAdminRouter.post('/register', requireScopes('webhooks:manage'), (req: Req
   try {
     const apiKeyId = req.apiKeyRecord?.id ?? '';
     const body = registerSchema.parse(req.body);
-    const registration = webhookDeliveryService.register({ ...body, apiKeyId });
+    const registration = await webhookDeliveryService.register({ ...body, apiKeyId });
     res.status(201).json({
       id: registration.id,
       url: registration.url,

@@ -72,16 +72,16 @@ describe('WebhookDeliveryService', () => {
   });
 
   describe('register / unregister', () => {
-    it('registers and returns a registration with a unique id', () => {
-      const reg = service.register({ url: 'https://example.com/hook', secret: 'supersecretvalue!', apiKeyId: 'key1', events: ['*'] });
+    it('registers and returns a registration with a unique id', async () => {
+      const reg = await service.register({ url: 'https://example.com/hook', secret: 'supersecretvalue!', apiKeyId: 'key1', events: ['*'] });
       expect(reg.id).toBeTruthy();
       expect(reg.url).toBe('https://example.com/hook');
       expect(reg.apiKeyId).toBe('key1');
     });
 
-    it('returns different ids for different registrations', () => {
-      const r1 = service.register({ url: 'https://a.com', secret: 'secretvalue12345', apiKeyId: 'k', events: ['*'] });
-      const r2 = service.register({ url: 'https://b.com', secret: 'secretvalue12345', apiKeyId: 'k', events: ['*'] });
+    it('returns different ids for different registrations', async () => {
+      const r1 = await service.register({ url: 'https://a.com', secret: 'secretvalue12345', apiKeyId: 'k', events: ['*'] });
+      const r2 = await service.register({ url: 'https://b.com', secret: 'secretvalue12345', apiKeyId: 'k', events: ['*'] });
       expect(r1.id).not.toBe(r2.id);
     });
 
@@ -97,8 +97,8 @@ describe('WebhookDeliveryService', () => {
       expect(service.getRegistration(reg.id)).toBeUndefined();
     });
 
-    it('returns false when unregistering unknown id', () => {
-      expect(service.unregister('nonexistent-id')).toBe(false);
+    it('returns false when unregistering unknown id', async () => {
+      expect(await service.unregister('nonexistent-id')).toBe(false);
     });
   });
 
@@ -131,8 +131,8 @@ describe('WebhookDeliveryService', () => {
     });
 
     it('produces different signatures for different secrets', () => {
-      const sig1 = service.sign('payload', 'secret1');
-      const sig2 = service.sign('payload', 'secret2');
+      const sig1 = service.sign('payload', 'secret1', 1);
+      const sig2 = service.sign('payload', 'secret2', 1);
       expect(sig1).not.toBe(sig2);
     });
 
@@ -163,7 +163,7 @@ describe('WebhookDeliveryService', () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
       vi.stubGlobal('fetch', fetchMock);
 
-      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
+      const reg = await service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'transaction.success', { txHash: 'abc' });
 
       expect(fetchMock).toHaveBeenCalledOnce();
@@ -193,7 +193,7 @@ describe('WebhookDeliveryService', () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
       vi.stubGlobal('fetch', fetchMock);
 
-      const reg = service.register({
+      const reg = await service.register({
         url: 'https://rebind.example/hook',
         secret: 'mysecret123456!',
         apiKeyId: 'k',
@@ -260,7 +260,7 @@ describe('WebhookDeliveryService', () => {
       vi.stubGlobal('fetch', fetchMock);
       const enqueueMock = vi.mocked(enqueueWebhookRetry);
 
-      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
+      const reg = await service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: 'deadbeef' });
 
       const attempt1 = fetchMock.mock.calls[0][1] as RequestInit;
@@ -305,7 +305,7 @@ describe('WebhookDeliveryService', () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
       vi.mocked(enqueueWebhookRetry).mockRejectedValueOnce(new Error('Redis unavailable'));
 
-      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
+      const reg = await service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: 'deadbeef' });
 
       expect(service.getDLQ()).toHaveLength(1);
@@ -322,11 +322,11 @@ describe('WebhookDeliveryService', () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
       vi.mocked(enqueueWebhookRetry).mockRejectedValueOnce(new Error('Redis unavailable'));
 
-      const reg = service.register({ url: 'https://fail.example', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
+      const reg = await service.register({ url: 'https://fail.example', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: '1234' });
 
       expect(enqueueMock).toHaveBeenCalledTimes(1);
-      expect(service.getDLQ()).toHaveLength(0);
+      expect(await service.getDLQ()).toHaveLength(0);
 
       enqueueMock.mockRejectedValueOnce(new Error('Redis unavailable'));
       await service.deliver(reg, 'tx.failed', { txHash: '1234' });
@@ -343,13 +343,13 @@ describe('WebhookDeliveryService', () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
       vi.mocked(enqueueWebhookRetry).mockRejectedValueOnce(new Error('Redis unavailable'));
 
-      const reg = service.register({ url: 'https://fail.example', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
+      const reg = await service.register({ url: 'https://fail.example', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: '5678' });
 
-      const dlq = service.getDLQ();
+      const dlq = await service.getDLQ();
       expect(dlq).toHaveLength(1);
-      expect(service.deleteDLQEntry(dlq[0].id)).toBe(true);
-      expect(service.getDLQ()).toHaveLength(0);
+      expect(await service.deleteDLQEntry(dlq[0].id)).toBe(true);
+      expect(await service.getDLQ()).toHaveLength(0);
     });
   });
 

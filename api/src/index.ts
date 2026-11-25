@@ -22,6 +22,8 @@ import { cexRouter } from './routes/cex';
 import { tokenRouter } from './routes/token';
 import { moonpayWebhookRouter, transakWebhookRouter } from './routes/webhook';
 import { webhookAdminRouter } from './routes/webhookAdmin';
+import { WebhookDeliveryRepository } from './services/webhookDeliveryRepository';
+import { setWebhookDeliveryService, WebhookDeliveryService } from './services/webhookDelivery';
 import { apiKeysRouter } from './routes/apiKeys';
 import { docsRouter } from './routes/docs';
 import { metricsAuth, metricsRouter } from './routes/metrics';
@@ -44,7 +46,7 @@ import { DEFAULT_JSON_LIMIT, FUNDING_PATHS, fundingJsonParser } from './middlewa
 import { requestSigningMiddleware } from './middleware/requestSigning';
 import { originVerifyMiddleware } from './middleware/originVerify';
 import { gracefulShutdown, registerSignalHandlers } from './shutdown';
-import { closePool } from './services/db';
+import { closePool, getPool } from './services/db';
 import { isRedisEnabled, getCacheMetrics } from './services/cache';
 import { getHealthStatus } from './services/health';
 import { activeRequestsGauge, httpRequestCounter, httpRequestDuration } from './services/metrics';
@@ -59,6 +61,11 @@ export { circuitBreakers };
 
 registerWebhookVerifier('moonpay', moonpayVerifier, config.moonpay.secretKey);
 registerWebhookVerifier('transak', transakVerifier, config.transak.webhookSecret);
+
+const webhookPool = getPool();
+if (webhookPool) {
+  setWebhookDeliveryService(new WebhookDeliveryService(new WebhookDeliveryRepository(webhookPool)));
+}
 
 if (config.apiKeys.length > 0) {
   seedLegacyKeys(config.apiKeys);
