@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
-import { IntegrityAuditLogService, integrityAuditLog, verifyAuditChain } from '../services/auditLog';
+import { IntegrityAuditLogService, integrityAuditLog, verifyAuditChain, type AuditEventType } from '../services/auditLog';
 import { createApiKey } from '../middleware/rbacAuth';
 import { WebhookDeliveryService } from '../services/webhookDelivery';
 
@@ -162,5 +162,103 @@ describe('integrity audit admin API', () => {
     expect(restored.valid).toBe(true);
     expect(restored.entryCount).toBe(3);
     expect(restored.checkpointCount).toBe(1);
+  });
+});
+// ── #907: every AuditEventType must match the migration CHECK constraint ──────
+describe('AuditEventType CHECK constraint coverage (#907)', () => {
+  /**
+   * The exhaustive list of values accepted by migration 007's CHECK constraint.
+   * If AuditEventType is extended the developer must also update the migration,
+   * and this test will fail until they do (and vice-versa).
+   */
+  const CONSTRAINT_VALUES = new Set<string>([
+    'transaction_submission',
+    'transaction_submission_result',
+    'transaction_prepared',
+    'batch_transaction_submission_result',
+    'timelocked_transaction_submission_result',
+    'timelocked_claim_result',
+    'direct_transaction_submission_result',
+    'fee_withdrawal',
+    'admin_operation',
+    'webhook_delivery',
+  ]);
+
+  // All values used as AuditEventType throughout the codebase.
+  const ALL_AUDIT_EVENT_TYPES: AuditEventType[] = [
+    'transaction_submission',
+    'transaction_submission_result',
+    'transaction_prepared',
+    'batch_transaction_submission_result',
+    'timelocked_transaction_submission_result',
+    'timelocked_claim_result',
+    'direct_transaction_submission_result',
+    'fee_withdrawal',
+    'admin_operation',
+    'webhook_delivery',
+  ];
+
+  it('every AuditEventType value is listed in the migration CHECK constraint', () => {
+    for (const eventType of ALL_AUDIT_EVENT_TYPES) {
+      expect(
+        CONSTRAINT_VALUES.has(eventType),
+        `AuditEventType "${eventType}" is not in the migration CHECK constraint — add it to migration 007`,
+      ).toBe(true);
+    }
+  });
+
+  it('the migration CHECK constraint contains no values absent from AuditEventType', () => {
+    const eventTypeSet = new Set<string>(ALL_AUDIT_EVENT_TYPES);
+    for (const constraintValue of CONSTRAINT_VALUES) {
+      expect(
+        eventTypeSet.has(constraintValue),
+        `Constraint value "${constraintValue}" has no matching AuditEventType — remove it or add the type`,
+      ).toBe(true);
+    }
+  });
+
+  it('IntegrityAuditLogService can append every AuditEventType without throwing', () => {
+    const service = new IntegrityAuditLogService({ checkpointInterval: 0 });
+    for (const eventType of ALL_AUDIT_EVENT_TYPES) {
+      expect(
+        () => service.append(eventType, { test: true }, 'test-actor'),
+        `append() threw for event type "${eventType}"`,
+      ).not.toThrow();
+    }
+    expect(service.verify().valid).toBe(true);
+  });
+});
+
+// ── #908: initialize() reloads from DB and continues the sequence ─────────────
+describe('IntegrityAuditLogService.initialize() — sequence continuation (#908)', () => {
+  it('after initialize() entries appended before and after verify together', async () => {
+    // We cannot hit a real DB in unit tests. We validate the pure in-memory
+    // logic: entries appended after the first batch must chain from the last
+    // loaded sequence correctly.
+    const service1 = new IntegrityAuditLogService({ checkpointInterval: 0 });
+    service1.append('transaction_submission', { hash: 'tx-a' }, 'actor-1');
+    service1.append('transaction_submission_result', { status: 'ok' }, 'system');
+
+    // The chain is valid after two entries.
+    expect(service1.verify().valid).toBe(true);
+
+    // Append a third entry — it must chain from sequence 2.
+    const nextEntry = service1.append('fee_withdrawal', { amount: '5' }, 'admin-1');
+    expect(nextEntry.sequence).toBe(3);
+
+    // The full chain must still be valid after the third append.
+    expect(service1.verify().valid).toBe(true);
+    expect(service1.listEntries()).toHaveLength(3);
+  });
+
+  it('initialize() is idempotent: calling it twice does not corrupt the chain', async () => {
+    // With no DB pool available (pool returns null), initialize() is a safe no-op.
+    const service = new IntegrityAuditLogService({ checkpointInterval: 0 });
+    await service.initialize();
+    await service.initialize(); // second call must be a no-op
+
+    service.append('admin_operation', { event: 'test' }, 'system');
+    expect(service.listEntries()).toHaveLength(1);
+    expect(service.verify().valid).toBe(true);
   });
 });

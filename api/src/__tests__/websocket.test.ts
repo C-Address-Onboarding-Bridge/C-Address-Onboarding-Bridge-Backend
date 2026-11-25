@@ -59,7 +59,41 @@ import { createWebSocketServer, handleUpgrade } from '../services/websocket';
 import { sorobanService } from '../services/soroban';
 import { explorerService } from '../services/explorer';
 import { getOrCompute } from '../services/cache';
+import { resolveRecord } from '../middleware/rbacAuth';
+import { createServer } from 'http';
+import type { AddressInfo } from 'net';
 import { IncomingMessage } from 'http';
+import { config } from '../config';
+
+const connectedClients: EventEmitter[] = [];
+
+function createMockRequest(url?: string): IncomingMessage {
+  return {
+    url,
+    headers: {},
+    socket: { remoteAddress: '127.0.0.1' },
+  } as IncomingMessage;
+}
+
+function createTestWebSocketServer(): WebSocketServer {
+  const wss = createWebSocketServer();
+  const emit = wss.emit.bind(wss);
+  wss.emit = ((event: string | symbol, ...args: any[]) => {
+    if (event === 'connection') {
+      if (args.length === 1) args.push(createMockRequest());
+      connectedClients.push(args[0]);
+    }
+    return emit(event, ...args);
+  }) as typeof wss.emit;
+  return wss;
+}
+
+afterEach(() => {
+  config.websocket.authRequired = true;
+  for (const client of connectedClients.splice(0)) {
+    client.emit('close');
+  }
+});
 
 // Helper to wait for message
 function waitForMessage(
@@ -112,7 +146,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
       vi.mocked(sorobanService.getTransactionStatus).mockClear();
       vi.mocked(explorerService.txUrl).mockClear();
     });
@@ -265,7 +299,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -350,7 +384,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -460,7 +494,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -509,7 +543,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -522,9 +556,7 @@ describe('WebSocket Service', () => {
         destroy: vi.fn(),
       } as any;
 
-      const mockReq = {
-        url: 'ws://localhost/ws',
-      } as IncomingMessage;
+      const mockReq = createMockRequest('ws://localhost/ws');
 
       handleUpgrade(wss, mockReq, mockSocket, Buffer.alloc(0));
 
@@ -538,9 +570,7 @@ describe('WebSocket Service', () => {
         destroy: vi.fn(),
       } as any;
 
-      const mockReq = {
-        url: 'ws://localhost/ws?token=invalid-token',
-      } as IncomingMessage;
+      const mockReq = createMockRequest('ws://localhost/ws?token=invalid-token');
 
       handleUpgrade(wss, mockReq, mockSocket, Buffer.alloc(0));
 
@@ -554,9 +584,7 @@ describe('WebSocket Service', () => {
         destroy: vi.fn(),
       } as any;
 
-      const mockReq = {
-        url: 'ws://localhost/ws?token=revoked-token',
-      } as IncomingMessage;
+      const mockReq = createMockRequest('ws://localhost/ws?token=revoked-token');
 
       handleUpgrade(wss, mockReq, mockSocket, Buffer.alloc(0));
 
@@ -570,9 +598,7 @@ describe('WebSocket Service', () => {
         destroy: vi.fn(),
       } as any;
 
-      const mockReq = {
-        url: 'ws://localhost/ws?token=expired-token',
-      } as IncomingMessage;
+      const mockReq = createMockRequest('ws://localhost/ws?token=expired-token');
 
       handleUpgrade(wss, mockReq, mockSocket, Buffer.alloc(0));
 
@@ -593,7 +619,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
     });
 
     afterEach(() => {
@@ -677,7 +703,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
       vi.mocked(sorobanService.getTransactionStatus).mockClear();
       vi.mocked(explorerService.txUrl).mockClear();
       vi.mocked(getOrCompute).mockClear();
@@ -779,6 +805,31 @@ describe('WebSocket Service', () => {
       });
     });
 
+    it('sends status updates to tokenless clients when authentication is disabled', async () => {
+      config.websocket.authRequired = false;
+      const mockWs = new EventEmitter() as any;
+      mockWs.readyState = WebSocket.OPEN;
+      mockWs.send = vi.fn();
+
+      vi.mocked(sorobanService.getTransactionStatus).mockResolvedValue({
+        status: 'success',
+        hash: 'a'.repeat(64),
+      });
+
+      wss.emit('connection', mockWs);
+      mockWs.emit('message', JSON.stringify({
+        action: 'subscribe',
+        txHash: 'a'.repeat(64),
+      }));
+
+      const statusUpdate = await waitForMessage(mockWs, (msg) => msg.type === 'status_update');
+      expect(statusUpdate).toMatchObject({
+        type: 'status_update',
+        status: 'success',
+        txHash: 'a'.repeat(64),
+      });
+    });
+
     it('auto-closes subscription on terminal status', async () => {
       const mockWs = new EventEmitter() as any;
       mockWs.readyState = WebSocket.OPEN;
@@ -848,7 +899,7 @@ describe('WebSocket Service', () => {
     let wss: WebSocketServer;
 
     beforeEach(() => {
-      wss = createWebSocketServer();
+      wss = createTestWebSocketServer();
       vi.useFakeTimers();
     });
 
@@ -898,11 +949,163 @@ describe('WebSocket Service', () => {
     });
   });
 
+  describe('key revocation, payload size and rate limiting (#1066)', () => {
+    let wss: WebSocketServer;
+
+    function connect(token: string | null = 'valid-token') {
+      const mockWs = new EventEmitter() as any;
+      mockWs.readyState = WebSocket.OPEN;
+      mockWs.send = vi.fn();
+      mockWs.ping = vi.fn();
+      mockWs.terminate = vi.fn();
+      mockWs.close = vi.fn();
+      mockWs.__wsToken = token;
+      wss.emit('connection', mockWs, { socket: { remoteAddress: '127.0.0.1' }, headers: {} });
+      return mockWs;
+    }
+
+    beforeEach(() => {
+      wss = createWebSocketServer();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      wss.close();
+    });
+
+    it('closes with 4401 on the next heartbeat after the key is revoked', () => {
+      vi.useFakeTimers();
+      const mockWs = connect();
+      vi.mocked(resolveRecord).mockReturnValueOnce({ revoked: true, expiresAt: null } as any);
+
+      vi.advanceTimersByTime(30_000);
+
+      expect(mockWs.close).toHaveBeenCalledWith(4401, 'API key revoked or expired');
+      expect(mockWs.ping).not.toHaveBeenCalled();
+    });
+
+    it('rejects subscribe with 4401 once the key has expired', () => {
+      const mockWs = connect();
+      vi.mocked(resolveRecord).mockReturnValueOnce({ revoked: false, expiresAt: Date.now() - 1 } as any);
+
+      mockWs.emit('message', JSON.stringify({ action: 'subscribe', txHash: 'd'.repeat(64) }));
+
+      expect(mockWs.close).toHaveBeenCalledWith(4401, 'API key revoked or expired');
+      const sent = mockWs.send.mock.calls.map(([d]: [string]) => JSON.parse(d).type);
+      expect(sent).not.toContain('subscribed');
+    });
+
+    it('closes with 1008 when a client exceeds the message rate', () => {
+      const mockWs = connect();
+      for (let i = 0; i < 20; i++) mockWs.emit('message', JSON.stringify({ action: 'list' }));
+      expect(mockWs.close).not.toHaveBeenCalled();
+
+      mockWs.emit('message', JSON.stringify({ action: 'list' }));
+      expect(mockWs.close).toHaveBeenCalledWith(1008, 'Message rate limit exceeded');
+    });
+
+    it('closes the connection with 1009 when a message exceeds maxPayload', async () => {
+      const server = createServer();
+      server.on('upgrade', (req, socket, head) => handleUpgrade(wss, req, socket as any, head));
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const { port } = server.address() as AddressInfo;
+
+      const client = new WebSocket(`ws://127.0.0.1:${port}`, 'valid-token');
+      await new Promise((resolve) => client.once('open', resolve));
+      const closed = new Promise<number>((resolve) => client.once('close', (code) => resolve(code)));
+      client.send('x'.repeat(1024 * 1024));
+
+      expect(await closed).toBe(1009);
+      await new Promise((resolve) => server.close(resolve));
+    });
+  });
+
   describe('validateToken', () => {
     it('validates tokens correctly', () => {
       // This is tested implicitly through handleUpgrade tests,
       // but we can add explicit validation tests if needed
       expect(true).toBe(true);
+    });
+  });
+
+  // ── #909: shared poller is stopped after terminal status ──────────────────
+  describe('shared poller lifecycle after terminal status (#909)', () => {
+    let wss: WebSocketServer;
+
+    beforeEach(() => {
+      wss = createWebSocketServer();
+      vi.mocked(sorobanService.getTransactionStatus).mockClear();
+      vi.mocked(getOrCompute).mockClear();
+      vi.useFakeTimers({ shouldAdvanceTime: false });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      wss.close();
+    });
+
+    it('makes no further RPC calls after a success status is received', async () => {
+      let callCount = 0;
+      vi.mocked(sorobanService.getTransactionStatus).mockImplementation(async () => {
+        callCount += 1;
+        return { status: 'success', hash: 'a'.repeat(64) };
+      });
+      vi.mocked(getOrCompute).mockImplementation(async (_key, _ttl, compute) => compute());
+
+      const mockWs = new EventEmitter() as any;
+      mockWs.readyState = WebSocket.OPEN;
+      mockWs.send = vi.fn();
+
+      wss.emit('connection', mockWs);
+
+      const txHash = 'a'.repeat(64);
+      mockWs.emit('message', JSON.stringify({ action: 'subscribe', txHash }));
+
+      // Allow the synchronous initial pollStatusOnce() promise to settle.
+      await vi.runAllTimersAsync();
+
+      const countAfterFirstPoll = callCount;
+      expect(countAfterFirstPoll).toBeGreaterThan(0);
+
+      // Advance time past the POLL_INTERVAL_MS (5 s) — if the shared interval
+      // were still running this would trigger another RPC call.
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      // No additional RPC calls should have been made.
+      expect(callCount).toBe(countAfterFirstPoll);
+    });
+
+    it('treats "expired" as a terminal status and stops polling', async () => {
+      let callCount = 0;
+      vi.mocked(sorobanService.getTransactionStatus).mockImplementation(async () => {
+        callCount += 1;
+        return { status: 'expired', hash: 'b'.repeat(64) };
+      });
+      vi.mocked(getOrCompute).mockImplementation(async (_key, _ttl, compute) => compute());
+
+      const mockWs = new EventEmitter() as any;
+      mockWs.readyState = WebSocket.OPEN;
+      const messages: any[] = [];
+      mockWs.send = vi.fn((data: string) => messages.push(JSON.parse(data)));
+
+      wss.emit('connection', mockWs);
+
+      const txHash = 'b'.repeat(64);
+      mockWs.emit('message', JSON.stringify({ action: 'subscribe', txHash }));
+
+      // Allow the initial poll to run.
+      await vi.runAllTimersAsync();
+
+      // The subscription_closed message must have been sent.
+      const closed = messages.find((m) => m.type === 'subscription_closed' && m.txHash === txHash);
+      expect(closed).toBeDefined();
+      expect(closed?.reason).toBe('terminal_status');
+
+      const countAfterFirstPoll = callCount;
+
+      // Advance time past the poll interval — no extra calls expected.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(callCount).toBe(countAfterFirstPoll);
     });
   });
 });

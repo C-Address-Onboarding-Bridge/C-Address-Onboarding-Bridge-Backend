@@ -115,6 +115,13 @@ function buildIdempotencyKey(req: Request, body: z.infer<typeof routeSchema>): s
     anyReq.auth?.apiKeyId ??
     anyReq.auth?.id ??
     'anonymous';
+  const suppliedKey = req.headers[IDEMPOTENCY_KEY_HEADER];
+  if (typeof suppliedKey === 'string' && suppliedKey.length > 0) {
+    // When the caller supplies an idempotency key, dedupe strictly on
+    // (caller, key). Two requests with different keys must never be
+    // coalesced, even if their routing params match.
+    return [String(caller), 'idemkey', suppliedKey].join(':');
+  }
   return [
     String(caller),
     body.exchange,
@@ -122,6 +129,7 @@ function buildIdempotencyKey(req: Request, body: z.infer<typeof routeSchema>): s
     body.amount,
     body.targetCAddress,
     body.targetNetwork,
+    body.memo ?? '',
   ].join(':');
 }
 
@@ -167,12 +175,12 @@ cexRouter.post('/route', requireCexWithdrawScope, async (req: Request, res: Resp
 
     const result = await pending;
 
-    // routeWithdrawal can resolve with {status: 'failed', ...} when the exchange API fails.
-    // Surface that as a 502 so callers don't treat a failed withdrawal as created.
-    // The body (including withdrawalId when present) is preserved so callers can
-    // reconcile a partially-processed withdrawal instead of blindly retrying.
-    if (result.status === 'failed') {
-      exchangeRoutingCount.inc({ exchange: body.exchange, status: 'failed' });
+    // routeWithdrawal can resolve with {status: 'failed'|'unknown', ...} when the exchange
+    // API fails or times out. Surface that as a 502 so callers don't treat a failed or
+    // ambiguous withdrawal as created. The body (including withdrawalId) is preserved so
+    // callers can reconcile a partially-processed withdrawal instead of blindly retrying.
+    if (result.status === 'failed' || result.status === 'unknown') {
+      exchangeRoutingCount.inc({ exchange: body.exchange, status: result.status });
       res.status(502).json(result);
       return;
     }

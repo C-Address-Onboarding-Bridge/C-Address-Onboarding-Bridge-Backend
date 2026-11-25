@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext"
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "withdrawal-router.ts"]
+}

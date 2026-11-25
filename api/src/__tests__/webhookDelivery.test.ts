@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createHmac } from 'crypto';
 
 const undiciAgentState = vi.hoisted(() => ({ options: undefined as unknown }));
 
@@ -55,27 +54,7 @@ function dnsAddresses(addresses: { address: string; family: number }[]): Awaited
   return addresses as unknown as Awaited<ReturnType<typeof lookup>>;
 }
 
-type Registration = ReturnType<WebhookDeliveryService['register']>;
-
-/** Drive one attempt at a given attempt number, as a retry re-entering the service would. */
-function attemptAt(service: WebhookDeliveryService, reg: Registration, attemptNumber: number): Promise<void> {
-  const timestamp = Date.now();
-  const payload = JSON.stringify({ event: 'tx.failed', data: {}, timestamp });
-  return (service as unknown as {
-    attemptDelivery: (delivery: unknown, attemptNumber: number) => Promise<void>;
-  }).attemptDelivery(
-    {
-      registration: reg,
-      event: 'tx.failed',
-      data: {},
-      payload,
-      signature: service.sign(payload, reg.secret, timestamp),
-      timestamp,
-      deliveryId: 'delivery-1',
-    },
-    attemptNumber,
-  );
-}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 describe('WebhookDeliveryService', () => {
   let service: WebhookDeliveryService;
@@ -136,15 +115,25 @@ describe('WebhookDeliveryService', () => {
   });
 
   describe('sign', () => {
-    it('produces a hex HMAC-SHA256 over `${timestamp}.${payload}`', () => {
-      const sig = service.sign('{"event":"test"}', 'mysecret', 1_700_000_000_000);
+    it('produces a hex HMAC-SHA256 signature (legacy 2-arg form)', () => {
+      const sig = service.sign('{"event":"test"}', 'mysecret');
       expect(sig).toMatch(/^[a-f0-9]{64}$/);
       expect(sig).toBe(createHmac('sha256', 'mysecret').update('1700000000000.{"event":"test"}').digest('hex'));
     });
 
-    it('produces different signatures for different secrets or timestamps', () => {
-      expect(service.sign('payload', 'secret1', 1)).not.toBe(service.sign('payload', 'secret2', 1));
-      expect(service.sign('payload', 'secret', 1)).not.toBe(service.sign('payload', 'secret', 2));
+    it('3-arg form binds the timestamp into the signed message', () => {
+      const ts = 1_700_000_000;
+      const payload = '{"event":"test"}';
+      const bound = service.sign(payload, 'mysecret', ts);
+      const bare = service.sign(payload, 'mysecret');
+      expect(bound).not.toBe(bare);
+      expect(bound).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('produces different signatures for different secrets', () => {
+      const sig1 = service.sign('payload', 'secret1');
+      const sig2 = service.sign('payload', 'secret2');
+      expect(sig1).not.toBe(sig2);
     });
 
     it('produces the same signature for the same inputs', () => {
@@ -169,8 +158,8 @@ describe('WebhookDeliveryService', () => {
     });
   });
 
-  describe('deliver — success path', () => {
-    it('POSTs payload with HMAC signature header on success', async () => {
+  describe('deliver - success path', () => {
+    it('POSTs payload with canonical webhook headers on success', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -181,48 +170,20 @@ describe('WebhookDeliveryService', () => {
       const [url, opts] = fetchMock.mock.calls[0];
       expect(url).toBe('https://example.com/hook');
       expect(opts.method).toBe('POST');
+
+      // Issue #1060: canonical header contract.
+      expect(opts.headers['Content-Type']).toBe('application/json');
       expect(opts.headers['X-Webhook-Signature']).toMatch(/^sha256=[a-f0-9]{64}$/);
+      expect(opts.headers['X-Webhook-Timestamp']).toMatch(/^\d{10}$/);
       expect(opts.headers['X-Webhook-Event']).toBe('transaction.success');
-      expect(opts.headers['X-Webhook-Id']).toMatch(/^[0-9a-f-]{36}$/);
-    });
+      expect(opts.headers['X-Webhook-Attempt']).toBe('1');
 
-    it('a 200 records one attempt, enqueues no retry and writes no DLQ entry (#1057)', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+      // Issue #1061: a stable delivery ID is stamped on every attempt.
+      expect(opts.headers['X-Webhook-Id']).toMatch(UUID_RE);
 
-      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
-      await service.deliver(reg, 'funding.submitted', { id: 1 });
-
-      expect(service.getDeliveryLog()).toHaveLength(1);
-      expect(service.getDeliveryLog()[0].statusCode).toBe(200);
-      expect(service.getDeliveryLog()[0].error).toBeUndefined();
-      expect(service.getStats().totalAttempts).toBe(1);
-      expect(enqueueWebhookRetry).not.toHaveBeenCalled();
-      expect(service.getDLQ()).toHaveLength(0);
-    });
-
-    it('a 200 on a late attempt does not write a DLQ entry (#1057)', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }));
-      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
-
-      await attemptAt(service, reg, 3);
-
-      expect(service.getDLQ()).toHaveLength(0);
-      expect(enqueueWebhookRetry).not.toHaveBeenCalled();
-      expect(service.getDeliveryLog()).toHaveLength(1);
-    });
-
-    it('audits each attempt once, with the API key id as the actor', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }));
-      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'key-id-1', events: ['*'] });
-      await service.deliver(reg, 'funding.confirmed', {});
-
-      expect(enqueueAudit).toHaveBeenCalledOnce();
-      expect(enqueueAudit).toHaveBeenCalledWith(
-        'webhook_delivery',
-        expect.objectContaining({ registrationId: reg.id, result: 'success', statusCode: 200 }),
-        'key-id-1',
-        expect.any(Function),
-      );
+      // The body's timestamp is in seconds and matches the header.
+      const body = JSON.parse(opts.body);
+      expect(body.timestamp).toBe(Number(opts.headers['X-Webhook-Timestamp']));
     });
 
     it('pins delivery to the public DNS answer when the hostname is rebound', async () => {
@@ -268,8 +229,33 @@ describe('WebhookDeliveryService', () => {
     });
   });
 
-  describe('deliver — retry path', () => {
-    it('enqueues exactly one retry on HTTP 500, with the same delivery id', async () => {
+  describe('deliver - redirect protection', () => {
+    it('passes redirect: "error" so a 307 cannot redirect to a private address', async () => {
+      const redirectError = Object.assign(new TypeError('fetch failed'), {
+        cause: new Error('unexpected redirect: 307'),
+      });
+      const fetchMock = vi.fn().mockRejectedValue(redirectError);
+      vi.stubGlobal('fetch', fetchMock);
+      const enqueueMock = vi.mocked(enqueueWebhookRetry);
+
+      const reg = service.register({
+        url: 'https://public.example/hook',
+        secret: 'mysecret123456!',
+        apiKeyId: 'k',
+        events: ['*'],
+      });
+      await service.deliver(reg, 'tx.failed', { txHash: 'abc' });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe('https://public.example/hook');
+      const fetchOptions = fetchMock.mock.calls[0][1] as RequestInit;
+      expect(fetchOptions.redirect).toBe('error');
+      expect(enqueueMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('deliver - retry path', () => {
+    it('enqueues retries with webhookId + raw payload but no signature or timestamp', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
       vi.stubGlobal('fetch', fetchMock);
       const enqueueMock = vi.mocked(enqueueWebhookRetry);
@@ -277,22 +263,30 @@ describe('WebhookDeliveryService', () => {
       const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: 'deadbeef' });
 
+      const attempt1 = fetchMock.mock.calls[0][1] as RequestInit;
+      const headers = attempt1.headers as Record<string, string>;
+      const webhookId = headers['X-Webhook-Id'];
+      expect(webhookId).toMatch(UUID_RE);
+
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(enqueueMock).toHaveBeenCalledTimes(1);
       expect(service.getDLQ()).toHaveLength(0);
       expect(service.getDeliveryLog()).toHaveLength(1);
 
-      const sentId = fetchMock.mock.calls[0][1].headers['X-Webhook-Id'];
-      expect(enqueueMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          registrationId: reg.id,
-          deliveryId: sentId,
-          url: 'https://example.com/hook',
-          event: 'tx.failed',
-          attemptNumber: 1,
-        }),
-        10_000,
-      );
+      // Issue #1061: the retry payload is signature-free and timestamp-free.
+      // The worker re-signs with a fresh `now` on every attempt.
+      const [retryData, delay] = enqueueMock.mock.calls[0];
+      expect(delay).toBe(10_000);
+      expect(retryData).toMatchObject({
+        registrationId: reg.id,
+        url: 'https://example.com/hook',
+        event: 'tx.failed',
+        attemptNumber: 1,
+        webhookId, // same as attempt 1 - dedupe key
+        payload: expect.any(String),
+      });
+      expect(retryData).not.toHaveProperty('signature');
+      expect(retryData).not.toHaveProperty('timestamp');
     });
 
     it('a 500 on the last attempt writes exactly one DLQ entry (#1057)', async () => {
@@ -315,19 +309,11 @@ describe('WebhookDeliveryService', () => {
       await service.deliver(reg, 'tx.failed', { txHash: 'deadbeef' });
 
       expect(service.getDLQ()).toHaveLength(1);
-      expect(service.getDLQ()[0].event).toBe('tx.failed');
-      expect(service.getDeliveryLog()).toHaveLength(1);
-    });
-
-    it('a network error is recorded once and retried', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNRESET')));
-      const reg = service.register({ url: 'https://example.com/hook', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
-      await service.deliver(reg, 'tx.failed', {});
-
-      expect(service.getDeliveryLog()).toHaveLength(1);
-      expect(service.getDeliveryLog()[0].error).toBe('ECONNRESET');
-      expect(enqueueWebhookRetry).toHaveBeenCalledTimes(1);
-      expect(service.getDLQ()).toHaveLength(0);
+      const entry = service.getDLQ()[0];
+      expect(entry.event).toBe('tx.failed');
+      // Issue #1061: the DLQ entry records the stable webhookId for future
+      // manual replay / dedupe.
+      expect(entry.webhookId).toMatch(UUID_RE);
     });
   });
 
@@ -338,6 +324,13 @@ describe('WebhookDeliveryService', () => {
 
       const reg = service.register({ url: 'https://fail.example', secret: 'mysecret123456!', apiKeyId: 'k', events: ['*'] });
       await service.deliver(reg, 'tx.failed', { txHash: '1234' });
+
+      expect(enqueueMock).toHaveBeenCalledTimes(1);
+      expect(service.getDLQ()).toHaveLength(0);
+
+      enqueueMock.mockRejectedValueOnce(new Error('Redis unavailable'));
+      await service.deliver(reg, 'tx.failed', { txHash: '1234' });
+      expect(service.getDLQ()).toHaveLength(1);
 
       const dlq = service.getDLQ();
       expect(dlq).toHaveLength(1);

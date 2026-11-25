@@ -6,7 +6,7 @@ services:
     ports:
       - "${PORT:-3001}:3001"
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 3001
       DATABASE_URL: postgres://bridge:bridge@postgres:5432/bridge
       REDIS_URL: redis://redis:6379

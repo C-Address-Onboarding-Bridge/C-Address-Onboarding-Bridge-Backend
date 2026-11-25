@@ -15,6 +15,19 @@ Runnable integration examples for the C-Address Bridge API in **Python**, **Rust
 
 Examples run against a lightweight mock server by default — no live API or secrets required.
 
+### Client libraries
+
+Use these maintained clients. They are the only ones built and run by CI. Each sends the key as `X-API-Key`, and `/fund` takes `{ signedXdr }`:
+
+| Language | Client | Example program |
+|----------|--------|-----------------|
+| Python | [`python/c_address_bridge/`](python/c_address_bridge/) | [`python/main.py`](python/main.py) |
+| Rust | [`rust/`](rust/) | `cargo run --example bridge` |
+| Go | [`go/caddressbridge/`](go/caddressbridge/) | [`go/main.go`](go/main.go) |
+| Java | [`java/src/main/java/com/caddressbridge/`](java/src/main/java/com/caddressbridge/) | `mvn -q exec:java` |
+
+The old single-file clients (`python/client.py`, `go/client.go`, `java/BridgeClient.java`) were removed. They sent `Authorization: Bearer`, used port 8080, and posted an `{address, amount, asset}` body, so the API rejected every request they made.
+
 ---
 
 ## Quick start (local)

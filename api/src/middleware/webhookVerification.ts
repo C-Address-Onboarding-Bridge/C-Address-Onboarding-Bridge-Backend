@@ -9,7 +9,11 @@ export interface WebhookVerifier {
   verify(_payload: string, _signature: string, _secret: string): boolean;
 }
 
+// Dedupe window independent of the 5-minute Transak/Moonpay timestamp
+// tolerance used for signature freshness. Replay protection itself must
+// outlive any realistic retry/late-delivery window, not just 5 minutes.
 const REPLAY_WINDOW_MS = 5 * 60 * 1000;
+const REPLAY_DEDUPE_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 function hmacSha256Base64(secret: string, payload: string): string {
   return crypto.createHmac('sha256', secret).update(payload, 'utf8').digest('base64');
@@ -70,25 +74,33 @@ export function registerWebhookVerifier(provider: string, verifier: WebhookVerif
   VERIFIERS[provider] = { verifier, secret };
 }
 
-async function checkReplaySignature(provider: string, signature: string): Promise<boolean> {
+/**
+ * Result of a replay check: 'fresh' (first time seen, now recorded),
+ * 'replay' (already seen), or 'unavailable' (storage could not be reached,
+ * so the caller must decide how to fail).
+ */
+type ReplayCheckResult = 'fresh' | 'replay' | 'unavailable';
+
+async function checkReplaySignature(provider: string, signature: string, payload: string): Promise<ReplayCheckResult> {
   const redis = getCacheClient();
   if (!redis) {
-    logger.warn({ provider }, 'redis not configured, replay detection disabled');
-    return false;
+    return 'unavailable';
   }
 
-  const key = `webhook:replay:${provider}:${crypto.createHash('sha256').update(signature).digest('hex')}`;
-  const ttlSeconds = Math.ceil(REPLAY_WINDOW_MS / 1000);
+  // Dedupe on a hash of the full payload + signature, not just the
+  // signature, so two distinct events never collide. No short TTL: replay
+  // protection must not expire while the signed body itself stays valid
+  // indefinitely (Transak's signature has no embedded timestamp).
+  const key = `webhook:replay:${provider}:${crypto.createHash('sha256').update(`${signature}:${payload}`).digest('hex')}`;
 
   try {
-    const exists = await redis.get(key);
-    if (exists) return true;
-
-    await redis.setex(key, ttlSeconds, '1');
-    return false;
+    // SET ... NX is atomic: only the first caller to reach Redis for a given
+    // key gets 'OK' back, so concurrent duplicate deliveries can't both pass.
+    const set = await redis.set(key, '1', 'EX', REPLAY_DEDUPE_TTL_SECONDS, 'NX');
+    return set ? 'fresh' : 'replay';
   } catch (err) {
-    logger.warn({ provider, err }, 'replay check failed, allowing webhook');
-    return false;
+    logger.error({ provider, err }, 'replay check failed');
+    return 'unavailable';
   }
 }
 
@@ -126,14 +138,34 @@ function buildWebhookVerifier(provider: string) {
     }
 
     (async () => {
-      const isReplay = await checkReplaySignature(provider, signature);
-      if (isReplay) {
+      const replayResult = await checkReplaySignature(provider, signature, payload);
+      if (replayResult === 'replay') {
         logger.warn({ ip, provider, path: req.path }, 'webhook replay detected');
         res.status(401).json({ error: 'unauthorized', message: 'webhook already processed' });
         return;
       }
+      if (replayResult === 'unavailable') {
+        // Fail closed in production: without working replay storage we
+        // cannot tell a replay from a fresh event, and a signed body stays
+        // valid indefinitely (no embedded timestamp for Transak), so letting
+        // it through is unsafe. Non-production environments (no Redis
+        // configured locally/in CI) still fail open so they keep working.
+        if (process.env.NODE_ENV === 'production') {
+          logger.error({ ip, provider, path: req.path }, 'replay storage unavailable, rejecting webhook');
+          res.status(503).json({ error: 'service_unavailable', message: 'replay protection unavailable' });
+          return;
+        }
+        logger.warn({ ip, provider, path: req.path }, 'replay storage unavailable, allowing webhook (non-production)');
+      }
       next();
-    })().catch(() => next());
+    })().catch((err) => {
+      logger.error({ ip, provider, path: req.path, err }, 'webhook verification pipeline failed');
+      if (process.env.NODE_ENV === 'production') {
+        res.status(503).json({ error: 'service_unavailable' });
+        return;
+      }
+      next();
+    });
   };
 }
 

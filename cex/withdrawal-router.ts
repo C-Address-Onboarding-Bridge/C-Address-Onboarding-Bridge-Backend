@@ -1,29 +1,5 @@
 import crypto from 'crypto';
 
-/**
- * Converts an amount in stroops (integer string, 10^7 stroops per unit) to a decimal string.
- *
- * @param stroops - Integer string in stroops.
- * @returns Decimal string representation.
- */
-export function stroopsToDecimal(stroops: string): string {
-  if (!stroops || stroops.includes('.')) return stroops;
-  const negative = stroops.startsWith('-');
-  const rawStr = negative ? stroops.slice(1) : stroops;
-  const bn = BigInt(rawStr);
-  const divisor = BigInt(10_000_000);
-  const integer = bn / divisor;
-  const remainder = bn % divisor;
-  let result: string;
-  if (remainder === 0n) {
-    result = integer.toString();
-  } else {
-    const fraction = remainder.toString().padStart(7, '0').replace(/0+$/, '');
-    result = `${integer}.${fraction}`;
-  }
-  return negative ? `-${result}` : result;
-}
-
 /** Configuration for a registered exchange integration. */
 export interface CexConfig {
   name: string;
@@ -57,8 +33,23 @@ export interface WithdrawalResult {
   success: boolean;
   withdrawalId: string;
   txHash?: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  /**
+   * - `pending` / `processing` / `completed` — exchange confirmed the action.
+   * - `failed` — exchange definitively rejected the request (4xx, bad payload).
+   * - `unknown` — network timeout or connection reset **before** the exchange
+   *   responded. The withdrawal MAY have been executed. Callers MUST reconcile
+   *   via `getWithdrawalStatus` before retrying to avoid a double-send.
+   */
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'unknown';
   estimatedCompletion?: string;
+  /**
+   * Deterministic client-supplied idempotency key sent to exchanges that
+   * support one (Binance `withdrawOrderId`). Use this to reconcile an
+   * `unknown`-status withdrawal.
+   */
+  clientOrderId?: string;
+  /** Human-readable decimal amount that was submitted to the exchange. */
+  amount?: string;
   error?: string;
 }
 
@@ -153,20 +144,55 @@ export function parseCexWithdrawalMemo(memo: string): { exchangeName?: string; t
   return { exchangeName: match[1], targetSuffix: match[2] };
 }
 
-/** POSTs to an exchange endpoint, aborting after 15s so a hung exchange API can't hang the caller. */
+/**
+ * Thrown when `postToExchange` times out before the exchange responds.
+ * Signals that the outcome is **unknown** — the exchange may have processed
+ * the request despite not replying in time.
+ */
+export class ExchangeTimeoutError extends Error {
+  readonly isTimeout = true as const;
+  constructor(url: string, timeoutMs: number) {
+    super(`Exchange POST to ${url} timed out after ${timeoutMs} ms — outcome unknown`);
+    this.name = 'ExchangeTimeoutError';
+  }
+}
+
+/**
+ * POSTs to an exchange endpoint, aborting after `timeoutMs` (default 15 s).
+ *
+ * **Throws `ExchangeTimeoutError`** on abort so callers can distinguish a
+ * network timeout (outcome unknown) from a definitive exchange rejection.
+ * Any other network-level error is re-thrown as-is.
+ */
 async function postToExchange(
   url: string,
   headers: Record<string, string>,
   body: string,
+  timeoutMs = 15_000,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     return await fetch(url, { method: 'POST', headers, body, signal: controller.signal });
+  } catch (err) {
+    // AbortError means OUR timer fired — the connection was cut by us, not the
+    // exchange. The exchange may have processed the request already.
+    if (controller.signal.aborted) {
+      throw new ExchangeTimeoutError(url, timeoutMs);
+    }
+    throw err;
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timer);
   }
+}
+
+/**
+ * Returns `true` when an error is a network-level abort/timeout that means the
+ * exchange outcome is unknown (safe to call repeatedly).
+ */
+export function isTimeoutError(err: unknown): err is ExchangeTimeoutError {
+  return err instanceof ExchangeTimeoutError;
 }
 
 /** Generate Kraken's REST API-Sign value for a URL path and form-encoded body. */
@@ -194,12 +220,15 @@ export function createKrakenApiSignature(
 export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
   async binance(req, config) {
     const decimalAmount = stroopsToDecimal(req.amount);
+    // Deterministic per-request id so Binance can de-duplicate on retry.
+    const clientOrderId = `bridge-${crypto.createHash('sha256').update(`${req.destinationAddress}:${req.asset}:${req.amount}:${req.network}`).digest('hex').slice(0, 32)}`;
     try {
       const params: Record<string, string> = {
         coin: req.asset,
         amount: decimalAmount,
         address: req.destinationAddress,
         network: req.network,
+        withdrawOrderId: clientOrderId,
         timestamp: String(Date.now()),
         recvWindow: '5000',
       };
@@ -215,8 +244,9 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
       );
 
       if (!res.ok) {
-        console.error(`binance withdrawal failed: ${res.status} ${await res.text()}`);
-        return { success: false, withdrawalId: `bin-${Date.now()}`, status: 'failed', amount: decimalAmount };
+        const text = await res.text();
+        console.error(`binance withdrawal failed: ${res.status} ${text}`);
+        return { success: false, withdrawalId: `bin-${Date.now()}`, clientOrderId, status: 'failed', amount: decimalAmount };
       }
 
       const data = await res.json() as { id?: string; txId?: string };
@@ -224,24 +254,32 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
         success: true,
         withdrawalId: `bin-${data.id ?? Date.now()}`,
         txHash: data.txId,
+        clientOrderId,
         status: 'pending',
         estimatedCompletion: '5-30 minutes',
         amount: decimalAmount,
       };
     } catch (err) {
+      if (isTimeoutError(err)) {
+        console.error('binance API timeout — outcome unknown:', err.message);
+        return { success: false, withdrawalId: `bin-${Date.now()}`, clientOrderId, status: 'unknown', error: err.message, amount: decimalAmount };
+      }
       console.error('binance API error:', err);
-      return { success: false, withdrawalId: `bin-${Date.now()}`, status: 'failed', amount: decimalAmount };
+      return { success: false, withdrawalId: `bin-${Date.now()}`, clientOrderId, status: 'failed', amount: decimalAmount };
     }
   },
 
   async coinbase(req, config) {
     const requestPath = '/withdrawals/crypto';
     const decimalAmount = stroopsToDecimal(req.amount);
+    // Coinbase Exchange uses a nonce in the request body for idempotency.
+    const clientOrderId = `bridge-${crypto.createHash('sha256').update(`${req.destinationAddress}:${req.asset}:${req.amount}`).digest('hex').slice(0, 32)}`;
     try {
       const body = JSON.stringify({
         amount: decimalAmount,
         currency: req.asset,
         crypto_address: req.destinationAddress,
+        nonce: clientOrderId,
         ...(req.destinationTag ? { destination_tag: req.destinationTag } : {}),
       });
       const timestamp = String(Math.floor(Date.now() / 1000));
@@ -260,21 +298,27 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
       }, body);
 
       if (!res.ok) {
-        console.error(`coinbase withdrawal failed: ${res.status} ${await res.text()}`);
-        return { success: false, withdrawalId: `cb-${Date.now()}`, status: 'failed', amount: decimalAmount };
+        const text = await res.text();
+        console.error(`coinbase withdrawal failed: ${res.status} ${text}`);
+        return { success: false, withdrawalId: `cb-${Date.now()}`, clientOrderId, status: 'failed', amount: decimalAmount };
       }
 
       const data = await res.json() as { id?: string; data?: { id?: string } };
       return {
         success: true,
         withdrawalId: `cb-${data.id ?? data.data?.id ?? Date.now()}`,
+        clientOrderId,
         status: 'pending',
         estimatedCompletion: '5-30 minutes',
         amount: decimalAmount,
       };
     } catch (err) {
+      if (isTimeoutError(err)) {
+        console.error('coinbase API timeout — outcome unknown:', err.message);
+        return { success: false, withdrawalId: `cb-${Date.now()}`, clientOrderId, status: 'unknown', error: err.message, amount: decimalAmount };
+      }
       console.error('coinbase API error:', err);
-      return { success: false, withdrawalId: `cb-${Date.now()}`, status: 'failed', amount: decimalAmount };
+      return { success: false, withdrawalId: `cb-${Date.now()}`, clientOrderId, status: 'failed', amount: decimalAmount };
     }
   },
 
@@ -285,7 +329,6 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
       const nonce = String(Date.now());
       const withdrawKey =
         config.withdrawKeys?.[req.destinationAddress] ?? config.withdrawKey ?? req.destinationAddress;
-      const decimalAmount = stroopsToDecimal(req.amount);
 
       const body = new URLSearchParams({
         asset: req.asset,
@@ -339,6 +382,10 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
         amount: decimalAmount,
       };
     } catch (err) {
+      if (isTimeoutError(err)) {
+        console.error('kraken API timeout — outcome unknown:', err.message);
+        return { success: false, withdrawalId: `kr-${Date.now()}`, status: 'unknown', error: err.message };
+      }
       console.error('kraken API error:', err);
       return { success: false, withdrawalId: `kr-${Date.now()}`, status: 'failed', error: String(err) };
     }
@@ -354,3 +401,18 @@ export const defaultCexHandlers: Record<string, WithdrawalHandler> = {
     };
   },
 };
+
+/**
+ * Optional reconciliation hook. Exchanges may expose a status endpoint that
+ * lets callers verify whether a withdrawal with a given `clientOrderId` was
+ * accepted. Implement and register this alongside `WithdrawalHandler` to
+ * resolve `status: 'unknown'` results without retrying.
+ *
+ * @example
+ * // Check whether a timed-out Binance withdrawal landed:
+ * const status = await binanceGetWithdrawalStatus(clientOrderId, config);
+ */
+export type GetWithdrawalStatusHandler = (
+  clientOrderId: string,
+  config: CexConfig,
+) => Promise<WithdrawalResult | null>;

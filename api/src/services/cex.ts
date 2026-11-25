@@ -14,7 +14,13 @@ export interface CexWithdrawalRequest {
 
 /** Response from a CEX withdrawal routing operation. */
 export interface CexWithdrawalResponse {
-  status: 'pending' | 'completed' | 'failed';
+  /**
+   * - `pending` / `completed` — exchange confirmed the action.
+   * - `failed` — exchange definitively rejected the request (4xx, bad payload).
+   * - `unknown` — network timeout before the exchange responded. The withdrawal
+   *   MAY have been executed. Callers MUST reconcile before retrying.
+   */
+  status: 'pending' | 'completed' | 'failed' | 'unknown';
   withdrawalId: string;
   exchangeTxId?: string;
   estimatedArrival?: string;
@@ -257,8 +263,11 @@ export class CexRoutingService {
         exchangeTxId: data.id,
       };
     } catch (err) {
+      const isTimeout = (err as { name?: string })?.name === 'AbortError'
+        || (err instanceof Error && err.message.includes('timed out'));
+      console.error('binance API error (no secrets logged):', (err instanceof Error) ? err.message : String(err));
       return {
-        status: 'failed',
+        status: isTimeout ? 'unknown' : 'failed',
         withdrawalId: `binance-${Date.now()}`,
       };
     }
@@ -293,8 +302,11 @@ export class CexRoutingService {
         exchangeTxId: data.id || data.data?.id,
       };
     } catch (err) {
+      const isTimeout = (err as { name?: string })?.name === 'AbortError'
+        || (err instanceof Error && err.message.includes('timed out'));
+      console.error('coinbase API error (no secrets logged):', (err instanceof Error) ? err.message : String(err));
       return {
-        status: 'failed',
+        status: isTimeout ? 'unknown' : 'failed',
         withdrawalId: `coinbase-${Date.now()}`,
       };
     }
@@ -328,8 +340,11 @@ export class CexRoutingService {
         exchangeTxId: data.result?.refid,
       };
     } catch (err) {
+      const isTimeout = (err as { name?: string })?.name === 'AbortError'
+        || (err instanceof Error && err.message.includes('timed out'));
+      console.error('kraken API error (no secrets logged):', (err instanceof Error) ? err.message : String(err));
       return {
-        status: 'failed',
+        status: isTimeout ? 'unknown' : 'failed',
         withdrawalId: `kraken-${Date.now()}`,
       };
     }
@@ -367,8 +382,11 @@ export class CexRoutingService {
         exchangeTxId: data.id,
       };
     } catch (err) {
+      const isTimeout = (err as { name?: string })?.name === 'AbortError'
+        || (err instanceof Error && err.message.includes('timed out'));
+      console.error('generic CEX API error (no secrets logged):', (err instanceof Error) ? err.message : String(err));
       return {
-        status: 'failed',
+        status: isTimeout ? 'unknown' : 'failed',
         withdrawalId: `generic-${Date.now()}`,
       };
     }

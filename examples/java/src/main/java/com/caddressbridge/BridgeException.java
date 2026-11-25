@@ -14,8 +14,8 @@ public final class BridgeException extends Exception {
 
     public static BridgeException fromResponse(int status, String body) {
         String message = body;
-        if (body != null && body.contains("\"message\"")) {
-            int start = body.indexOf("\"message\"");
+        if (body != null && body.contains("\"error\"")) {
+            int start = body.indexOf("\"error\"");
             int colon = body.indexOf(':', start);
             int quoteStart = body.indexOf('"', colon + 1);
             int quoteEnd = body.indexOf('"', quoteStart + 1);

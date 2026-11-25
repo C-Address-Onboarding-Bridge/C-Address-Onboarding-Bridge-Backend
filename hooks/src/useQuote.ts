@@ -47,6 +47,7 @@ export function useQuote(
 
   useEffect(() => {
     if (!enabled || !params) {
+      setLoading(false);
       return;
     }
 

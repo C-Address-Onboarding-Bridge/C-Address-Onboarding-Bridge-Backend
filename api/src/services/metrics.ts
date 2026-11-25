@@ -41,6 +41,13 @@ export const externalCallDuration = new Histogram({
   registers: [register],
 });
 
+export const telemetryEventCounter = new Counter({
+  name: 'sdk_telemetry_events_total',
+  help: 'Total SDK telemetry events received',
+  labelNames: ['method', 'sdkVersion', 'errorType'],
+  registers: [register],
+});
+
 export const cacheHitCounter = new Counter({
   name: 'cache_hits_total',
   help: 'Cache hit count',

@@ -15,12 +15,13 @@ import { logger } from '../logger';
 import { circuitBreakers } from '../circuit-breaker';
 import { getHealthStatus } from '../services/health';
 import { isRedisEnabled, getCacheMetrics } from '../services/cache';
+import { asyncHandler } from '../utils/asyncHandler';
 
 export const adminRouter = Router();
 
-adminRouter.get('/stats', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+adminRouter.get('/stats', requireScopes('admin:keys'), asyncHandler(async (_req: Request, res: Response) => {
   res.json(await getTransactionStats());
-});
+}));
 
 adminRouter.get('/fees', requireScopes('admin:keys'), (_req: Request, res: Response) => {
   res.json(getFeeConfig());
@@ -70,7 +71,7 @@ adminRouter.post('/fees', requireScopes('admin:keys'), (req: Request, res: Respo
 });
 
 // #640 — replace in-memory zero-out with governance proposal flow
-adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), async (req: Request, res: Response) => {
+adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), asyncHandler(async (req: Request, res: Response) => {
   const actor = req.apiKeyRecord?.id ?? 'admin';
   const recipientAddress = typeof req.body?.recipientAddress === 'string' ? req.body.recipientAddress : undefined;
   const tokenAddress = typeof req.body?.tokenAddress === 'string' ? req.body.tokenAddress : undefined;
@@ -88,23 +89,23 @@ adminRouter.post('/fees/withdraw', requireScopes('admin:keys'), async (req: Requ
   );
 
   res.json(result);
-});
+}));
 
-adminRouter.get('/health', requireScopes('admin:keys'), async (_req: Request, res: Response) => {
+adminRouter.get('/health', requireScopes('admin:keys'), asyncHandler(async (_req: Request, res: Response) => {
   const circuits: Record<string, string> = {};
   for (const [name, cb] of circuitBreakers) {
     circuits[name] = cb.getState();
   }
 
   const health = await getHealthStatus();
-  const statusCode = health.status === 'unhealthy' ? 503 : health.status === 'degraded' ? 207 : 200;
+  const statusCode = health.status === 'unhealthy' ? 503 : 200;
 
   res.status(statusCode).json({
     ...health,
     circuits,
     cache: { redis: isRedisEnabled(), metrics: getCacheMetrics() },
   });
-});
+}));
 
 adminRouter.get('/audit/integrity', requireScopes('admin:keys'), (req: Request, res: Response) => {
   const type = typeof req.query.type === 'string' ? (req.query.type as AuditEventType) : undefined;

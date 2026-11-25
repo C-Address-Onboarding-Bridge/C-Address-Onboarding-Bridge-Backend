@@ -3,6 +3,71 @@ import { Queue } from 'bullmq';
 
 process.env.NODE_ENV = 'test';
 
+// ── #910: scheduleRecurringJobs repeat options ───────────────────────────────
+describe('scheduleRecurringJobs — repeat options (#910)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('schedules metrics-compute with repeat.every equal to metricsIntervalMs', async () => {
+    const metricsIntervalMs = 7_200_000; // 2 hours
+    process.env.JOB_METRICS_INTERVAL_MS = String(metricsIntervalMs);
+    process.env.JOB_WARMUP_ASSETS = ''; // no warmup assets
+
+    // Spy on Queue.prototype.add before importing so we capture calls.
+    const addSpy = vi.spyOn(Queue.prototype, 'add').mockResolvedValue({} as any);
+
+    // config is cached at module load; reset modules so it picks up the new env var.
+    const { scheduleRecurringJobs } = await import('../jobs/queue');
+    await scheduleRecurringJobs();
+
+    const metricsCall = addSpy.mock.calls.find(([name]) => name === 'metrics-compute');
+    expect(metricsCall, 'metrics-compute was not scheduled').toBeDefined();
+    const opts = metricsCall![2] as { repeat?: { every?: number; pattern?: string } };
+    expect(opts.repeat?.every).toBe(metricsIntervalMs);
+    // Must not use a 6-field cron pattern.
+    expect(opts.repeat?.pattern).toBeUndefined();
+
+    addSpy.mockRestore();
+    delete process.env.JOB_METRICS_INTERVAL_MS;
+    delete process.env.JOB_WARMUP_ASSETS;
+  });
+
+  it('skips cache-warmup when JOB_WARMUP_ASSETS is empty', async () => {
+    process.env.JOB_WARMUP_ASSETS = '';
+
+    const addSpy = vi.spyOn(Queue.prototype, 'add').mockResolvedValue({} as any);
+
+    const { scheduleRecurringJobs } = await import('../jobs/queue');
+    await scheduleRecurringJobs();
+
+    const warmupCall = addSpy.mock.calls.find(([name]) => name === 'cache-warmup');
+    expect(warmupCall).toBeUndefined();
+
+    addSpy.mockRestore();
+    delete process.env.JOB_WARMUP_ASSETS;
+  });
+
+  it('schedules cache-warmup with repeat.every 30000 when assets are configured', async () => {
+    process.env.JOB_WARMUP_ASSETS = 'XLM,USDC';
+
+    const addSpy = vi.spyOn(Queue.prototype, 'add').mockResolvedValue({} as any);
+
+    const { scheduleRecurringJobs } = await import('../jobs/queue');
+    await scheduleRecurringJobs();
+
+    const warmupCall = addSpy.mock.calls.find(([name]) => name === 'cache-warmup');
+    expect(warmupCall, 'cache-warmup was not scheduled').toBeDefined();
+    const data = warmupCall![1] as { assets: string[] };
+    expect(data.assets).toEqual(['XLM', 'USDC']);
+    const opts = warmupCall![2] as { repeat?: { every?: number } };
+    expect(opts.repeat?.every).toBe(30_000);
+
+    addSpy.mockRestore();
+    delete process.env.JOB_WARMUP_ASSETS;
+  });
+});
+
 describe('Queue operations', () => {
   describe('enqueueAuditLog', () => {
     it('adds an audit log job to the async-critical queue', async () => {

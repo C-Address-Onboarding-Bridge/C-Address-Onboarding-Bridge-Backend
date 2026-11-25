@@ -4,6 +4,7 @@ process.env.NODE_ENV = 'test';
 
 const { config, getNetwork } = vi.hoisted(() => ({
   config: {
+    httpAgent: { timeoutMs: 10 },
     soroban: {
       rpcUrls: [] as string[],
       rpc: {
@@ -45,7 +46,9 @@ describe('RpcPool failover (#688)', () => {
     // With no latency samples yet the latency strategy selects rpc-a again on
     // the second attempt, so the pool falls back to the untried rpc-b.
     const result = await pool.execute(async (server) => {
-      if ((server as unknown as FakeServer).url.includes('rpc-a')) throw new Error('down');
+      if ((server as unknown as FakeServer).url.includes('rpc-a')) {
+        throw Object.assign(new Error('down'), { code: 'ECONNRESET' });
+      }
       return 'ok';
     });
 
@@ -56,13 +59,46 @@ describe('RpcPool failover (#688)', () => {
     pool.destroy();
   });
 
+  it('does not replay a call when failover is disabled', async () => {
+    config.soroban.rpcUrls = ['https://rpc-a.example.com', 'https://rpc-b.example.com'];
+    const pool = new RpcPool();
+    const networkError = Object.assign(new Error('request timed out'), { code: 'ETIMEDOUT' });
+    const call = vi.fn(async () => { throw networkError; });
+
+    await expect(pool.execute(call, { failover: false })).rejects.toThrow('request timed out');
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(pool.getMetrics().reduce((total, provider) => total + provider.totalRequests, 0)).toBe(1);
+    pool.destroy();
+  });
+
+  it('times out a hung provider call and fails over to the next endpoint', async () => {
+    config.soroban.rpcUrls = ['https://rpc-a.example.com', 'https://rpc-b.example.com'];
+    const pool = new RpcPool();
+    const visited: string[] = [];
+
+    const result = await pool.execute(async (server) => {
+      const url = (server as unknown as FakeServer).url;
+      visited.push(url);
+      if (url.includes('rpc-a')) return new Promise<never>(() => {});
+      return 'fallback-result';
+    });
+
+    expect(result).toBe('fallback-result');
+    expect(visited).toHaveLength(2);
+    expect(pool.getMetrics()[0].totalFailures).toBe(1);
+    pool.destroy();
+  });
+
   it('re-checks and recovers an unhealthy provider in a single-provider pool', async () => {
     vi.useFakeTimers();
     config.soroban.rpcUrls = ['https://rpc-only.example.com'];
     const pool = new RpcPool();
 
     for (let i = 0; i < 2; i++) {
-      await expect(pool.execute(async () => { throw new Error('down'); })).rejects.toThrow('down');
+      await expect(pool.execute(async () => {
+        throw Object.assign(new Error('down'), { code: 'ECONNRESET' });
+      })).rejects.toThrow('down');
     }
     expect(pool.getMetrics()[0].healthy).toBe(false);
 

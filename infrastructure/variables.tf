@@ -34,6 +34,32 @@ variable "redis_node_type" {
   default     = "cache.t3.micro"
 }
 
+variable "redis_subnet_group_name" {
+  description = "ElastiCache subnet group name for the Redis replication group"
+  type        = string
+}
+
+variable "redis_security_group_id" {
+  description = "VPC security group ID for Redis access"
+  type        = string
+}
+
+variable "redis_auth_token" {
+  description = "Redis AUTH token (transit encryption is enabled). ElastiCache requires 16-128 printable characters, excluding '/', '\"' and '@'."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.redis_auth_token) >= 16 && length(var.redis_auth_token) <= 128
+    error_message = "redis_auth_token must be between 16 and 128 characters long."
+  }
+
+  validation {
+    condition     = can(regex("^[!#-.0-?A-~]+$", var.redis_auth_token))
+    error_message = "redis_auth_token may only contain printable ASCII characters other than space, '/', '\"' and '@'."
+  }
+}
+
 variable "db_security_group_id" {
   description = "VPC security group ID for RDS database access"
   type        = string

@@ -19,7 +19,14 @@
 #   DEPLOY_HOST   — SSH host to deploy to
 #   DEPLOY_USER   — SSH user
 #   DEPLOY_KEY    — SSH private key (PEM content, not a path)
-#   IMAGE_TAG     — Docker tag to deploy (not required with --rollback)
+#   IMAGE_TAG     — Immutable image reference to deploy (not required with
+#                   --rollback): a `sha-<commit>` tag. Mutable tags such as
+#                   `main` are refused because rollback could not tell two
+#                   builds of `main` apart (#1099). See also IMAGE_DIGEST.
+#
+# Rollback: whenever the running image ID changes, the previous container's
+# image is recorded by registry digest (`repo@sha256:...`) in
+# REMOTE_APP_DIR/previous-image.txt, so `--rollback` restores that exact build.
 #
 # Optional env vars:
 #   IMAGE_REPO       — full image repo, default ghcr.io/$GITHUB_REPOSITORY
@@ -31,6 +38,8 @@
 #   HOST_PORT         — host port to publish (default 3001)
 #   CONTAINER_PORT    — container port the app listens on (default 3001)
 #   SSH_OPTS          — extra ssh/scp options
+#   IMAGE_DIGEST      — `sha256:...` digest; when set, deploys IMAGE_REPO@IMAGE_DIGEST
+#   ALLOW_MUTABLE_TAG — `true` to deploy a mutable tag anyway (not recommended)
 
 set -euo pipefail
 
@@ -81,12 +90,23 @@ mkdir -p "${REMOTE_APP_DIR}"
 touch "${REMOTE_ENV_FILE}"
 
 echo "Pulling ${image}..."
-docker pull "${image}"
+if [[ "${image}" == sha256:* ]]; then
+  # Bare image ID (rollback fallback when no registry digest was known):
+  # it can only be run if it is still present on this host.
+  docker image inspect "${image}" >/dev/null
+else
+  docker pull "${image}"
+fi
+NEW_IMAGE_ID=\$(docker image inspect --format '{{.Id}}' "${image}")
 
 if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
-  CURRENT_IMAGE=\$(docker inspect --format '{{.Config.Image}}' "${CONTAINER_NAME}")
-  if [[ "\$CURRENT_IMAGE" != "${image}" ]]; then
-    echo "\$CURRENT_IMAGE" > "${REMOTE_APP_DIR}/previous-image.txt"
+  # Compare image IDs, not reference strings: two builds pushed under the
+  # same tag share a reference but not an ID (#1099).
+  CURRENT_IMAGE_ID=\$(docker inspect --format '{{.Image}}' "${CONTAINER_NAME}")
+  if [[ "\$CURRENT_IMAGE_ID" != "\$NEW_IMAGE_ID" ]]; then
+    PREV_REF=\$(docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "\$CURRENT_IMAGE_ID" 2>/dev/null || true)
+    [[ -n "\$PREV_REF" ]] || PREV_REF="\$CURRENT_IMAGE_ID"
+    echo "\$PREV_REF" > "${REMOTE_APP_DIR}/previous-image.txt"
   fi
   echo "Stopping existing container ${CONTAINER_NAME}..."
   docker stop "${CONTAINER_NAME}" >/dev/null
@@ -116,10 +136,23 @@ exit 1
 REMOTE_SCRIPT
 }
 
+is_immutable_tag() {
+  [[ "$1" == sha-* ]]
+}
+
 deploy() {
-  local image_tag="${IMAGE_TAG:?IMAGE_TAG is required}"
   [[ -n "$IMAGE_REPO" ]] || err "IMAGE_REPO is required (or set GITHUB_REPOSITORY)"
-  local image="${IMAGE_REPO}:${image_tag}"
+  local image
+  if [[ -n "${IMAGE_DIGEST:-}" ]]; then
+    [[ "$IMAGE_DIGEST" == sha256:* ]] || err "IMAGE_DIGEST must look like sha256:<hex>, got '${IMAGE_DIGEST}'"
+    image="${IMAGE_REPO}@${IMAGE_DIGEST}"
+  else
+    local image_tag="${IMAGE_TAG:?IMAGE_TAG or IMAGE_DIGEST is required}"
+    if ! is_immutable_tag "$image_tag" && [[ "${ALLOW_MUTABLE_TAG:-false}" != "true" ]]; then
+      err "Refusing to deploy mutable tag '${image_tag}': rollback cannot tell builds of a moving tag apart. Use a sha-<commit> tag or IMAGE_DIGEST (or set ALLOW_MUTABLE_TAG=true)."
+    fi
+    image="${IMAGE_REPO}:${image_tag}"
+  fi
 
   log "Deploying ${image} to ${DEPLOY_HOST}:${DEPLOY_PORT} as ${CONTAINER_NAME}..."
   remote_run_image "$image"

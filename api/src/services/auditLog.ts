@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getPool } from './db';
+import { logger } from '../logger';
 
 export type AuditEventType =
   | 'transaction_submission'
@@ -46,6 +47,7 @@ export interface AuditVerificationResult {
 const GENESIS_HASH = '0'.repeat(64);
 const SEVEN_YEARS_MS = 7 * 365 * 24 * 60 * 60 * 1000;
 const DEFAULT_CHECKPOINT_INTERVAL = 10;
+const CHECKPOINT_REQUEST_TIMEOUT_MS = 10_000;
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -155,6 +157,7 @@ export class IntegrityAuditLogService {
   private checkpoints: AuditCheckpoint[] = [];
   private readonly checkpointInterval: number;
   private readonly checkpointUrl?: string;
+  private readonly pendingEntryWrites = new Map<number, Promise<void>>();
   private initialized = false;
 
   constructor(options: { checkpointInterval?: number; checkpointUrl?: string } = {}) {
@@ -174,7 +177,7 @@ export class IntegrityAuditLogService {
 
     try {
       const entriesResult = await pool.query(
-        'SELECT sequence, id, timestamp, type, actor, payload, previous_hash, hash, retention_until FROM audit_log_entries ORDER BY sequence ASC',
+        'SELECT sequence, id, event_type, actor, payload, previous_hash, hash, created_at, retention_until FROM audit_log_entries ORDER BY sequence ASC',
       );
 
       for (const row of entriesResult.rows) {
@@ -207,7 +210,7 @@ export class IntegrityAuditLogService {
         this.checkpoints.push(checkpoint);
       }
     } catch (err) {
-      console.warn('Failed to load audit log from database:', err);
+      logger.warn({ err }, 'Failed to load audit log from database');
     }
   }
 
@@ -233,11 +236,13 @@ export class IntegrityAuditLogService {
         ],
       );
     } catch (err) {
-      console.warn('Failed to save audit entry to database:', err);
+      logger.error({ err, sequence: entry.sequence, type: entry.type }, 'Failed to save audit entry to database');
+      throw err;
     }
   }
 
   private async saveCheckpointToDatabase(checkpoint: AuditCheckpoint): Promise<void> {
+    await this.pendingEntryWrites.get(checkpoint.sequence);
     const pool = getPool();
     if (!pool) return;
 
@@ -255,7 +260,7 @@ export class IntegrityAuditLogService {
         ],
       );
     } catch (err) {
-      console.warn('Failed to save checkpoint to database:', err);
+      logger.error({ err, sequence: checkpoint.sequence }, 'Failed to save audit checkpoint to database');
     }
   }
 
@@ -288,10 +293,17 @@ export class IntegrityAuditLogService {
     };
 
     this.entries.push(entry);
-    void this.saveEntryToDatabase(entry);
+    const entryWrite = this.saveEntryToDatabase(entry);
+    this.pendingEntryWrites.set(entry.sequence, entryWrite);
+    void entryWrite.then(
+      () => this.pendingEntryWrites.delete(entry.sequence),
+      () => this.pendingEntryWrites.delete(entry.sequence),
+    );
 
     if (this.checkpointInterval > 0 && entry.sequence % this.checkpointInterval === 0) {
-      void this.publishCheckpoint(entry);
+      void entryWrite
+        .then(() => this.publishCheckpoint(entry))
+        .catch((err) => console.warn('Failed to publish audit checkpoint:', err));
     }
 
     return cloneEntry(entry);
@@ -362,8 +374,16 @@ export class IntegrityAuditLogService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sequence: entry.sequence, hash: entry.hash, timestamp: entry.timestamp }),
+        signal: AbortSignal.timeout(CHECKPOINT_REQUEST_TIMEOUT_MS),
       });
-      this.createCheckpoint(entry, 'trusted-timestamp', `${this.checkpointUrl}:${response.status}:${entry.sequence}`);
+      if (!response.ok) {
+        throw new Error(`Timestamp service returned HTTP ${response.status}`);
+      }
+      const receipt = await response.text();
+      if (!receipt) {
+        throw new Error('Timestamp service returned an empty receipt');
+      }
+      this.createCheckpoint(entry, 'trusted-timestamp', receipt);
     } catch {
       this.createCheckpoint(entry, 'local', `local-fallback:${entry.sequence}:${entry.hash}`);
     }

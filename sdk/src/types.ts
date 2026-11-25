@@ -145,7 +145,13 @@ export interface CexWithdrawalParams {
 
 /** Result from a CEX withdrawal routing request. */
 export interface CexWithdrawalResult {
-  status: 'pending' | 'completed' | 'failed';
+  /**
+   * - `pending` / `completed` — exchange confirmed the action.
+   * - `failed` — exchange definitively rejected the request.
+   * - `unknown` — network timeout before the exchange responded. The withdrawal
+   *   MAY have been executed. Callers MUST reconcile before retrying.
+   */
+  status: 'pending' | 'completed' | 'failed' | 'unknown';
   withdrawalId: string;
   exchangeTxId?: string;
   estimatedArrival?: string;
@@ -196,6 +202,28 @@ export interface BridgeClientConfig {
     enabled?: boolean;
     intervalMs?: number;
   };
+}
+
+/** A single transaction record returned by GET /api/v1/transactions. */
+export interface Transaction {
+  id: string;
+  status: BridgeStatus;
+  hash: string;
+  sourceAsset: string;
+  amount: string;
+  fee?: string;
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+}
+
+/** Filter parameters for listing transactions. */
+export interface TransactionFilters {
+  status?: BridgeStatus;
+  fromDate?: string;
+  toDate?: string;
+  minAmount?: string;
+  maxAmount?: string;
 }
 
 export interface PaginatedRequestParams {
@@ -284,6 +312,19 @@ export interface OfflineQueueOptions {
 
 // Event emitter
 
+export interface EventEmitterOptions {
+  pollIntervalMs?: number;
+  historySize?: number;
+  healthCheckIntervalMs?: number;
+  /**
+   * Maximum number of consecutive retryable errors before the watcher stops
+   * polling and emits a terminal `error` event. Defaults to 10.
+   * Non-retryable errors (404, 401, 422, …) always stop immediately regardless
+   * of this setting.
+   */
+  maxConsecutiveErrors?: number;
+}
+
 export type BridgeEventType =
   | 'transaction:pending'
   | 'transaction:success'
@@ -312,3 +353,13 @@ export interface BridgeEvent<K extends BridgeEventType = BridgeEventType> {
 }
 
 export type EventHandler<K extends BridgeEventType = BridgeEventType> = (event: BridgeEvent<K>) => void;
+
+/** Options for {@link BridgeEventEmitter}. */
+export interface EventEmitterOptions {
+  /** How often watched transactions are polled for a status change, in ms. Default 2000. */
+  pollIntervalMs?: number;
+  /** How many past events are kept for late subscribers. Default 100. */
+  historySize?: number;
+  /** How often the health checker runs while connected, in ms. Default 10000. */
+  healthCheckIntervalMs?: number;
+}

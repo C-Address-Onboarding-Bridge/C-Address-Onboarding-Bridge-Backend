@@ -128,6 +128,15 @@ export const config = {
    * Each API key record may store its own signing secret; this is the
    * global fallback. */
   signingSecret: process.env.SIGNING_SECRET || '',
+  /** When true, requests to signed routes must carry valid X-Signature /
+   * X-Timestamp / X-Nonce headers. Defaults to false so unsigned clients
+   * (legacy integrations, SDK clients with signing.enabled unset) are not
+   * rejected until signing is explicitly turned on. */
+  requestSigningRequired: process.env.REQUEST_SIGNING_REQUIRED === 'true',
+  /** Bootstrap key for the very first admin:keys-scoped key. Seeded once at
+   * boot (see seedAdminKey) so an operator can reach /api-keys, /webhooks
+   * and /admin on a fresh deployment, then mint properly scoped keys. */
+  adminApiKey: process.env.ADMIN_API_KEY || '',
   /** Shared secret sent by CloudFront as X-Origin-Verify. Enforced by
    * originVerifyMiddleware when ORIGIN_VERIFY_SECRET is set. */
   originVerifySecret: process.env.ORIGIN_VERIFY_SECRET || '',
@@ -194,6 +203,7 @@ export const config = {
     maxSockets: parseInt(process.env.HTTP_AGENT_MAX_SOCKETS || '50', 10),
     maxFreeSockets: parseInt(process.env.HTTP_AGENT_MAX_FREE_SOCKETS || '10', 10),
     keepAliveMsecs: parseInt(process.env.HTTP_AGENT_KEEP_ALIVE_MS || '15000', 10),
+    timeoutMs: parseInt(process.env.SOROBAN_RPC_TIMEOUT_MS || '10000', 10),
   },
   websocket: {
     authRequired: process.env.WS_AUTH_REQUIRED !== 'false',
@@ -207,6 +217,8 @@ export const config = {
     enabled: process.env.JOBS_ENABLED !== 'false' && (process.env.REDIS_URL !== undefined && process.env.REDIS_URL !== ''),
     txPollIntervalMs: parseInt(process.env.JOB_TX_POLL_INTERVAL_MS || '60000', 10),
     metricsIntervalMs: parseInt(process.env.JOB_METRICS_INTERVAL_MS || '3600000', 10),
+    cleanupIntervalMs: parseInt(process.env.JOB_CLEANUP_INTERVAL_MS || '86400000', 10),
+    warmupAssets: (process.env.JOB_WARMUP_ASSETS || '').split(',').map(s => s.trim()).filter(Boolean),
     concurrency: {
       txStatus: parseInt(process.env.JOB_CONCURRENCY_TX_STATUS || '5', 10),
       webhookRetry: parseInt(process.env.JOB_CONCURRENCY_WEBHOOK_RETRY || '3', 10),

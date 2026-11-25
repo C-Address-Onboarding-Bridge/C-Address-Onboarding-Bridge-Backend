@@ -29,15 +29,3 @@ groups:
         annotations:
           summary: Rate limit rejections spiking
           description: Clients are hitting rate limits frequently.
-
-  - name: bridge-api-log-alerts
-    rules:
-      - alert: ErrorLogSpike
-        expr: |
-          sum(rate({job="bridge-api", level="error"}[5m])) > 1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: Error log rate spike
-          description: Error-level logs are exceeding 1/sec — check Grafana Explore.

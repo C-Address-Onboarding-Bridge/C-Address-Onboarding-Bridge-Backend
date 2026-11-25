@@ -13,6 +13,9 @@ import { migration003 } from '../src/migrations/003_analytics_schema';
 import { migration004 } from '../src/migrations/004_integrity_audit_log';
 import { migration005 } from '../src/migrations/005_query_optimization_indexes';
 import { migration006 } from '../src/migrations/006_provider_orders';
+import { migration007 } from '../src/migrations/007_audit_log_event_types';
+import { migration008 } from '../src/migrations/008_drop_redundant_indexes';
+import { migration009 } from '../src/migrations/009_transactions_api_key_id';
 
 migrationRunner
   .register(migration001)
@@ -20,7 +23,10 @@ migrationRunner
   .register(migration003)
   .register(migration004)
   .register(migration005)
-  .register(migration006);
+  .register(migration006)
+  .register(migration007)
+  .register(migration008)
+  .register(migration009);
 
 const [command = 'migrate', arg] = process.argv.slice(2);
 
@@ -51,7 +57,7 @@ async function main() {
     }
 
     case 'status': {
-      const rows = migrationRunner.status();
+      const rows = await migrationRunner.status();
       console.log('\nMigration Status:');
       console.log('─'.repeat(50));
       for (const row of rows) {
