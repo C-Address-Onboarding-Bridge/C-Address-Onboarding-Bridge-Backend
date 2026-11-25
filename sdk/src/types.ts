@@ -353,3 +353,13 @@ export interface BridgeEvent<K extends BridgeEventType = BridgeEventType> {
 }
 
 export type EventHandler<K extends BridgeEventType = BridgeEventType> = (event: BridgeEvent<K>) => void;
+
+/** Options for {@link BridgeEventEmitter}. */
+export interface EventEmitterOptions {
+  /** How often watched transactions are polled for a status change, in ms. Default 2000. */
+  pollIntervalMs?: number;
+  /** How many past events are kept for late subscribers. Default 100. */
+  historySize?: number;
+  /** How often the health checker runs while connected, in ms. Default 10000. */
+  healthCheckIntervalMs?: number;
+}

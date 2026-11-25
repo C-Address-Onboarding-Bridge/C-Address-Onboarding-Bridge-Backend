@@ -35,5 +35,13 @@ environment (dev, staging, production) uses its own state file.
 
 ## CI validation
 
-CI runs `terraform validate -backend=false` to validate configuration
-without requiring backend credentials.
+The `Terraform validate` job in `.github/workflows/ci.yml` runs on every push
+and pull request, without backend credentials:
+
+```sh
+terraform fmt -check -recursive infrastructure
+cd infrastructure     && terraform init -backend=false && terraform validate
+cd infrastructure/cdn && terraform init -backend=false && terraform validate
+```
+
+Run the same commands locally before opening a PR.

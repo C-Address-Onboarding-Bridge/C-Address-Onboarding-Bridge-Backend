@@ -32,7 +32,6 @@ import {
   parseHttpError,
   NetworkError,
   TimeoutError,
-  ServerError,
   BridgeError,
   ServerError,
   ValidationError,
@@ -226,14 +225,10 @@ export class BridgeClient {
           const errBody = await res.json().catch(() => ({}));
           const bridgeErr = parseHttpError(
             res.status,
-            errBody as {
-              message?: string;
-              code?: string;
-              fields?: Record<string, string>;
-              retryAfter?: number;
-            },
+            errBody as Parameters<typeof parseHttpError>[1],
             undefined,
             this.config.locale,
+            res.headers?.get?.("retry-after"),
           );
           if (
             bridgeErr.retryable &&

@@ -55,4 +55,4 @@ export {
   LOCALE_METADATA,
   type LocaleMetadata,
   type MessageCatalog,
-} from './i18n.js';
+} from './i18n/index.js';

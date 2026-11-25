@@ -15,14 +15,17 @@ on:
         required: false
         default: '10000'
       fuzz_seed:
-        description: 'Seed for the fuzz targets'
+        description: 'Seed for the fuzz targets (leave empty for a fresh per-run seed; set it to replay a failure)'
         required: false
-        default: '0'
+        default: ''
 
 env:
   # Configurable time budget per fuzz target (in iterations)
   FUZZ_ITERATIONS: ${{ github.event.inputs.fuzz_iterations || '10000' }}
-  FUZZ_SEED: ${{ github.event.inputs.fuzz_seed || '0' }}
+  # A fresh seed per run, so scheduled/push runs explore new inputs instead of
+  # replaying seed 0 every night. Set the `fuzz_seed` input to reproduce a
+  # failure: every target prints the seed it ran with.
+  FUZZ_SEED: ${{ github.event.inputs.fuzz_seed || github.run_id }}
 
 jobs:
   # These "fuzz targets" are self-contained property-test binaries (their own
@@ -46,6 +49,16 @@ jobs:
         with:
           workspaces: contracts/onboarding-bridge
 
+      - name: Show fuzz seed
+        run: |
+          echo "Fuzz seed: ${FUZZ_SEED} (iterations: ${FUZZ_ITERATIONS})"
+          echo "Replay with: workflow_dispatch fuzz_seed=${FUZZ_SEED}"
+          {
+            echo "### Fuzz seed"
+            echo ""
+            echo "\`${FUZZ_SEED}\` (${FUZZ_ITERATIONS} iterations per target). Re-run the workflow with \`fuzz_seed=${FUZZ_SEED}\` to replay."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build fuzz targets
         run: |
           cd contracts/onboarding-bridge/fuzz
@@ -54,27 +67,27 @@ jobs:
       - name: Run fuzz_fee_calculation
         run: |
           cd contracts/onboarding-bridge/fuzz
-          cargo run --release --bin fuzz_fee_calculation -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+          cargo run --release --bin fuzz_fee_calculation -- "$FUZZ_SEED" "$FUZZ_ITERATIONS"
 
       - name: Run fuzz_fund_sequence
         run: |
           cd contracts/onboarding-bridge/fuzz
-          cargo run --release --bin fuzz_fund_sequence -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+          cargo run --release --bin fuzz_fund_sequence -- "$FUZZ_SEED" "$FUZZ_ITERATIONS"
 
       - name: Run fuzz_admin_ops
         run: |
           cd contracts/onboarding-bridge/fuzz
-          cargo run --release --bin fuzz_admin_ops -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+          cargo run --release --bin fuzz_admin_ops -- "$FUZZ_SEED" "$FUZZ_ITERATIONS"
 
       - name: Run fuzz_invariants
         run: |
           cd contracts/onboarding-bridge/fuzz
-          cargo run --release --bin fuzz_invariants -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+          cargo run --release --bin fuzz_invariants -- "$FUZZ_SEED" "$FUZZ_ITERATIONS"
 
       - name: Run fuzz_upgrade
         run: |
           cd contracts/onboarding-bridge/fuzz
-          cargo run --release --bin fuzz_upgrade -- ${{ env.FUZZ_SEED }} ${{ env.FUZZ_ITERATIONS }}
+          cargo run --release --bin fuzz_upgrade -- "$FUZZ_SEED" "$FUZZ_ITERATIONS"
 
       - name: Upload fuzz findings (if any)
         if: failure()
