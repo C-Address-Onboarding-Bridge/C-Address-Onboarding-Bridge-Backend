@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { STELLAR_ADDRESS_REGEX } from '../utils/constants';
+import { isValidGAddress } from '../utils/constants';
 import { moonpayService } from '../services/moonpay';
 import { transakService } from '../services/transak';
 import { onrampRequestCount } from '../services/metrics';
@@ -11,7 +11,7 @@ export const offrampRouter = Router();
 
 const moonpaySchema = z.object({
   currencyCode: z.string().default('xlm'),
-  walletAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
+  walletAddress: z.string().refine(isValidGAddress, 'invalid Stellar account (G...) address'),
   walletNetwork: z.string().default('stellar'),
   baseCurrencyAmount: z.number().positive().optional(),
   baseCurrencyCode: z.string().optional(),
@@ -25,7 +25,7 @@ const moonpayQuoteSchema = z.object({
 });
 
 const transakSchema = z.object({
-  walletAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
+  walletAddress: z.string().refine(isValidGAddress, 'invalid Stellar account (G...) address'),
   network: z.string().default('stellar'),
   fiatCurrency: z.string().optional(),
   cryptoCurrency: z.string().optional(),
@@ -91,7 +91,6 @@ const quoteRequestSchema = z.object({
   fiatAmount: z.coerce.number().positive(),
   fiatCurrency: z.string().min(1),
   cryptoCurrency: z.string().min(1).default('xlm'),
-  cAddress: z.string().regex(STELLAR_ADDRESS_REGEX, 'invalid Stellar address'),
 });
 
 interface ProviderQuote {
@@ -99,6 +98,7 @@ interface ProviderQuote {
   fiatAmount: number;
   cryptoAmount: number;
   feeAmount: number;
+  feeCurrency: string;
   netAmount: number;
   estimatedRate: number;
 }
@@ -119,6 +119,8 @@ offrampRouter.get('/quote', async (req: Request, res: Response, next: NextFuncti
           fiatAmount: params.fiatAmount,
           cryptoAmount: quote.quoteCurrencyAmount,
           feeAmount: quote.feeAmount,
+          feeCurrency: params.fiatCurrency,
+          // feeAmount is already deducted by MoonPay; cryptoAmount is net.
           netAmount: quote.quoteCurrencyAmount,
           estimatedRate: quote.quoteCurrencyAmount / params.fiatAmount,
         };
@@ -134,7 +136,10 @@ offrampRouter.get('/quote', async (req: Request, res: Response, next: NextFuncti
           fiatAmount: params.fiatAmount,
           cryptoAmount: quote.cryptoAmount,
           feeAmount: quote.feeAmount,
-          netAmount: quote.cryptoAmount - quote.feeAmount,
+          feeCurrency: params.fiatCurrency,
+          // quote.feeAmount is a FIAT fee; quote.cryptoAmount is already net crypto.
+          // Never subtract a fiat fee from a crypto amount.
+          netAmount: quote.cryptoAmount,
           estimatedRate: quote.cryptoAmount / params.fiatAmount,
         };
       })(),
