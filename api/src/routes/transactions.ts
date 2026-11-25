@@ -1,11 +1,11 @@
 import { Router, Request, Response } from 'express';
+import { z } from 'zod';
 import { requireScopes } from '../middleware/rbacAuth';
 import { asyncHandler } from '../utils/asyncHandler';
 import {
   listTransactions,
   serializeTransactionsCsv,
   type TransactionQueryParams,
-  type TransactionStatus,
 } from '../services/transactions';
 import { buildCacheKey, CACHE_TTL, CACHE_VERSION, getOrCompute, cacheDelPattern } from '../services/cache';
 
@@ -13,16 +13,35 @@ export const transactionsRouter = Router();
 
 export const TRANSACTIONS_CACHE_NAMESPACE = 'transactions';
 
-transactionsRouter.get('/', requireScopes('transactions:read'), asyncHandler(async (req: Request, res: Response) => {
-  const status = typeof req.query.status === 'string' ? (req.query.status as TransactionStatus) : undefined;
-  const fromDate = typeof req.query.fromDate === 'string' ? req.query.fromDate : undefined;
-  const toDate = typeof req.query.toDate === 'string' ? req.query.toDate : undefined;
-  const minAmount = typeof req.query.minAmount === 'string' ? req.query.minAmount : undefined;
-  const maxAmount = typeof req.query.maxAmount === 'string' ? req.query.maxAmount : undefined;
-  const limit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : undefined;
-  const offset = typeof req.query.offset === 'string' ? parseInt(req.query.offset, 10) : undefined;
-  const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
-  const format = typeof req.query.format === 'string' && req.query.format === 'csv' ? 'csv' : 'json';
+const MAX_LIMIT = 100;
+
+const querySchema = z.object({
+  status: z.enum(['pending', 'success', 'failed']).optional(),
+  fromDate: z.string().optional(),
+  toDate: z.string().optional(),
+  minAmount: z.string().optional(),
+  maxAmount: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(20).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+  cursor: z.string().optional(),
+  format: z.enum(['json', 'csv']).optional(),
+});
+
+transactionsRouter.get('/', requireScopes('transactions:read'), async (req: Request, res: Response) => {
+  const parsed = querySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'invalid_query', details: parsed.error.issues });
+    return;
+  }
+  const { status, fromDate, toDate, minAmount, maxAmount, limit, offset, cursor, format: rawFormat } = parsed.data;
+  const format = rawFormat ?? 'json';
+
+  // Scope results to the caller's own transactions unless they hold the
+  // operator-only wide-read scope. Legacy API_KEYS keys only ever get
+  // `transactions:read`, so they are always scoped to their own id.
+  const callerScopes = req.resolvedScopes ?? [];
+  const canReadAll = callerScopes.includes('transactions:read:all');
+  const apiKeyId = canReadAll ? undefined : req.apiKeyRecord?.id;
 
   const params: TransactionQueryParams = {
     status,
@@ -30,10 +49,11 @@ transactionsRouter.get('/', requireScopes('transactions:read'), asyncHandler(asy
     toDate,
     minAmount,
     maxAmount,
-    limit,
+    limit: limit ?? 20,
     offset,
     cursor,
     format,
+    apiKeyId,
   };
 
   // CSV responses are not cached (format-specific, likely one-off exports).
@@ -43,8 +63,20 @@ transactionsRouter.get('/', requireScopes('transactions:read'), asyncHandler(asy
     return;
   }
 
-  // Build a stable, deterministic cache key from all query parameters.
-  const discriminator = JSON.stringify({ status, fromDate, toDate, minAmount, maxAmount, limit, offset, cursor });
+  // Build a stable, deterministic cache key from all query parameters,
+  // including the caller, so one tenant's cached page can never be served
+  // to another.
+  const discriminator = JSON.stringify({
+    apiKeyId: apiKeyId ?? 'all',
+    status,
+    fromDate,
+    toDate,
+    minAmount,
+    maxAmount,
+    limit: params.limit,
+    offset,
+    cursor,
+  });
   const cacheKey = buildCacheKey(TRANSACTIONS_CACHE_NAMESPACE, discriminator);
 
   const result = await getOrCompute(

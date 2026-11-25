@@ -14,6 +14,8 @@ export interface TransactionRecord {
   fee: string;
   createdAt: string;
   currency: string;
+  /** Id of the API key that created this transaction; used for tenant scoping. */
+  apiKeyId: string;
 }
 
 export interface TransactionQueryParams {
@@ -26,6 +28,11 @@ export interface TransactionQueryParams {
   offset?: number;
   cursor?: string;
   format?: 'json' | 'csv';
+  /**
+   * Restricts results to transactions created by this API key. Required
+   * unless the caller holds `transactions:read:all`.
+   */
+  apiKeyId?: string;
 }
 
 export interface FeeConfigState {
@@ -61,6 +68,7 @@ const seededTransactions: TransactionRecord[] = [
     fee: '0.36',
     createdAt: '2026-06-20T10:15:00.000Z',
     currency: 'USDC',
+    apiKeyId: 'legacy',
   },
   {
     id: 'tx_1002',
@@ -72,6 +80,7 @@ const seededTransactions: TransactionRecord[] = [
     fee: '0.24',
     createdAt: '2026-06-21T09:45:00.000Z',
     currency: 'USDC',
+    apiKeyId: 'legacy',
   },
   {
     id: 'tx_1003',
@@ -83,6 +92,7 @@ const seededTransactions: TransactionRecord[] = [
     fee: '0.14',
     createdAt: '2026-06-22T05:30:00.000Z',
     currency: 'USDC',
+    apiKeyId: 'legacy',
   },
   {
     id: 'tx_1004',
@@ -94,6 +104,7 @@ const seededTransactions: TransactionRecord[] = [
     fee: '0.66',
     createdAt: '2026-06-23T12:45:00.000Z',
     currency: 'USDC',
+    apiKeyId: 'legacy',
   },
   {
     id: 'tx_1005',
@@ -105,6 +116,7 @@ const seededTransactions: TransactionRecord[] = [
     fee: '0.30',
     createdAt: '2026-06-24T08:10:00.000Z',
     currency: 'USDC',
+    apiKeyId: 'legacy',
   },
 ];
 
@@ -136,16 +148,18 @@ function rowToRecord(row: Record<string, unknown>): TransactionRecord {
       ? String(row['created_at_iso'])
       : new Date(Number(row['created_at'])).toISOString(),
     currency: String(row['currency'] ?? 'XLM'),
+    apiKeyId: String(row['api_key_id'] ?? 'legacy'),
   };
 }
 
 const DEFAULT_TRANSACTIONS_LIMIT = 20;
 
 export function listTransactions(params: TransactionQueryParams = {}): { data: TransactionRecord[]; nextCursor: string | null; hasMore: boolean } {
-  const { status, fromDate, toDate, minAmount, maxAmount, cursor, offset } = params;
+  const { status, fromDate, toDate, minAmount, maxAmount, cursor, offset, apiKeyId } = params;
   const limit = params.limit ?? DEFAULT_TRANSACTIONS_LIMIT;
 
   const filtered = transactionStore.filter((tx) => {
+    if (apiKeyId !== undefined && tx.apiKeyId !== apiKeyId) return false;
     if (status && tx.status !== status) return false;
     if (fromDate && tx.createdAt < fromDate) return false;
     if (toDate && tx.createdAt > toDate) return false;

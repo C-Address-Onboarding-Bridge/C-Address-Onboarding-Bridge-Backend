@@ -56,6 +56,27 @@ export function errorHandler(
     return;
   }
 
+  // body-parser (and other upstream middleware) throws errors that carry
+  // their own HTTP status, e.g. SyntaxError{status:400,type:'entity.parse.failed'}
+  // for malformed JSON, or {status:413,type:'entity.too.large'} for oversized
+  // bodies. Those are client errors, not server bugs: honour the status and
+  // log at warn instead of error so malformed input can't fill error logs.
+  const bodyParserErr = err as Error & { status?: number; statusCode?: number; type?: string };
+  const status = bodyParserErr.status ?? bodyParserErr.statusCode;
+  if (status && status >= 400 && status < 500) {
+    logger.warn({ err, message: 'Client error' });
+    if (bodyParserErr.type === 'entity.too.large' || status === 413) {
+      res.status(413).json({ error: 'payload_too_large' });
+      return;
+    }
+    if (bodyParserErr.type === 'entity.parse.failed' || status === 400) {
+      res.status(400).json({ error: 'invalid_json' });
+      return;
+    }
+    res.status(status).json({ error: 'bad_request' });
+    return;
+  }
+
   logger.error({ err, message: 'Unexpected error' });
   res.status(500).json({
     error: 'internal_server_error',
