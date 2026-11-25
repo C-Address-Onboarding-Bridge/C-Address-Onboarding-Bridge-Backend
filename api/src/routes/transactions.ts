@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { requireScopes } from '../middleware/rbacAuth';
+import { asyncHandler } from '../utils/asyncHandler';
 import {
   listTransactions,
   serializeTransactionsCsv,
@@ -89,7 +90,7 @@ transactionsRouter.get('/', requireScopes('transactions:read'), async (req: Requ
 
   res.setHeader('X-Cache', res.getHeader('X-Cache') ?? 'MISS');
   res.json(result);
-});
+}));
 
 /**
  * Invalidate all transaction list cache entries.

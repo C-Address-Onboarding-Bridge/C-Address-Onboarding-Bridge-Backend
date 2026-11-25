@@ -6,6 +6,14 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
 import { logger } from './logger';
+
+// Last-resort safety net: Express 4 does not forward a rejected promise from
+// an async handler to error middleware, so an unguarded async route can
+// terminate the whole process on Node >= 15. Routes should use asyncHandler,
+// but this keeps a stray rejection from killing the server.
+process.on('unhandledRejection', (reason) => {
+  logger.error({ err: reason }, 'unhandledRejection');
+});
 import { fundingRouter } from './routes/funding';
 import { quoteRouter } from './routes/quote';
 import { statusRouter } from './routes/status';
@@ -202,10 +210,10 @@ app.use('/api/v1/api-keys', rbacAuth, apiKeysRouter);
 app.use('/api/v1/webhooks', rbacAuth, webhookAdminRouter);
 app.use('/api/webhook/moonpay', moonpayWebhookRouter);
 app.use('/api/webhook/transak', transakWebhookRouter);
-app.use('/api/cache-metrics', rbacAuth, cacheMetricsRouter);
+app.use('/api/cache-metrics', rbacAuth, requireScopes('metrics:read'), cacheMetricsRouter);
 
 // Prometheus metrics — internal only, protected by RBAC
-app.use('/metrics', rbacAuth, requireScopes('metrics:read'), metricsRouter);
+app.use('/metrics', metricsAuth, metricsRouter);
 
 // Catch-all for unmatched routes: without this, Express's default
 // finalhandler answers with an HTML 404 instead of JSON.
